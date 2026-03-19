@@ -58,7 +58,7 @@ from .typing_support import (
     typeof_pyval, dtype_registry, loose_type_of_pyval, get_constant_value, get_dataclass_info,
 )
 from .type import (
-    PartitionViewTy, TupleTy, TileTy, NoneType, BoundMethodTy, ArrayTy,
+    PartitionViewTy, StridedViewTy, TupleTy, TileTy, NoneType, BoundMethodTy, ArrayTy,
     ListTy, make_tile_ty, SliceType, DTypeConstructor, RangeIterType, Type,
     NONE, ModuleTy, TypeTy, LooselyTypedScalar, DTypeSpec, StringTy, InvalidType,
     ClosureTy, LiveCapturedScope, TokenTy, TiledViewTy, FormattedStringTy,
@@ -1815,6 +1815,11 @@ def getattr_tiled_view_tile_shape_impl(object: Var, name: Var):
     return loosely_typed_const(object.get_type().tile_shape)
 
 
+@impl(getattr, overload=(TiledViewTy, "traversal_steps"))
+def getattr_tiled_view_traversal_steps_impl(object: Var, name: Var):
+    return loosely_typed_const(object.get_type().traversal_steps)
+
+
 @impl(getattr, overload=(TiledViewTy, "num_tiles"))
 def getattr_tiled_view_num_tiles_impl(object: Var, name: Var):
     return bind_method(object, ct._m_tiled_view_num_tiles)
@@ -2346,15 +2351,45 @@ class MakePartitionView(Operation, opcode="make_partition_view"):
                                              ctx.get_value(self.array))
 
 
-def make_partition_view(array: Var, tile_shape: Sequence[int],
-                        order: Sequence[int],
-                        padding_mode: PaddingMode) -> Var:
+def _make_partition_view(array: Var, tile_shape: Sequence[int],
+                         order: Sequence[int],
+                         padding_mode: PaddingMode) -> Var:
     array_ty = array.get_type()
     assert isinstance(array_ty, ArrayTy)
     view_ty = PartitionViewTy(array_ty, tuple(tile_shape), tuple(order), padding_mode)
     ret = add_operation(MakePartitionView, view_ty, array=array)
     ret.set_aggregate(array.get_aggregate())
     return ret
+
+
+@dataclass(eq=False)
+class MakeStridedView(Operation, opcode="make_strided_view"):
+    array: Var = operand()
+
+    @override
+    def generate_bytecode(self, ctx: BytecodeContext) -> bc.Value:
+        strided_view_ty = self.result_var.get_type()
+        return bc.encode_MakeStridedViewOp(ctx.builder,
+                                           typeid(ctx.type_table, strided_view_ty),
+                                           ctx.get_value(self.array))
+
+
+def _make_strided_view(array: Var, tile_shape: Sequence[int],
+                       traversal_steps: Sequence[int],
+                       order: Sequence[int],
+                       padding_mode: PaddingMode) -> Var:
+    array_ty = array.get_type()
+    assert isinstance(array_ty, ArrayTy)
+    view_ty = StridedViewTy(array_ty, tuple(tile_shape), tuple(traversal_steps),
+                            tuple(order), padding_mode)
+    ret = add_operation(MakeStridedView, view_ty, array=array)
+    ret.set_aggregate(array.get_aggregate())
+    return ret
+
+
+def _use_strided_view(traversal_steps: Optional[Sequence[int]],
+                      tile_shape: Sequence[int]) -> bool:
+    return traversal_steps is not None and tuple(traversal_steps) != tuple(tile_shape)
 
 
 @dataclass(eq=False)
@@ -2394,6 +2429,7 @@ class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
 def _tile_load_impl_inner(array: Var, index_items: tuple[Var, ...], shape: Sequence[int],
                           order: Sequence[int], padding_mode: PaddingMode,
                           latency: Var, allow_tma: Var,
+                          traversal_steps: Optional[tuple[int, ...]] = None,
                           memory_order: MemoryOrder = MemoryOrder.WEAK,
                           memory_scope: MemoryScope = MemoryScope.NONE) -> Var:
     array_ty = require_array_type(array)
@@ -2407,7 +2443,11 @@ def _tile_load_impl_inner(array: Var, index_items: tuple[Var, ...], shape: Seque
     if array_ty.index_dtype.bitwidth > 32:
         index_items = tuple(astype(idx, array_ty.index_dtype) for idx in index_items)
 
-    view = make_partition_view(array, broadcasted_shape, order, padding_mode)
+    if _use_strided_view(traversal_steps, broadcasted_shape):
+        view = _make_strided_view(array, broadcasted_shape, traversal_steps, order, padding_mode)
+    else:
+        view = _make_partition_view(array, broadcasted_shape, order, padding_mode)
+
     res_ty = make_tile_ty(array_ty.dtype, broadcasted_shape)
     result, _token = add_operation(TileLoad, (res_ty, TokenTy()),
                                    view=view, index=index_items, latency=latency,
@@ -2559,6 +2599,7 @@ def _implicit_cast(src: Var, target_dtype: DType, error_context: str) -> Var:
 
 def _tile_store_impl_inner(array: Var, index_items: tuple[Var, ...], tile: Var,
                            order: Sequence[int], latency: Var, allow_tma: Var,
+                           traversal_steps: Optional[tuple[int, ...]] = None,
                            memory_order: MemoryOrder = MemoryOrder.WEAK,
                            memory_scope: MemoryScope = MemoryScope.NONE):
     array_ty = require_array_type(array)
@@ -2574,7 +2615,11 @@ def _tile_store_impl_inner(array: Var, index_items: tuple[Var, ...], tile: Var,
         index_items = tuple(astype(idx, array_ty.index_dtype) for idx in index_items)
 
     tile = reshape(tile, broadcasted_shape)
-    view = make_partition_view(array, broadcasted_shape, order, PaddingMode.UNDETERMINED)
+    if _use_strided_view(traversal_steps, broadcasted_shape):
+        view = _make_strided_view(array, broadcasted_shape, traversal_steps,
+                                  order, PaddingMode.UNDETERMINED)
+    else:
+        view = _make_partition_view(array, broadcasted_shape, order, PaddingMode.UNDETERMINED)
     [_token] = add_operation(TileStore, (TokenTy(),), view=view, index=index_items, tile=tile,
                              latency=latency, allow_tma=allow_tma, memory_order=memory_order,
                              memory_scope=memory_scope)
@@ -3159,10 +3204,15 @@ class NumTiles(Operation, opcode="num_tiles"):
         return values
 
 
-def num_tiles(array: Var, shape: Sequence[int], order: Sequence[int]) -> Tuple[Var, ...]:
+def num_tiles(array: Var, shape: Sequence[int], order: Sequence[int],
+              traversal_steps: Optional[Sequence[int]] = None) -> Tuple[Var, ...]:
     array_ty = require_array_type(array)
     broadcasted_shape = (1,) * array_ty.ndim if len(shape) == 0 else shape
-    view = make_partition_view(array, broadcasted_shape, order, PaddingMode.UNDETERMINED)
+    if _use_strided_view(traversal_steps, broadcasted_shape):
+        view = _make_strided_view(array, broadcasted_shape, traversal_steps,
+                                  order, PaddingMode.UNDETERMINED)
+    else:
+        view = _make_partition_view(array, broadcasted_shape, order, PaddingMode.UNDETERMINED)
     result_tys = tuple(make_tile_ty(datatype.default_int_type, ()) for _s in broadcasted_shape)
     return add_operation(NumTiles, result_tys, view=view)
 
@@ -4598,13 +4648,28 @@ def tile_item(tile: Var) -> Var:
 
 
 @impl(ct._m_array_tiled_view)
-def array_tiled_view_impl(array: Var, tile_shape: Var, padding_mode: Var) -> Var:
+def array_tiled_view_impl(array: Var, tile_shape: Var, padding_mode: Var,
+                          traversal_steps: Var) -> Var:
     array_ty = require_array_type(array)
     shape_val = require_constant_shape(tile_shape, allow_single_int=True,
                                        expected_rank=array_ty.ndim,
                                        allow_0d_shape=True)
     padding_mode_val = require_constant_enum(padding_mode, PaddingMode)
-    view_ty = TiledViewTy(array_ty, shape_val, padding_mode_val)
+    if traversal_steps.is_constant() and traversal_steps.get_constant() is None:
+        broadcasted_shape_val = (1,) * array_ty.ndim if len(shape_val) == 0 else shape_val
+        traversal_steps_val = broadcasted_shape_val
+    else:
+        cur = Builder.get_current().ir_ctx.tileiras_version
+        if cur < BytecodeVersion.V_13_3:
+            raise TileUnsupportedFeatureError(
+                f"traversal_steps requires tileiras 13.3 or later. "
+                f"Current version is {cur.major()}.{cur.minor()}."
+            )
+        traversal_steps_val = require_constant_shape(traversal_steps, allow_single_int=True,
+                                                     expected_rank=array_ty.ndim,
+                                                     allow_non_power_of_two=True,
+                                                     var_name="traversal_steps")
+    view_ty = TiledViewTy(array_ty, shape_val, padding_mode_val, traversal_steps_val)
     return make_aggregate(TiledViewValue(array), view_ty)
 
 
@@ -4612,7 +4677,7 @@ def array_tiled_view_impl(array: Var, tile_shape: Var, padding_mode: Var) -> Var
 def tiled_view_num_tiles(tiled_view: Var, axis: Var) -> Var:
     ty = tiled_view.get_type()
     [array] = tiled_view.get_aggregate().as_tuple()
-    view_shape = num_tiles(array, ty.tile_shape, get_default_order(ty.ndim))
+    view_shape = num_tiles(array, ty.tile_shape, get_default_order(ty.ndim), ty.traversal_steps)
     axis = require_constant_int(axis)
     axis = normalize_axis(axis, ty.ndim)
     return view_shape[axis]
@@ -4630,7 +4695,8 @@ def tiled_view_load_impl(tiled_view: Var, index: Var, latency: Var, allow_tma: V
     [array] = tiled_view.get_aggregate().as_tuple()
     order = get_default_order(view_ty.ndim)
     return _tile_load_impl_inner(array, index_items, view_ty.tile_shape, order,
-                                 view_ty.padding_mode, latency, allow_tma)
+                                 view_ty.padding_mode, latency, allow_tma,
+                                 traversal_steps=view_ty.traversal_steps)
 
 
 @impl(ct._m_tiled_view_store)
@@ -4652,7 +4718,8 @@ def tiled_view_store_impl(tiled_view: Var, index: Var, tile: Var, latency: Var, 
                           "Stored tile is incompatible with tiled view's dtype")
     [array] = tiled_view.get_aggregate().as_tuple()
     order = get_default_order(view_ty.ndim)
-    _tile_store_impl_inner(array, index_items, tile, order, latency, allow_tma)
+    _tile_store_impl_inner(array, index_items, tile, order, latency, allow_tma,
+                           traversal_steps=view_ty.traversal_steps)
 
 
 def store_var(local_idx: int, value: Var, loc: Loc | None = None):

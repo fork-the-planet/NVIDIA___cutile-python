@@ -167,6 +167,12 @@ of dimensions, and the product of its values equals the total number of tiles in
 
 A tile in the tiled view can be loaded or stored by its tile index.
 
+By default, consecutive tiles along each axis are adjacent with no overlap or gaps: the origin of
+each successive tile advances by ``tile_shape[i]`` elements along axis *i*. Specifying
+``traversal_steps`` to :meth:`Array.tiled_view` changes the advance per step to
+``traversal_steps[i]``, producing overlapping tiles when ``traversal_steps[i] < tile_shape[i]``
+or gapped tiles when ``traversal_steps[i] > tile_shape[i]``.
+
 .. seealso::
   :ref:`cuda.tile.TiledView class documentation <data-tiled-view-cuda-tile-tiled-view>`
 

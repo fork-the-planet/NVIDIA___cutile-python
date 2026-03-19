@@ -8,7 +8,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Tuple, Dict, Set, Optional
 
-from cuda.tile._ir.type import TokenTy
+from cuda.tile._ir.type import PartitionViewTy, TokenTy
 from cuda.tile._memory_model import MemoryOrder
 from cuda.tile._exception import Loc, TileInternalError
 from cuda.tile._ir.ir import Block, IRContext, Var, Operation, MemoryEffect, ArrayValue
@@ -504,7 +504,9 @@ def _filter_by_store_index(loop_op: Loop,
     ret = set()
     for store_op in tile_store_candidates:
         ptr = _get_input_var(store_op)
-        if not dataflow_result[ptr.name].may_alias_internally \
+        view_ty = store_op.view.get_type()
+        if isinstance(view_ty, PartitionViewTy) \
+                and not dataflow_result[ptr.name].may_alias_internally \
                 and any(is_idx_injective(idx_var) for idx_var in store_op.index):
             ret.add(store_op)
     return ret

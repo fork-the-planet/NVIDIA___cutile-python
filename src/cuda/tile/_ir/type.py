@@ -432,15 +432,34 @@ class PartitionViewTy(Type):
                 f"padding_mode={self.padding_mode}]")
 
 
+# ============== StridedView Type ===============
+
+
+@dataclass(frozen=True)
+class StridedViewTy(Type):
+    array_ty: ArrayTy
+    tile_shape: tuple[int, ...]
+    traversal_steps: tuple[int, ...]
+    order: tuple[int, ...]
+    padding_mode: PaddingMode
+
+    def __str__(self):
+        return (f"StridedView[{self.array_ty},tile_shape={self.tile_shape},"
+                f"traversal_steps={self.traversal_steps},order={self.order},"
+                f"padding_mode={self.padding_mode}]")
+
+
 # ============== TiledView Type ===============
 
 
 class TiledViewTy(Type):
     def __init__(self, array_ty: ArrayTy, tile_shape: tuple[int, ...],
-                 padding_mode: PaddingMode):
+                 padding_mode: PaddingMode,
+                 traversal_steps: Optional[tuple[int, ...]] = None):
         self.array_ty = array_ty
         self.tile_shape = tile_shape
         self.padding_mode = padding_mode
+        self.traversal_steps = traversal_steps
 
     def is_aggregate(self) -> bool:
         return True
@@ -465,14 +484,16 @@ class TiledViewTy(Type):
         return (isinstance(other, TiledViewTy)
                 and self.array_ty == other.array_ty
                 and self.tile_shape == other.tile_shape
-                and self.padding_mode == other.padding_mode)
+                and self.padding_mode == other.padding_mode
+                and self.traversal_steps == other.traversal_steps)
 
     def __hash__(self):
-        return hash(("TiledViewTy", self.array_ty, self.tile_shape, self.padding_mode))
+        return hash(("TiledViewTy", self.array_ty, self.tile_shape,
+                     self.padding_mode, self.traversal_steps))
 
     def __str__(self):
         return (f"TiledView[{self.array_ty},tile_shape={self.tile_shape},"
-                f"padding_mode={self.padding_mode}]")
+                f"padding_mode={self.padding_mode},traversal_steps={self.traversal_steps}]")
 
 
 # ============== Raw Array Memory Type ===============

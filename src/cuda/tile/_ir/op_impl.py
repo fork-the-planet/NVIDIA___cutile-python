@@ -383,20 +383,23 @@ def require_constant_int_tuple(var: Var, allow_single_int: bool = False) -> Tupl
 def require_constant_shape(var: Var,
                            allow_single_int: bool = False,
                            expected_rank: Optional[int] = None,
-                           allow_0d_shape: bool = False) -> Tuple[int, ...]:
+                           allow_0d_shape: bool = False,
+                           allow_non_power_of_two: bool = False,
+                           var_name: str = "shape") -> Tuple[int, ...]:
     shape = require_constant_int_tuple(var, allow_single_int=allow_single_int)
 
     if (expected_rank is not None and len(shape) != expected_rank
             and not (allow_0d_shape and len(shape) == 0)):
-        raise _make_type_error(f"Expected shape length to be {expected_rank}, got {len(shape)}",
-                               var)
+        raise _make_type_error(
+            f"Expected {var_name} length to be {expected_rank}, got {len(shape)}", var)
 
     for i, x in enumerate(shape):
         if x <= 0:
-            raise _make_type_error(f"Dimension #{i} of shape {tuple(shape)} is not positive", var)
-        if x & (x - 1) != 0:
-            raise _make_type_error(f"Dimension #{i} of shape {tuple(shape)} is not a power of two",
-                                   var)
+            raise _make_type_error(
+                f"Dimension #{i} of {var_name} {tuple(shape)} is not positive", var)
+        if not allow_non_power_of_two and x & (x - 1) != 0:
+            raise _make_type_error(
+                f"Dimension #{i} of {var_name} {tuple(shape)} is not a power of two", var)
 
     return shape
 

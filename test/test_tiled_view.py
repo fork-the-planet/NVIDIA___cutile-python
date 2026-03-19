@@ -6,10 +6,14 @@ import math
 import pytest
 import torch
 from torch.testing import make_tensor
+from unittest.mock import patch
 
 import cuda.tile as ct
-from cuda.tile._exception import TileTypeError
-from conftest import arithmetic_dtypes, dtype_id
+from cuda.tile._bytecode.version import BytecodeVersion
+from cuda.tile._compile import compile_tile
+from cuda.tile._exception import TileTypeError, TileUnsupportedFeatureError
+from cuda.tile.compilation import CallingConvention, KernelSignature
+from conftest import arithmetic_dtypes, dtype_id, requires_tileiras
 from util import assert_equal
 
 ConstInt = ct.Constant[int]
@@ -240,3 +244,210 @@ def test_tiled_view_closure():
     y = torch.zeros_like(x)
     ct.launch(torch.cuda.current_stream(), (1,), kernel, (x, y, 64))
     assert_equal(y, x)
+
+
+# ==================== traversal_steps ====================
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+def test_tiled_view_traversal_steps_parity():
+    """traversal_steps == tile_shape → same result as no traversal_steps."""
+    @ct.kernel
+    def kernel_default(x, y, TILE: ConstInt):
+        tv_x = x.tiled_view(TILE)
+        tv_y = y.tiled_view(TILE)
+        for i in range(tv_x.num_tiles(0)):
+            tv_y.store(i, tv_x.load(i))
+
+    @ct.kernel
+    def kernel_explicit(x, y, TILE: ConstInt):
+        tv_x = x.tiled_view(TILE, traversal_steps=TILE)
+        tv_y = y.tiled_view(TILE, traversal_steps=TILE)
+        for i in range(tv_x.num_tiles(0)):
+            tv_y.store(i, tv_x.load(i))
+
+    x = make_tensor((128,), dtype=torch.float32, device='cuda')
+    y_default = torch.zeros_like(x)
+    y_explicit = torch.zeros_like(x)
+    ct.launch(torch.cuda.current_stream(), (1,), kernel_default, (x, y_default, 64))
+    ct.launch(torch.cuda.current_stream(), (1,), kernel_explicit, (x, y_explicit, 64))
+    assert_equal(y_default, x)
+    assert_equal(y_explicit, x)
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.parametrize("dtype", arithmetic_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("tile_size,step,n", [
+    (4, 2, 8),   # traversal_steps < tile_shape: overlapping tiles
+    (4, 8, 16),  # traversal_steps > tile_shape: strided tiles with gaps
+    (4, 3, 12),  # traversal_steps is not a power of two
+], ids=["step_lt_tile", "step_gt_tile", "step_non_power_of_two"])
+def test_tiled_view_traversal_steps_sliding_window(tile_size, step, n, dtype):
+    @ct.kernel
+    def kernel(x, out, TILE: ConstInt, STEP: ConstInt):
+        tv = x.tiled_view(TILE, traversal_steps=STEP)
+        tv_out = out.tiled_view(TILE, traversal_steps=STEP)
+        for i in range(tv.num_tiles(0)):
+            tv_out.store(i, tv.load(i))
+
+    x = make_tensor(n, dtype=dtype, device='cuda')
+    out = torch.zeros(n, dtype=dtype, device='cuda')
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x, out, tile_size, step))
+    ref = torch.zeros(n, dtype=dtype, device='cuda')
+    for start in range(0, n, step):
+        ref[start:start + tile_size] = x[start:start + tile_size]
+    assert_equal(out, ref)
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+def test_tiled_view_2d_conv_no_padding():
+    """2D box-filter using tiled_view as a sliding window (traversal_steps < tile_shape).
+    No padding on top or left: window starts at (0, 0) and only covers valid positions.
+    Each output element is the sum of the corresponding (KH, KW) input patch."""
+    H, W = 6, 6
+    KH, KW = 2, 2
+    SH, SW = 1, 1
+
+    @ct.kernel
+    def kernel(x, out, KH: ConstInt, KW: ConstInt, SH: ConstInt, SW: ConstInt,
+               OUT_H: ConstInt, OUT_W: ConstInt):
+        tv = x.tiled_view((KH, KW), traversal_steps=(SH, SW))
+        out_tv = out.tiled_view(())
+        for i in range(OUT_H):
+            for j in range(OUT_W):
+                tile = tv.load((i, j))
+                out_tv.store(i * OUT_W + j, ct.sum(tile))
+
+    x = make_tensor((H, W), dtype=torch.int32, device='cuda', low=0, high=10)
+    out_h = (H - KH) // SH + 1
+    out_w = (W - KW) // SW + 1
+    out = torch.zeros(out_h * out_w, dtype=torch.int32, device='cuda')
+    ct.launch(torch.cuda.current_stream(), (1,), kernel,
+              (x, out, KH, KW, SH, SW, out_h, out_w))
+    ref = x.unfold(0, KH, SH).unfold(1, KW, SW).sum(dim=(-2, -1)).flatten().to(torch.int32)
+    assert_equal(out, ref)
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+def test_tiled_view_traversal_steps_num_tiles():
+    """num_tiles with traversal_steps returns correct count."""
+    @ct.kernel
+    def kernel(x, out, TILE: ConstInt, STEP: ConstInt):
+        tv = x.tiled_view(TILE, traversal_steps=STEP)
+        n = tv.num_tiles(0)
+        out_tv = out.tiled_view(1)
+        out_tv.store(0, n)
+
+    N = 16
+    TILE = 4
+    STEP = 2
+    x = torch.zeros(N, dtype=torch.float32, device='cuda')
+    out = torch.zeros(1, dtype=torch.float32, device='cuda')
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x, out, TILE, STEP))
+    assert out[0].item() == ct.cdiv(N, STEP)
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.parametrize("step_h,step_w", [
+    (2, 3),  # broadcasted tile_shape (1,1) != (2,3) → StridedView
+    (1, 1),  # broadcasted tile_shape (1,1) == (1,1) → PartitionView
+], ids=["strided_view", "partition_view"])
+def test_tiled_view_0d_tile_with_traversal_steps(step_h, step_w):
+    H, W = 4, 6
+    NUM_H = H // step_h
+    NUM_W = W // step_w
+
+    @ct.kernel
+    def kernel(x, out, STEP_H: ConstInt, STEP_W: ConstInt,
+               NUM_H: ConstInt, NUM_W: ConstInt):
+        tv = x.tiled_view((), traversal_steps=(STEP_H, STEP_W))
+        out_tv = out.tiled_view(())
+        for i in range(NUM_H):
+            for j in range(NUM_W):
+                out_tv.store(i * NUM_W + j, tv.load((i, j)))
+
+    x = torch.arange(H * W, dtype=torch.float32, device='cuda').reshape(H, W)
+    out = torch.zeros(NUM_H * NUM_W, dtype=torch.float32, device='cuda')
+    ct.launch(torch.cuda.current_stream(), (1,), kernel,
+              (x, out, step_h, step_w, NUM_H, NUM_W))
+    assert_equal(out, x[::step_h, ::step_w].flatten().to(torch.float32))
+
+
+@pytest.mark.parametrize("array_shape,tile_shape,traversal_steps", [
+
+    ((16,),  4, 2),
+    ((16,),  4, 4),
+    ((4, 6), (), (2, 3)),
+])
+def test_tiled_view_traversal_steps_version_error(array_shape, tile_shape, traversal_steps):
+    @ct.kernel
+    def kernel(x):
+        x.tiled_view(tile_shape, traversal_steps=traversal_steps)
+
+    x = torch.zeros(array_shape, dtype=torch.float32, device='cuda')
+    cconv = CallingConvention.cutile_python_v1()
+    sig = KernelSignature.from_kernel_args(kernel, (x,), cconv)
+    with patch('cuda.tile._compile._get_max_supported_bytecode_version',
+               return_value=BytecodeVersion.V_13_2):
+        with pytest.raises(TileUnsupportedFeatureError,
+                           match=r"traversal_steps requires tileiras 13\.3"):
+            compile_tile(kernel._annotated_function, [sig])
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.parametrize("array_shape,tile_shape,traversal_steps", [
+    ((16,),      4,      (2, 2)),  # 1D array, traversal_steps rank 2
+    ((16, 32),   (4, 4), (2,)),    # 2D array, traversal_steps rank 1
+    ((16, 32),   (),     ()),      # 2D array, 0-d tile and 0-d traversal_steps
+], ids=["1d_array_2d_steps", "2d_array_1d_steps", "0d_tile_0d_steps"])
+def test_tiled_view_traversal_steps_rank_mismatch(array_shape, tile_shape, traversal_steps):
+    @ct.kernel
+    def kernel(x):
+        x.tiled_view(tile_shape, traversal_steps=traversal_steps)
+
+    x = torch.zeros(array_shape, dtype=torch.float32, device='cuda')
+    ndim = len(array_shape)
+    with pytest.raises(TileTypeError,
+                       match=f"Expected traversal_steps length to be {ndim},"
+                             f" got {len(traversal_steps)}"):
+        ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.parametrize("traversal_steps", [-1, 0, (-1, 4), (4, -1), (0, 4), (4, 0)],
+                         ids=["neg_1d", "zero_1d",
+                              "neg_first_2d", "neg_second_2d",
+                              "zero_first_2d", "zero_second_2d"])
+def test_tiled_view_non_positive_traversal_steps(traversal_steps):
+    is_2d = isinstance(traversal_steps, tuple)
+    array_shape = (16, 32) if is_2d else (16,)
+    tile_shape = (4, 4) if is_2d else 4
+
+    @ct.kernel
+    def kernel(x):
+        x.tiled_view(tile_shape, traversal_steps=traversal_steps)
+
+    x = torch.zeros(array_shape, dtype=torch.float32, device='cuda')
+    with pytest.raises(TileTypeError, match="of traversal_steps .* is not positive"):
+        ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+
+
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.parametrize("array_shape,tile_shape,traversal_steps,expected_steps", [
+    ((64,),     64,       None, (64,)),    # 1D, default: equals tile_shape
+    ((64, 128), (64, 128), None, (64, 128)),  # 2D, default: equals tile_shape
+    ((4, 6),    (),       None, (1, 1)),   # 0-d tile: broadcasted to (1, 1)
+    ((64,),     64,       64,  (64,)),     # explicit steps == tile_shape
+    pytest.param((64,), 4, 2, (2,),
+                 marks=requires_tileiras(BytecodeVersion.V_13_3)),  # explicit steps != tile_shape
+], ids=["1d_default", "2d_default", "0d_tile", "explicit_equal", "explicit_different"])
+def test_tiled_view_traversal_steps_property(array_shape, tile_shape, traversal_steps,
+                                             expected_steps):
+    @ct.kernel
+    def kernel(x):
+        tv = x.tiled_view(tile_shape, traversal_steps=traversal_steps)
+        tv_traversal_steps = tv.traversal_steps
+        ct.static_assert(tv_traversal_steps == expected_steps)
+
+    x = torch.zeros(array_shape, dtype=torch.float32, device='cuda')
+    grid = (1,) * len(array_shape)
+    ct.launch(torch.cuda.current_stream(), grid, kernel, (x,))

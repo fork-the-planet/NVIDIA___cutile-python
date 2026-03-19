@@ -234,7 +234,8 @@ class Array:
         return _m_array_slice(self, axis, start, stop)
 
     def tiled_view(self, tile_shape: Constant[Shape], *,
-                   padding_mode: PaddingMode = PaddingMode.UNDETERMINED) -> "TiledView":
+                   padding_mode: PaddingMode = PaddingMode.UNDETERMINED,
+                   traversal_steps: Optional[Constant[Shape]] = None) -> "TiledView":
         """Creates a |tiled view| of this array with a fixed `tile_shape`.
 
         The resulting :class:`TiledView` partitions this array into a grid of
@@ -246,6 +247,18 @@ class Array:
             padding_mode (PaddingMode): The value used to pad tiles that extend
                 beyond the array boundaries. By default, the padding value is
                 undetermined.
+            traversal_steps (tuple[const int, ...], optional): Number of
+                elements between consecutive tile origins along each axis. Must
+                have the same rank as the array, or be ``None`` (default).
+
+                - ``None`` or ``traversal_steps[i] == tile_shape[i]``: tiles
+                  partition axis *i* with no overlap or gaps.
+                - ``traversal_steps[i] < tile_shape[i]``: tiles overlap along
+                  axis *i*.
+                - ``traversal_steps[i] > tile_shape[i]``: gaps between tiles
+                  along axis *i*.
+
+                (Since CTK 13.3)
 
         Returns:
             TiledView:
@@ -260,6 +273,10 @@ class Array:
                     tv = x.tiled_view((2, 4))
                     print(tv.load((0, 0)))
                     print(tv.load((1, 0)))
+                    # traversal_steps=(1, 4): advance 1 row per step, tiles overlap
+                    tv2 = x.tiled_view((2, 4), traversal_steps=(1, 4))
+                    print(tv2.load((0, 0)))
+                    print(tv2.load((1, 0)))
 
                 x = torch.arange(16, device='cuda').reshape(4, 4)
                 ct.launch(stream, (1,), kernel, (x,))
@@ -268,11 +285,14 @@ class Array:
 
                 [[0, 1, 2, 3], [4, 5, 6, 7]]
                 [[8, 9, 10, 11], [12, 13, 14, 15]]
+                [[0, 1, 2, 3], [4, 5, 6, 7]]
+                [[4, 5, 6, 7], [8, 9, 10, 11]]
 
         .. seealso::
             :ref:`Tiled Views <data-tiled-views>`
         """
-        return _m_array_tiled_view(self, tile_shape, padding_mode=padding_mode)
+        return _m_array_tiled_view(self, tile_shape, padding_mode=padding_mode,
+                                   traversal_steps=traversal_steps)
 
     def get_raw_memory(self) -> "RawArrayMemory":
         """Returns an object that allows loading and storing by element offset.
@@ -737,6 +757,18 @@ class TiledView:
         Returns:
             int32:
 
+        """
+
+    @property
+    @function
+    def traversal_steps(self) -> tuple[int, ...]:
+        """Number of elements between consecutive tile origins along each axis.
+
+        Defaults to :attr:`tile_shape` when not explicitly provided.
+        If tile_shape is (), traversal_steps is (1,) * tiled view's rank.
+
+        Returns:
+            tuple[const int,...]:
         """
 
     def load(self, index: Shape, *,
@@ -3962,7 +3994,7 @@ def _inherit_kwdefaults(source):
 
 @_inherit_kwdefaults(Array.tiled_view)
 @stub
-def _m_array_tiled_view(array, tile_shape, *, padding_mode): ...
+def _m_array_tiled_view(array, tile_shape, *, padding_mode, traversal_steps): ...
 # Array.tiled_view(shape, padding_mode=padding_mode)
 
 

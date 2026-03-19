@@ -11,6 +11,8 @@ import numpy as np
 
 import cuda.tile as ct
 from cuda.tile._exception import TileTypeError
+from cuda.tile._bytecode.version import BytecodeVersion
+from conftest import requires_tileiras
 
 
 class TestMemoryBehavior:
@@ -372,6 +374,16 @@ ForLoopNonParallelStoreCheckDirective = """\
 """
 
 
+ForLoopNonParallelStoreStridedViewCheckDirective = """\
+// CHECK: %[[TOKEN0:.*]] = make_token
+// CHECK: %[[VAL1:.*]], %[[XTOKEN1:.*]] = load_view_tko {{.*}} token = %[[TOKEN0]]
+// CHECK: for {{.*}} iter_values(
+// CHECK-SAME: %[[YTKNARG0:.*]] = %[[TOKEN0]])
+// CHECK:     %[[YTOKEN1:.*]] = store_view_tko {{.*}} token = %[[YTKNARG0]]
+// CHECK:     continue %[[YTOKEN1]]
+"""
+
+
 class TestForLoopNonParallelStoreMLIR(MLIRTestBase):
 
     def non_parallel_store_non_disjoint(X, Y, n: int, TILE: ct.Constant[int]):
@@ -380,6 +392,13 @@ class TestForLoopNonParallelStoreMLIR(MLIRTestBase):
         for i in range(n):
             ct.store(X, index=(bidx, i), tile=tx)
             ct.store(Y, index=(bidx, i), tile=tx + i)
+
+    def non_parallel_store_strided_view(X, Y, n: int, TILE: ct.Constant[int]):
+        bidx = ct.bid(0)
+        tx = ct.load(X, index=(bidx, 0), shape=(TILE, TILE))
+        tv = Y.tiled_view(tile_shape=(TILE, TILE), traversal_steps=(TILE, 1))
+        for i in range(n):
+            tv.store(index=(bidx, i), tile=tx + i)
 
     @override
     def compile_kernel(self, kernel):
@@ -395,9 +414,12 @@ class TestForLoopNonParallelStoreMLIR(MLIRTestBase):
         bytecode = get_bytecode(kernel, (X, Y, n, tile_size))
         return bytecode
 
-    @pytest.mark.parametrize("kernel, check_directive", make_cases(
-        (non_parallel_store_non_disjoint, ForLoopNonParallelStoreCheckDirective),
-    ))
+    @pytest.mark.parametrize("kernel, check_directive", [
+        pytest.param(non_parallel_store_non_disjoint, ForLoopNonParallelStoreCheckDirective),
+        pytest.param(non_parallel_store_strided_view,
+                     ForLoopNonParallelStoreStridedViewCheckDirective,
+                     marks=[requires_tileiras(BytecodeVersion.V_13_3)]),
+    ])
     @override
     def test_mlir(self, kernel, check_directive):
         super().test_mlir(kernel, check_directive)
@@ -1072,12 +1094,47 @@ class TestArrayViewMLIR(MLIRTestBase):
             i += 1
         tv.store(0, tx)
 
+    def tiled_view_strided_load_store(X, _n: int, TILE: ct.Constant[int],
+                                      STEP: ct.Constant[int]):
+        tv = X.tiled_view(TILE, traversal_steps=STEP)
+        tx = tv.load(0)
+        tv.store(1, tx + 1)
+        tv2 = X.tiled_view(TILE, traversal_steps=STEP)
+        ty = tv2.load(1)
+        tv2.store(0, ty)
+
+    def tiled_view_strided_for_loop(X, n: int, TILE: ct.Constant[int],
+                                    STEP: ct.Constant[int]):
+        tv = X.tiled_view(TILE, traversal_steps=STEP)
+        for i in range(n):
+            tx = tv.load(i)
+            tv.store(i, tx + 1)
+        ct.store(X, (0,), ct.full((TILE,), 0, dtype=X.dtype))
+
+    def tiled_view_strided_while_loop(X, n: int, TILE: ct.Constant[int],
+                                      STEP: ct.Constant[int]):
+        tv = X.tiled_view(TILE, traversal_steps=STEP)
+        tx = tv.load(0)
+        i = 0
+        while i < n:
+            tx = tv.load(i)
+            tv.store(i, tx + 1)
+            i += 1
+        tv.store(0, tx)
+
+    def tiled_view_strided_ifelse(X, cond: int, TILE: ct.Constant[int],
+                                  STEP: ct.Constant[int]):
+        tv = X.tiled_view(TILE, traversal_steps=STEP)
+        tx = tv.load(0)
+        if cond:
+            tx = tv.load(0)
+        ct.store(X, (0,), tx)
+
     @override
     def compile_kernel(self, kernel):
         tile_size = 1024
         X = torch.arange(tile_size * 2, device="cuda", dtype=torch.int32)
-        bytecode = get_bytecode(kernel, (X, 2, tile_size))
-        return bytecode
+        return get_bytecode(kernel, (X, 2, tile_size))
 
     @pytest.mark.parametrize("kernel, check_directive", make_cases(
         (array_slice_load_store, ArrayViewLoadStoreCheckDirective),
@@ -1092,6 +1149,19 @@ class TestArrayViewMLIR(MLIRTestBase):
     @override
     def test_mlir(self, kernel, check_directive):
         super().test_mlir(kernel, check_directive)
+
+    @requires_tileiras(BytecodeVersion.V_13_3)
+    @pytest.mark.parametrize("kernel, check_directive", make_cases(
+        (tiled_view_strided_load_store, ArrayViewLoadStoreCheckDirective),
+        (tiled_view_strided_for_loop, ArrayViewForLoopCheckDirective),
+        (tiled_view_strided_while_loop, ArrayViewWhileLoopCheckDirective),
+        (tiled_view_strided_ifelse, ArrayViewIfElseCheckDirective),
+    ))
+    def test_strided_view_mlir(self, kernel, check_directive):
+        tile_size = 1024
+        X = torch.arange(tile_size * 2, device="cuda", dtype=torch.int32)
+        bytecode = get_bytecode(kernel, (X, 2, tile_size, tile_size // 2))
+        filecheck(bytecode, check_directive)
 
 
 LoadAcquireStoreReleaseCheckDirective = """\
