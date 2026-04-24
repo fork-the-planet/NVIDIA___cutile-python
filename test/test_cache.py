@@ -24,6 +24,11 @@ def test_cache_key_differs():
     assert cache_key("v1", "sm_90", 3, b"other") != base
 
 
+def test_cache_key_device_debug_differs():
+    base = cache_key("v1", "sm_90", 0, b"data", False)
+    assert cache_key("v1", "sm_90", 0, b"data", True) != base
+
+
 @pytest.fixture
 def cache_env(tmp_path):
     cache_dir = str(tmp_path / "cache")

@@ -48,6 +48,7 @@ from cuda.tile._debug import (
     CUDA_TILE_TESTING_DISABLE_TOKEN_ORDER,
     CUDA_TILE_DUMP_BYTECODE,
     CUDA_TILE_DUMP_TILEIR,
+    EXPERIMENTAL_CUDA_TILE_DEBUG_BUILD,
 )
 
 from cuda.tile._passes.dataflow_analysis import dataflow_analysis
@@ -400,8 +401,11 @@ def compile_tile(ann_func: AnnotatedFunction | FunctionType,
     elif compiler_ver is None:
         logger.warning("disk cache disabled: compiler version is unknown")
     else:
-        opt_level = compiler_options.specialize_for_target(sm_arch).opt_level
-        key = cache_key(compiler_ver, sm_arch, opt_level, bytecode_buf)
+        effective_opt, device_debug = _tileiras_effective_opt_and_device_debug(
+            compiler_options, sm_arch)
+        key = cache_key(
+            compiler_ver, sm_arch, effective_opt, bytecode_buf, device_debug
+        )
         cubin = cache_lookup(cache_dir, key)
         if cubin is not None:
             ret.cubin = cubin
@@ -433,6 +437,19 @@ def compile_tile(ann_func: AnnotatedFunction | FunctionType,
         evict_lru(cache_dir, context.config.cache_size_limit)
 
     return ret
+
+
+def _tileiras_effective_opt_and_device_debug(
+    compiler_options: CompilerOptions, sm_arch: str
+) -> tuple[int, bool]:
+    """
+    When EXPERIMENTAL_CUDA_TILE_DEBUG_BUILD is set, tileiras must use -O0 and
+    --device-debug; the disk cache key must match (see cache_key).
+    """
+    if EXPERIMENTAL_CUDA_TILE_DEBUG_BUILD:
+        return 0, True
+    hints = compiler_options.specialize_for_target(sm_arch)
+    return hints.opt_level, False
 
 
 def is_windows() -> bool:
@@ -668,16 +685,21 @@ def compile_cubin(
         timeout_sec: Optional[float]) -> Path:
     binary = _find_compiler_bin()
     fname_cubin = Path(fname_bytecode).with_suffix(".cubin")
-    compiler_hints = compiler_options.specialize_for_target(sm_arch)
+    effective_opt, use_device_debug = _tileiras_effective_opt_and_device_debug(
+        compiler_options, sm_arch
+    )
 
     args = [str(fname_bytecode), "-o", str(fname_cubin)]
 
-    flags = [
+    flags: list[str] = [
         "--gpu-name",
         sm_arch,
-        f"-O{compiler_hints.opt_level}",
-        "--lineinfo"
+        f"-O{effective_opt}",
     ]
+    if use_device_debug:
+        flags.append("--device-debug")
+    else:
+        flags.append("--lineinfo")
 
     binary.run(args, flags, timeout_sec)
     return fname_cubin

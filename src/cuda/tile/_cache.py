@@ -59,7 +59,7 @@ _CACHE_VERSION = b''
 
 
 def cache_key(compiler_version: str, sm_arch: str, opt_level: int,
-              bytecode: bytes) -> str:
+              bytecode: bytes, device_debug: bool = False) -> str:
 
     def encode_uint(x: int):
         return int.to_bytes(x, 4, byteorder='big', signed=False)
@@ -73,7 +73,7 @@ def cache_key(compiler_version: str, sm_arch: str, opt_level: int,
     h.update(version)
     h.update(encode_uint(len(arch)))
     h.update(arch)
-    h.update(encode_uint(opt_level))
+    h.update(encode_uint(opt_level | (int(device_debug) << 8)))
     h.update(encode_uint(len(bytecode)))
     h.update(bytecode)
     return h.hexdigest()

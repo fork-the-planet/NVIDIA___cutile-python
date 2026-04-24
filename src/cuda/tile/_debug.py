@@ -13,3 +13,6 @@ CUDA_TILE_TESTING_DISABLE_DIV = (
     os.environ.get("CUDA_TILE_TESTING_DISABLE_DIV", "0") == "1")
 CUDA_TILE_TESTING_DISABLE_TOKEN_ORDER = (
     os.environ.get("CUDA_TILE_TESTING_DISABLE_TOKEN_ORDER", "0") == "1")
+# When 1, tileiras uses -O0, --device-debug, and a distinct disk cache key.
+EXPERIMENTAL_CUDA_TILE_DEBUG_BUILD = (
+    os.environ.get("EXPERIMENTAL_CUDA_TILE_DEBUG_BUILD", "0") == "1")
