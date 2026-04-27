@@ -310,6 +310,15 @@ class TiledViewValue(AggregateValue):
 
 
 @dataclass
+class IndexSliceValue(AggregateValue):
+    start: Var
+    length: Var
+
+    def as_tuple(self) -> tuple[Var, ...]:
+        return (self.start, self.length)
+
+
+@dataclass
 class RawArrayMemoryValue(AggregateValue):
     base_ptr: Var
 

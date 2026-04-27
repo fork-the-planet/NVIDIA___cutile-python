@@ -118,7 +118,7 @@ def get_signature(f) -> inspect.Signature:
 
 
 def is_supported_builtin_func(x: Any) -> bool:
-    return _safe_get(BUILTIN_FUNCS, x) is not None
+    return _safe_get(BUILTIN_FUNCS, x) is not None or getattr(x, '_cutile_is_builtin', False)
 
 
 def typeof_pyval(val) -> Type:

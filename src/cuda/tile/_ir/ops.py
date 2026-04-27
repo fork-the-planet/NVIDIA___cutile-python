@@ -27,7 +27,8 @@ from cuda.tile._ir.ir import (
     enter_nested_block, nested_block, PhiState, LoopVarState,
     TupleValue, make_aggregate, RangeValue, BoundMethodValue, ArrayValue, ConstantState,
     ListValue, TiledViewValue, ClosureValue, MemoryEffect, attribute, operand,
-    BlockRestriction, FormattedStringValue, RawArrayMemoryValue, DataclassValue, DataclassInfo
+    BlockRestriction, FormattedStringValue, RawArrayMemoryValue, DataclassValue, DataclassInfo,
+    IndexSliceValue
 )
 from .type import PointerTy
 from . import hir, hir_stubs
@@ -59,11 +60,12 @@ from .typing_support import (
     typeof_pyval, dtype_registry, loose_type_of_pyval, get_constant_value, get_dataclass_info,
 )
 from .type import (
-    PartitionViewTy, StridedViewTy, TupleTy, TileTy, NoneType, BoundMethodTy, ArrayTy,
+    PartitionViewTy, StridedViewTy, GatherScatterViewTy, TupleTy, TileTy, NoneType,
+    BoundMethodTy, ArrayTy,
     ListTy, make_tile_ty, SliceType, DTypeConstructor, RangeIterType, Type,
     NONE, ModuleTy, TypeTy, LooselyTypedScalar, DTypeSpec, StringTy, InvalidType,
     ClosureTy, LiveCapturedScope, TokenTy, TiledViewTy, FormattedStringTy,
-    StringFormat, FormattedPiece, RawArrayMemoryTy, DataclassTy
+    StringFormat, FormattedPiece, RawArrayMemoryTy, DataclassTy, IndexSliceTy
 )
 from cuda.tile._datatype import (
     DType, is_integral, is_float, is_signed, is_boolean,
@@ -2373,6 +2375,29 @@ def _materialize_tiled_view(array: Var,
         return _make_strided_view(array, tile_shape, traversal_steps, order, padding_mode)
 
     return _make_partition_view(array, tile_shape, order, padding_mode)
+
+
+@dataclass(eq=False)
+class MakeGatherScatterView(Operation, opcode="make_gather_scatter_view"):
+    array: Var = operand()
+
+    @override
+    def generate_bytecode(self, ctx: BytecodeContext) -> bc.Value:
+        gs_view_ty = self.result_var.get_type()
+        return bc.encode_MakeGatherScatterViewOp(ctx.builder,
+                                                 typeid(ctx.type_table, gs_view_ty),
+                                                 ctx.get_value(self.array))
+
+
+def make_gather_scatter_view(array: Var, tile_shape: Sequence[int],
+                             sparse_dim: int,
+                             padding_mode: PaddingMode) -> Var:
+    array_ty = array.get_type()
+    assert isinstance(array_ty, ArrayTy)
+    view_ty = GatherScatterViewTy(array_ty, tuple(tile_shape), sparse_dim, padding_mode)
+    ret = add_operation(MakeGatherScatterView, view_ty, array=array)
+    ret.set_aggregate(array.get_aggregate())
+    return ret
 
 
 @dataclass(eq=False)
@@ -4824,6 +4849,128 @@ def tiled_view_atomic_rmw_impl(int_mode: Optional[AtomicRMWMode],
     add_operation(TileAtomicRedView, (TokenTy(),),
                   mode=mode, memory_order=memory_order, memory_scope=memory_scope,
                   view=view, index=index_items, update=update)
+
+
+@impl(ct.Slice)
+def slice_index_constructor_impl(start: Var, length: Var) -> Var:
+    start_ty = require_signed_integer_0d_tile_type(start)
+    length_ty = require_signed_integer_0d_tile_type(length)
+    res_type = IndexSliceTy(start_ty, length_ty)
+    res_loose_type = IndexSliceTy(start.get_loose_type(), length.get_loose_type())
+    return make_aggregate(IndexSliceValue(start, length), res_type, res_loose_type)
+
+
+def _parse_advanced_index(indices: Var, ndim: int) -> tuple[int, tuple[int, ...], tuple[Var, ...]]:
+    """Unpack, classify, validate, and build the gather scatter view index.
+
+    Returns (sparse_dim, tile_shape, gs_index).
+    """
+    require_tuple_type(indices)
+    items = list(indices.get_aggregate().items)
+    if len(items) != ndim:
+        raise TileTypeError(
+            f"load_advanced/store_advanced index length {len(items)} does not "
+            f"match array rank {ndim}")
+
+    sparse_dims: list[int] = []
+    tile_shape: list[int] = []
+    gs_index: list[Var] = []
+
+    for dim, item in enumerate(items):
+        item_ty = item.get_type()
+        if isinstance(item_ty, TileTy):
+            if item_ty.ndim != 1:
+                raise TileTypeError(
+                    f"Sparse index at dim {dim} must be a 1D integer tile, "
+                    f"got {item_ty.ndim}D")
+            if not is_integral(item_ty.dtype):
+                raise TileTypeError(
+                    f"Sparse index at dim {dim} must be an integer tile, "
+                    f"got dtype {item_ty.dtype}")
+            sparse_dims.append(dim)
+            tile_shape.append(item_ty.shape[0])
+            gs_index.append(item)
+        elif isinstance(item_ty, IndexSliceTy):
+            length_var = item.get_aggregate().length
+            if not length_var.is_constant():
+                raise TileTypeError(
+                    f"ct.Slice length at dim {dim} must be a compile-time constant "
+                    f"in load_advanced/store_advanced")
+            length_val = length_var.get_constant()
+            if not isinstance(length_val, int) or length_val <= 0:
+                raise TileTypeError(
+                    f"ct.Slice length at dim {dim} must be a positive integer, got {length_val}")
+            tile_shape.append(length_val)
+            gs_index.append(item.get_aggregate().start)
+        else:
+            raise TileTypeError(
+                f"load_advanced/store_advanced index at dim {dim} must be a "
+                f"1D integer Tile (sparse dim) or ct.Slice(start, length) "
+                f"(dense dim), got type {item_ty}")
+
+    if len(sparse_dims) == 0:
+        raise TileTypeError(
+            "load_advanced/store_advanced: exactly one index must be a 1D "
+            "integer Tile (the sparse dim); none found")
+    if len(sparse_dims) > 1:
+        raise TileTypeError(
+            f"load_advanced/store_advanced: exactly one index must be a 1D "
+            f"integer Tile (the sparse dim); found {len(sparse_dims)} at "
+            f"dims {sparse_dims}")
+
+    for dim, n in enumerate(tile_shape):
+        if not _is_power_of_2(n):
+            raise TileTypeError(
+                f"Index at dim {dim} has size {n}; must be a power of two")
+
+    return sparse_dims[0], tuple(tile_shape), tuple(gs_index)
+
+
+@impl(ct.load_advanced, min_version=BytecodeVersion.V_13_3)
+def load_advanced_impl(array: Var, indices: Var, padding_mode: Var,
+                       latency: Var, allow_tma: Var) -> Var:
+    array_ty = require_array_type(array)
+    if array_ty.ndim < 2:
+        raise TileTypeError(
+            "load_advanced requires a 2D or higher-rank array; "
+            "use ct.gather() for 1D arrays")
+    sparse_dim, tile_shape, gs_index = _parse_advanced_index(indices, array_ty.ndim)
+    padding_mode_val = require_constant_enum(padding_mode, PaddingMode)
+    latency_val = require_optional_constant_int(latency)
+    allow_tma_val = require_optional_constant_bool(allow_tma)
+    _check_load_store_hints(latency_val, allow_tma_val)
+
+    view = make_gather_scatter_view(array, tile_shape, sparse_dim, padding_mode_val)
+    result, _token = add_operation(TileLoad, (make_tile_ty(array_ty.dtype, tile_shape), TokenTy()),
+                                   view=view, index=gs_index,
+                                   latency=latency_val, allow_tma=allow_tma_val)
+    return result
+
+
+@impl(ct.store_advanced, min_version=BytecodeVersion.V_13_3)
+def store_advanced_impl(array: Var, indices: Var, tile: Var,
+                        latency: Var, allow_tma: Var):
+    array_ty = require_array_type(array)
+    if array_ty.ndim < 2:
+        raise TileTypeError(
+            "store_advanced requires a 2D or higher-rank array; "
+            "use ct.scatter() for 1D arrays")
+    sparse_dim, tile_shape, gs_index = _parse_advanced_index(indices, array_ty.ndim)
+    tile_ty = require_tile_type(tile)
+    if tile_ty.shape != tile_shape:
+        raise TileTypeError(
+            f"Tile shape {tile_ty.shape} does not match the shape implied by "
+            f"indices {tile_shape}")
+    tile = _implicit_cast(tile, array_ty.dtype,
+                          "Stored tile dtype is incompatible with array dtype")
+    latency_val = require_optional_constant_int(latency)
+    allow_tma_val = require_optional_constant_bool(allow_tma)
+    _check_load_store_hints(latency_val, allow_tma_val)
+
+    view = make_gather_scatter_view(array, tile_shape, sparse_dim, PaddingMode.UNDETERMINED)
+    [_token] = add_operation(TileStore, (TokenTy(),),
+                             view=view, index=gs_index, tile=tile,
+                             latency=latency_val, allow_tma=allow_tma_val)
 
 
 def store_var(local_idx: int, value: Var, loc: Loc | None = None):

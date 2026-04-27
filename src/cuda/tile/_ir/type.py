@@ -450,6 +450,58 @@ class StridedViewTy(Type):
                 f"padding_mode={self.padding_mode}]")
 
 
+# ============== GatherScatterView Type ===============
+
+
+@dataclass(frozen=True)
+class GatherScatterViewTy(Type):
+    array_ty: ArrayTy
+    tile_shape: tuple[int, ...]
+    sparse_dim: int
+    padding_mode: PaddingMode
+
+    def is_aggregate(self) -> bool:
+        return True
+
+    def aggregate_item_types(self) -> tuple["Type", ...]:
+        return self.array_ty.aggregate_item_types()
+
+    def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":
+        return self.array_ty.make_aggregate_value(items)
+
+    @property
+    def dtype(self):
+        return self.array_ty.dtype
+
+    def __str__(self):
+        return (f"GatherScatterView[{self.array_ty},tile_shape={self.tile_shape},"
+                f"sparse_dim={self.sparse_dim},padding_mode={self.padding_mode}]")
+
+
+# ============== IndexSlice Type ===============
+
+
+@dataclass(frozen=True)
+class IndexSliceTy(Type):
+    """Type of a ct.Slice(start, length)."""
+    start_ty: "Type"
+    length_ty: "Type"
+
+    def is_aggregate(self) -> bool:
+        return True
+
+    def aggregate_item_types(self) -> tuple["Type", ...]:
+        return (self.start_ty, self.length_ty)
+
+    def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":
+        from .ir import IndexSliceValue
+        assert len(items) == 2
+        return IndexSliceValue(items[0], items[1])
+
+    def __str__(self) -> str:
+        return f"IndexSlice[start_ty={self.start_ty}, length_ty={self.length_ty}]"
+
+
 # ============== TiledView Type ===============
 
 @dataclass(frozen=True)

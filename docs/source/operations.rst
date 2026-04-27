@@ -22,6 +22,8 @@ Load/Store
    num_tiles
    load
    store
+   load_advanced
+   store_advanced
    gather
    scatter
 
@@ -234,12 +236,14 @@ Classes
 
    Array
    TiledView
+   Slice
 
 .. toctree::
    :hidden:
 
    data/array
    data/tiled_view
+   data/slice
 
 
 .. _operations-enums:

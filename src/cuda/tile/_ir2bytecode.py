@@ -20,8 +20,8 @@ from cuda.tile._ir.ops_utils import (
     get_default_rounding_mode,
 )
 from cuda.tile._ir.type import (
-    PartitionViewTy, StridedViewTy, Type, TileTy, PointerTy, TokenTy, TupleTy, ArrayTy,
-    size_to_bytecode,
+    PartitionViewTy, StridedViewTy, GatherScatterViewTy, Type, TileTy, PointerTy, TokenTy,
+    TupleTy, ArrayTy, size_to_bytecode,
 )
 
 
@@ -61,6 +61,11 @@ def typeid(tt: bc.TypeTable, ty: Type) -> bc.TypeId:
                                    ty.order, padding_value)
         else:
             return tt.partition_view(ty.tile_shape, tv_id, ty.order, padding_value)
+    elif isinstance(ty, GatherScatterViewTy):
+        padding_value = padding_mode_to_bytecode[ty.padding_mode]
+        assert isinstance(ty.array_ty, ArrayTy)
+        tv_id = tensor_view_typeid(tt, ty.array_ty)
+        return tt.gather_scatter_view(ty.tile_shape, tv_id, ty.sparse_dim, padding_value)
     else:
         raise NotImplementedError(f"Lowering type '{ty}' is not supported")
 

@@ -944,6 +944,26 @@ class TiledView:
         """
 
 
+class Slice:
+    _cutile_is_builtin = True
+    """A start + length index for array dimensions.
+
+    Used as a dense-dimension entry in :func:`load_advanced` and
+    :func:`store_advanced`.  ``start`` is an integer giving the
+    element-space start offset along this dimension; ``length`` is the
+    tile size, and must be a power of two and must be a
+    compile-time constant at the :func:`load_advanced`/:func:`store_advanced`
+    call site.
+
+    Args:
+        start: Integer element-space start offset.
+        length: Length in elements.
+    """
+    @stub
+    def __init__(self, start, length, /):
+        pass  # implemented via @impl(ct.Slice) in ops.py
+
+
 ###############################################################################
 # Constantness Hints
 
@@ -1390,6 +1410,114 @@ def store(array: Array, /,
         - :py:func:`load`
         - :py:func:`scatter`
         - |Tile space|
+    """
+
+
+@stub
+def load_advanced(array: Array, indices, /, *,
+                  padding_mode: PaddingMode = PaddingMode.UNDETERMINED,
+                  latency: Optional[int] = None,
+                  allow_tma: Optional[bool] = None) -> Tile:
+    """Loads a tile from non-contiguous slices of `array`.
+
+    ``indices`` is a tuple of length ``array.ndim``.  Exactly one entry must
+    be a 1-D integer :class:`Tile` (the *sparse dim*); every other entry must
+    be a :class:`Slice` ``(start, length)`` where ``start`` is a runtime
+    element-space offset and ``length`` is a compile-time power-of-two tile
+    size.
+
+    The sparse-dim tile contains element-space indices — each value selects
+    one slice of the array along that dimension.  Each dense-dim
+    :class:`Slice` describes a contiguous range ``[start, start + length)``.
+    The resulting tile has shape ``(len_0, ..., len_{n-1})`` where ``len_i``
+    is the index-tile length for the sparse dim or ``Slice.length`` for dense
+    dims.
+
+    If the tile lies entirely outside the tiled view, the behavior is undefined.
+
+    Args:
+        array (Array): Array to load from.
+        indices (tuple): Length must equal ``array.ndim``.  Exactly one entry
+            is a 1-D integer :class:`Tile` (sparse dim); the rest are
+            :class:`Slice` objects (dense dims).
+        padding_mode (PaddingMode): Fill value for OOB elements on both
+            sparse and dense dims. Defaults to ``UNDETERMINED``.
+        latency (int, optional): DRAM traffic hint (1 = low, 10 = high).
+        allow_tma (bool, optional): If ``False``, TMA will not be used.
+
+    Returns:
+        Tile: Shape ``(len_0, ..., len_{n-1})`` — sparse dim length equals the
+        index-tile length; dense dim lengths equal the corresponding
+        ``Slice.length`` values.
+
+    Examples:
+
+        .. testcode::
+            :template: setup_only.py
+
+            @ct.kernel
+            def kernel(x, y, col_start):
+                row_indices = ct.arange(4, dtype=ct.int32)
+                tile = ct.load_advanced(x, (row_indices, ct.Slice(col_start, 4)),
+                                        padding_mode=ct.PaddingMode.ZERO)
+                ct.store(y, (0, 0), tile)
+
+            x = torch.arange(64, device='cuda', dtype=torch.int32).reshape(8, 8)
+            y = torch.zeros(4, 4, device='cuda', dtype=torch.int32)
+            ct.launch(stream, (1,), kernel, (x, y, 2))
+            print(y.tolist())
+
+        .. testoutput::
+
+            [[2, 3, 4, 5], [10, 11, 12, 13], [18, 19, 20, 21], [26, 27, 28, 29]]
+
+    .. seealso::
+        - :func:`store_advanced`
+    """
+
+
+@stub
+def store_advanced(array: Array, indices, tile: TileOrScalar, /, *,
+                   latency: Optional[int] = None,
+                   allow_tma: Optional[bool] = None) -> None:
+    """Stores a `tile` into non-contiguous slices of `array`.
+
+    Uses the same ``indices`` convention as :func:`load_advanced` — exactly
+    one entry is a 1-D integer :class:`Tile` (sparse dim) and the rest are
+    :class:`Slice` objects (dense dims).
+    The tile's shape must exactly match the shape implied by the indices.
+
+    If the tile lies entirely outside the tiled view, the behavior is undefined.
+
+    Args:
+        array (Array): Array to store into.
+        indices (tuple): Same convention as :func:`load_advanced`.
+        tile (Tile): Tile to store. Shape must exactly match the shape
+            implied by ``indices``.
+        latency (int, optional): DRAM traffic hint (1 = low, 10 = high).
+        allow_tma (bool, optional): If ``False``, TMA will not be used.
+
+    Examples:
+
+        .. testcode::
+            :template: setup_only.py
+
+            @ct.kernel
+            def kernel(y):
+                row_indices = ct.arange(4, dtype=ct.int32) + 1
+                tile = ct.full((4, 4), 1, dtype=y.dtype)
+                ct.store_advanced(y, (row_indices, ct.Slice(0, 4)), tile)
+
+            y = torch.zeros(6, 4, device='cuda', dtype=torch.int32)
+            ct.launch(stream, (1,), kernel, (y,))
+            print(y.tolist())
+
+        .. testoutput::
+
+            [[0, 0, 0, 0], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [0, 0, 0, 0]]
+
+    .. seealso::
+        - :func:`load_advanced`
     """
 
 
