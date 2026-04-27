@@ -4,7 +4,8 @@
 import inspect
 import sys
 from contextlib import contextmanager
-from typing import Any, Sequence
+import dataclasses
+from typing import Sequence
 
 from .ast2hir import get_function_hir
 from .. import TileTypeError
@@ -15,11 +16,12 @@ from .._ir import hir, ir
 from .._ir.ir import Var, IRContext, BoundMethodValue, ClosureValue
 from .._ir.op_impl import ImplRegistry
 from .._ir.ops import loosely_typed_const, end_branch, return_, continue_, \
-    break_, store_var
+    break_, store_var, build_dataclass_instance
 from .._ir.scope import Scope, LocalScope, IntMap
 from .._ir.type import FunctionTy, BoundMethodTy, DTypeConstructor, ClosureTy, \
-    ClosureDefaultPlaceholder, StringFormat
-from .._ir.typing_support import get_signature, Closure, is_supported_builtin_func
+    ClosureDefaultPlaceholder, StringFormat, TypeTy
+from .._ir.typing_support import get_signature, is_supported_builtin_func, \
+    get_dataclass_info
 
 
 MAX_RECURSION_DEPTH = 1000
@@ -129,76 +131,117 @@ async def _dispatch_call(hir_call: hir.Call, scope: Scope):
         scope.hir2ir_varmap[hir_call.result.id] = retval
 
 
+async def _call_user_defined(callee_hir: hir.Function, arg_list: list[Var], builder: ir.Builder,
+                             parent_scopes: tuple[LocalScope, ...] = ()):
+    _check_recursive_call(builder.loc)
+    for param_name, param in callee_hir.signature.parameters.items():
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL,
+                          inspect.Parameter.VAR_KEYWORD):
+            raise TileSyntaxError("Variadic parameters in user-defined"
+                                  " functions are not supported")
+
+    # Activate a fresh Scope.
+    new_scope = _create_scope(callee_hir, builder.ir_ctx, call_site=builder.loc,
+                              parent_scopes=parent_scopes)
+    with new_scope.make_current():
+        # Call store_var() to bind arguments to parameters.
+        for arg, local_idx, param_loc in zip(arg_list, callee_hir.param_local_indices,
+                                             callee_hir.param_locs, strict=True):
+            store_var(local_idx, arg, param_loc)
+
+        # Dispatch the function body. Use resume_after() to break the call stack
+        # and make sure we stay within the Python's recursion limit.
+        await resume_after(dispatch_hir_block(callee_hir.body, builder))
+
+    assert callee_hir.body.have_result
+    ret = _process_return_value(
+            new_scope.hir2ir_varmap[callee_hir.body.result.id], new_scope.local, builder)
+    new_scope.local.mark_dead()
+    return ret
+
+
+async def _call_function(callee, args, kwargs, builder: ir.Builder):
+    sig = get_signature(callee)
+    arg_list = _bind_args(sig, callee.__name__, args, kwargs)
+    if is_stub(callee) or is_supported_builtin_func(callee):
+        return await _call_builtin(callee, arg_list, builder)
+    else:
+        callee_hir = get_function_hir(callee, entry_point=False)
+        return await _call_user_defined(callee_hir, arg_list, builder)
+
+
+async def _call_builtin(callee, arg_list: list[Var], builder: ir.Builder):
+    impl_registry = ImplRegistry.get_current()
+    try:
+        impl = impl_registry.op_implementations[callee]
+    except KeyError:
+        raise NotImplementedError(f"Missing implementation for {callee}")
+
+    result = impl(*arg_list)
+    if impl._is_coroutine:
+        result = await result
+
+    if builder.is_terminated:
+        # The current block has been terminated, e.g. by flattening an if-else
+        # with a constant condition (`if True: break`). Ignore the `result` in this case.
+        return None
+
+    # Map the result variable
+    if result is None:
+        result = loosely_typed_const(None)
+    assert isinstance(result, Var)
+    return result
+
+
+_DTYPE_CONSTRUCTOR_SIGNATURE = inspect.signature(lambda x=0, /: None)
+
+
 async def call(callee_var: Var, args, kwargs) -> Var | None:
     builder = ir.Builder.get_current()
-    callee, self_arg, is_user_defined = _get_callee_and_self(callee_var)
-    args = self_arg + args
-    arg_list = _bind_args(callee, args, kwargs)
-    if is_user_defined:
-        _check_recursive_call(builder.loc)
-        if isinstance(callee, Closure):
-            callee_hir = callee.ty.func_hir
-            parent_scopes = _get_closure_parent_scopes(callee, builder.ir_ctx)
-        else:
-            callee_hir = get_function_hir(callee, entry_point=False)
-            parent_scopes = ()
-
-        for param_name, param in callee_hir.signature.parameters.items():
-            if param.kind in (inspect.Parameter.VAR_POSITIONAL,
-                              inspect.Parameter.VAR_KEYWORD):
-                raise TileSyntaxError("Variadic parameters in user-defined"
-                                      " functions are not supported")
-
-        # Activate a fresh Scope.
-        new_scope = _create_scope(callee_hir, builder.ir_ctx, call_site=builder.loc,
-                                  parent_scopes=parent_scopes)
-        with new_scope.make_current():
-            # Call store_var() to bind arguments to parameters.
-            for arg, local_idx, param_loc in zip(arg_list, callee_hir.param_local_indices,
-                                                 callee_hir.param_locs, strict=True):
-                store_var(local_idx, arg, param_loc)
-
-            # Dispatch the function body. Use resume_after() to break the call stack
-            # and make sure we stay within the Python's recursion limit.
-            await resume_after(dispatch_hir_block(callee_hir.body, builder))
-
-        assert callee_hir.body.have_result
-        ret = _process_return_value(
-                new_scope.hir2ir_varmap[callee_hir.body.result.id], new_scope.local, builder)
-        new_scope.local.mark_dead()
-        return ret
+    callee_ty = callee_var.get_type()
+    if isinstance(callee_ty, FunctionTy):
+        return await _call_function(callee_ty.func, args, kwargs, builder)
+    elif isinstance(callee_ty, BoundMethodTy):
+        bound_method = callee_var.get_aggregate()
+        assert isinstance(bound_method, BoundMethodValue)
+        return await _call_function(callee_ty.func, (bound_method.bound_self, *args), kwargs,
+                                    builder)
+    elif isinstance(callee_ty, DTypeConstructor):
+        arg_list = _bind_args(_DTYPE_CONSTRUCTOR_SIGNATURE, callee_ty.dtype.name, args, kwargs)
+        # TODO: use this opportunity to simplify the @impl registration in ops.py
+        return await _call_builtin(callee_ty.dtype, arg_list, builder)
+    elif isinstance(callee_ty, ClosureTy):
+        func_name = callee_ty.func_hir.desc.name
+        if func_name is None:
+            func_name = callee_ty.func_hir.desc.short_str()
+        arg_list = _bind_args(callee_ty.func_hir.signature, func_name, args, kwargs,
+                              callee_var.get_aggregate().default_values)
+        parent_scopes = _get_closure_parent_scopes(callee_ty, callee_var.get_aggregate(),
+                                                   builder.ir_ctx)
+        return await _call_user_defined(callee_ty.func_hir, arg_list, builder, parent_scopes)
+    elif isinstance(callee_ty, TypeTy) and dataclasses.is_dataclass(callee_ty.ty):
+        dataclass_info = get_dataclass_info(callee_ty.ty)
+        param_names = tuple(dataclass_info.init_signature.parameters)
+        # Add an extra `None` to args for the `self` parameter
+        arg_list = _bind_args(dataclass_info.init_signature, callee_ty.ty.__name__,
+                              (None, *args), kwargs)
+        assert len(dataclass_info.field_names) + 1 == len(arg_list)
+        items = tuple(arg_list[param_names.index(name)] for name in dataclass_info.field_names)
+        return build_dataclass_instance(items, dataclass_info)
     else:
-        impl_registry = ImplRegistry.get_current()
-        try:
-            impl = impl_registry.op_implementations[callee]
-        except KeyError:
-            raise NotImplementedError(f"Missing implementation for {callee}")
-
-        result = impl(*arg_list)
-        if impl._is_coroutine:
-            result = await result
-
-        if builder.is_terminated:
-            # The current block has been terminated, e.g. by flattening an if-else
-            # with a constant condition (`if True: break`). Ignore the `result` in this case.
-            return None
-
-        # Map the result variable
-        if result is None:
-            result = loosely_typed_const(None)
-        assert isinstance(result, Var)
-        return result
+        raise TileTypeError(f"Cannot call an object of type {callee_ty}")
 
 
-def _get_closure_parent_scopes(closure: Closure, ir_ctx: IRContext) -> tuple[LocalScope, ...]:
-    ret: list[LocalScope | None] = [None for _ in closure.ty.frozen_capture_types_by_depth]
-    for live_scope in closure.ty.captured_scopes:
+def _get_closure_parent_scopes(ty: ClosureTy, val: ClosureValue,
+                               ir_ctx: IRContext) -> tuple[LocalScope, ...]:
+    ret: list[LocalScope | None] = [None for _ in ty.frozen_capture_types_by_depth]
+    for live_scope in ty.captured_scopes:
         ret[live_scope.depth] = live_scope.local_scope
 
     for depth, (func, frozen_local_indices, frozen_vars) in enumerate(
-                zip(closure.ty.func_hir.enclosing_funcs,
-                    closure.ty.func_hir.captures_by_depth,
-                    closure.val.frozen_captures_by_depth,
+                zip(ty.func_hir.enclosing_funcs,
+                    ty.func_hir.captures_by_depth,
+                    val.frozen_captures_by_depth,
                     strict=True)):
         # Scope at this depth is either live or frozen (mutually exclusive)
         assert (frozen_vars is None) != (ret[depth] is None)
@@ -282,23 +325,6 @@ def _check_recursive_call(call_loc: Loc):
                                  f" while inlining a function call")
 
 
-def _get_callee_and_self(callee_var: Var) -> tuple[Any, tuple[()] | tuple[Var], bool]:
-    callee_ty = callee_var.get_type()
-    if isinstance(callee_ty, FunctionTy):
-        is_user_defined = not (is_stub(callee_ty.func) or is_supported_builtin_func(callee_ty.func))
-        return callee_ty.func, (), is_user_defined
-    elif isinstance(callee_ty, BoundMethodTy):
-        bound_method = callee_var.get_aggregate()
-        assert isinstance(bound_method, BoundMethodValue)
-        return callee_ty.func, (bound_method.bound_self,), False
-    elif isinstance(callee_ty, DTypeConstructor):
-        return callee_ty.dtype, (), False
-    elif isinstance(callee_ty, ClosureTy):
-        return Closure(callee_ty, callee_var.get_aggregate()), (), True
-    else:
-        raise TileTypeError(f"Cannot call an object of type {callee_ty}")
-
-
 def _resolve_operand(x: hir.Operand, scope: Scope) \
         -> Var | hir.Block | hir.Function | hir.StaticEvalExpression | StringFormat:
     if isinstance(x, hir.Value):
@@ -309,12 +335,12 @@ def _resolve_operand(x: hir.Operand, scope: Scope) \
         return loosely_typed_const(x)
 
 
-def _bind_args(sig_func, args, kwargs) -> list[Var]:
-    sig = get_signature(sig_func)
+def _bind_args(sig: inspect.Signature, func_name: str, args, kwargs,
+               closure_defaults: Sequence[Var] | None = None) -> list[Var]:
     try:
         bound_args = sig.bind(*args, **kwargs)
     except TypeError as e:
-        raise TileTypeError(f"{sig_func.__name__}(): {e}")
+        raise TileTypeError(f"{func_name}(): {e}")
     ret = []
     for name, param in sig.parameters.items():
         if name in bound_args.arguments:
@@ -324,8 +350,8 @@ def _bind_args(sig_func, args, kwargs) -> list[Var]:
         else:
             assert param.default is not param.empty
             if isinstance(param.default, ClosureDefaultPlaceholder):
-                assert isinstance(sig_func, Closure)
-                default = sig_func.val.default_values[param.default.default_value_index]
+                assert closure_defaults is not None
+                default = closure_defaults[param.default.default_value_index]
             else:
                 default = loosely_typed_const(param.default)
             ret.append(default)

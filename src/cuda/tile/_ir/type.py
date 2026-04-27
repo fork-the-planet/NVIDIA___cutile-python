@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import inspect
+import dataclasses
 from dataclasses import dataclass
 from enum import EnumMeta
 from types import ModuleType, FunctionType
@@ -207,6 +208,31 @@ class TupleTy(Type):
 
     def map(self, unwrap: Callable[[Type], Any]) -> Tuple[Any, ...]:
         return tuple(unwrap(t) for t in self.value_types)
+
+
+@dataclass(frozen=True)
+class DataclassTy(Type):
+    cls: type
+    field_types: tuple[Type, ...]
+
+    def is_aggregate(self) -> bool:
+        return True
+
+    def aggregate_item_types(self) -> tuple["Type", ...]:
+        return self.field_types
+
+    def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":
+        from .ir import DataclassValue
+        return DataclassValue(items)
+
+    def __str__(self):
+        return (
+            self.cls.__name__ + "["
+            + ", ".join(f"{f.name}: {ty}"
+                        for f, ty in zip(dataclasses.fields(self.cls),
+                                         self.field_types, strict=True))
+            + "]"
+        )
 
 
 # ============== Formatted String Type ===============

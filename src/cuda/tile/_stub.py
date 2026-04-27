@@ -298,7 +298,7 @@ def _doc_raw_array_memory_atomic_rmw_op(f):
 
         Args:
             offset: Element offset(s) from the base pointer; scalar or tile of integer type.
-            update: Operand(s) to the atomic operation. Must be scalars 
+            update: Operand(s) to the atomic operation. Must be scalars
                 or tiles whose shapes are broadcastable to the common shape of `offset`.
             mask: Optional boolean mask; where False, no operation is performed.
             memory_order: Memory ordering for the atomic operation.
@@ -385,17 +385,17 @@ class RawArrayMemory:
         For each offset, `atomic_cas_offset()` compares the corresponding element
         to the `expected` value. If it matches, it is then overwritten with the `desired` value;
         otherwise, no update is performed. In either case, the old value of the element is returned.
-        For each individual element, the described compare-and-swap operation is performed 
-        atomically, but the operation as a whole is not atomic, and the order of individual updates 
+        For each individual element, the described compare-and-swap operation is performed
+        atomically, but the operation as a whole is not atomic, and the order of individual updates
         is unspecified.
 
         Args:
             offset: Element offset(s) from the base pointer; scalar or tile of integer type.
-            expected: Value(s) to compare against the current memory contents. Must be scalars 
+            expected: Value(s) to compare against the current memory contents. Must be scalars
                 or tiles whose shapes are broadcastable to the common shape of `offset`.
-            desired: Value(s) to write when the comparison succeeds. Must be scalars 
+            desired: Value(s) to write when the comparison succeeds. Must be scalars
                 or tiles whose shapes are broadcastable to the common shape of `offset`.
-            mask: Optional boolean mask; where False, no update is performed, and a corresponding 
+            mask: Optional boolean mask; where False, no update is performed, and a corresponding
                 `expected` value is returned.
             memory_order: Memory ordering for the atomic operation.
             memory_scope: Memory scope for the atomic operation.
@@ -1173,7 +1173,7 @@ def load(array: Array, /,
         .. testoutput::
             :options: +NORMALIZE_WHITESPACE
 
-            0 1 2 3 4 5 6 7 8 9 
+            0 1 2 3 4 5 6 7 8 9
 
     .. seealso::
         - :py:func:`store`
@@ -3987,7 +3987,7 @@ def _m_raw_array_memory_store_offset(
         latency: Optional[int] = None) -> None: ...  # RawArrayMemory.store_offset()
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_cas(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         expected: TileOrScalar, desired: TileOrScalar, /, *,
@@ -3996,7 +3996,7 @@ def _m_raw_array_memory_atomic_cas(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> Tile: ...  # RawArrayMemory.atomic_cas()
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_xchg(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4005,7 +4005,7 @@ def _m_raw_array_memory_atomic_xchg(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> Tile: ...  # RawArrayMemory.atomic_xchg()
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_add(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4014,7 +4014,7 @@ def _m_raw_array_memory_atomic_add(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> Tile: ...  # RawArrayMemory.atomic_add()
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_max(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4023,7 +4023,7 @@ def _m_raw_array_memory_atomic_max(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> TileOrScalar: ...
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_min(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4032,7 +4032,7 @@ def _m_raw_array_memory_atomic_min(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> TileOrScalar: ...
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_and(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4041,7 +4041,7 @@ def _m_raw_array_memory_atomic_and(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> TileOrScalar: ...
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_or(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,
@@ -4050,7 +4050,7 @@ def _m_raw_array_memory_atomic_or(
         memory_scope: MemoryScope = MemoryScope.DEVICE) -> Tile: ...  # RawArrayMemory.atomic_or()
 
 
-@function
+@stub
 def _m_raw_array_memory_atomic_xor(
         raw_array_memory: RawArrayMemory, offset: TileOrScalar,
         update: TileOrScalar, /, *,

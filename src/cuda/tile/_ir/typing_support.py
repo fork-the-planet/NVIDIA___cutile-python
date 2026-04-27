@@ -3,16 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 import inspect
 import operator
-from dataclasses import dataclass
+import dataclasses
 from enum import Enum
+from functools import lru_cache
 from types import ModuleType, FunctionType
 from typing import Any, Callable, Mapping, Union
 from cuda.tile import _datatype as datatype
 from cuda.tile._exception import TileTypeError, TileValueError
-from .ir import ClosureValue
+from .ir import DataclassInfo
 
 from .type import Type, TupleTy, DTypeConstructor, DTypeSpec, NONE, StringTy, \
-    ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar, ClosureTy, \
+    ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar, \
     make_tile_ty
 
 # Store mapping from 3rd party dtype objects
@@ -106,16 +107,7 @@ BUILTIN_FUNCS = {
 }
 
 
-@dataclass(frozen=True, eq=False)
-class Closure:
-    ty: ClosureTy
-    val: ClosureValue
-
-
 def get_signature(f) -> inspect.Signature:
-    if isinstance(f, Closure):
-        return f.ty.func_hir.signature
-
     if stub := BUILTIN_FUNCS.get(f):
         f = stub
     elif f in dtype_registry:
@@ -196,6 +188,53 @@ def get_constant_value(val: Any) -> Any:
     typ = type(val)
     prefix = "" if typ.__module__ == "builtins" else f"{typ.__module__}."
     raise TileTypeError(f"Cannot create constant from value of type {prefix}{typ.__qualname__}.")
+
+
+@lru_cache
+def get_dataclass_info(cls) -> DataclassInfo:
+    params = cls.__dataclass_params__
+    if not params.frozen:
+        raise TileTypeError("Only frozen dataclasses are supported")
+
+    if not params.init:
+        raise TileTypeError("Dataclasses with init=False are not supported")
+
+    # HACK: There seems to be no clean way to detect whether a dataclass has a user-defined
+    #       __init__() method. This is the best I could come up with.
+    #       Explanation: for a frozen dataclass (which we check above), the generated __init__()
+    #       method needs to call `object.__setattr__()` to set the initial values of frozen fields.
+    #       Since the builtin `object` name may be shadowed, the dataclass implementation stores
+    #       the `object` class in a captured variable named "__dataclass_builtins_object__".
+    if "__dataclass_builtins_object__" not in cls.__init__.__code__.co_freevars:
+        raise TileTypeError("Dataclasses with custom __init__ are not supported")
+
+    if hasattr(cls, "__post_init__"):
+        raise TileTypeError("Dataclasses with __post_init__ are not supported")
+
+    if "__new__" in cls.__dict__:
+        raise TileTypeError("Dataclasses with custom __new__ are not supported")
+
+    if len(cls.__bases__) != 1 or cls.__bases__[0] is not object:
+        # TODO: This is something we could partially relax,
+        #       e.g. dataclass inheriting from another dataclass.
+        raise TileTypeError("Only dataclasses without a base class are supported")
+
+    field_name_to_idx = {}
+    field_names = []
+    for i, f in enumerate(dataclasses.fields(cls)):
+        if f.default_factory is not dataclasses.MISSING:
+            # TODO: This is something we could relax
+            raise TileTypeError("Dataclasses with default_factory fields are not supported")
+
+        if not f.init:
+            # It probably doesn't make sense to relax this constraint for a frozen dataclass.
+            raise TileTypeError("Dataclasses with init=False fields are not supported")
+
+        field_names.append(f.name)
+        field_name_to_idx[f.name] = i
+
+    init_signature = inspect.signature(cls.__init__)
+    return DataclassInfo(cls, field_names, field_name_to_idx, init_signature)
 
 
 # =====CuTile native support ===========

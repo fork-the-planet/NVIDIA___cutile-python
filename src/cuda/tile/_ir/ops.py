@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import builtins
+import dataclasses
 import enum
 import math
 import operator
@@ -25,7 +26,7 @@ from cuda.tile._ir.ir import (
     enter_nested_block, nested_block, PhiState, LoopVarState,
     TupleValue, make_aggregate, RangeValue, BoundMethodValue, ArrayValue, ConstantState,
     ListValue, TiledViewValue, ClosureValue, MemoryEffect, attribute, operand,
-    BlockRestriction, FormattedStringValue, RawArrayMemoryValue
+    BlockRestriction, FormattedStringValue, RawArrayMemoryValue, DataclassValue, DataclassInfo
 )
 from .type import PointerTy
 from . import hir, hir_stubs
@@ -54,14 +55,14 @@ from .ops_utils import (
 )
 from .scope import Scope, JumpInfo, ControlFlowInfo
 from .typing_support import (
-    typeof_pyval, dtype_registry, loose_type_of_pyval, get_constant_value
+    typeof_pyval, dtype_registry, loose_type_of_pyval, get_constant_value, get_dataclass_info,
 )
 from .type import (
     PartitionViewTy, TupleTy, TileTy, NoneType, BoundMethodTy, ArrayTy,
     ListTy, make_tile_ty, SliceType, DTypeConstructor, RangeIterType, Type,
     NONE, ModuleTy, TypeTy, LooselyTypedScalar, DTypeSpec, StringTy, InvalidType,
     ClosureTy, LiveCapturedScope, TokenTy, TiledViewTy, FormattedStringTy,
-    StringFormat, FormattedPiece, RawArrayMemoryTy
+    StringFormat, FormattedPiece, RawArrayMemoryTy, DataclassTy
 )
 from cuda.tile._datatype import (
     DType, is_integral, is_float, is_signed, is_boolean,
@@ -1424,6 +1425,18 @@ def build_tuple(items: tuple[Var, ...]) -> Var:
     return res
 
 
+def build_dataclass_instance(items: tuple[Var, ...], info: DataclassInfo) -> Var:
+    cls = info.cls
+    ty = DataclassTy(cls, tuple(x.get_type() for x in items))
+    loose_ty = DataclassTy(cls, tuple(x.get_loose_type() for x in items))
+    res = make_aggregate(DataclassValue(items, info), ty, loose_ty)
+    if all(x.is_constant() for x in items):
+        const_val = cls(**{name: x.get_constant()
+                           for name, x in zip(info.field_names, items, strict=True)})
+        res.set_constant(const_val)
+    return res
+
+
 @impl(hir_stubs.build_formatted_string)
 def build_formatted_string_impl(format: StringFormat, values: tuple[Var, ...]) -> Var:
     new_pieces = []
@@ -1899,6 +1912,24 @@ def getattr_type_impl(object: Var, name: Var):
         return loosely_typed_const(getattr(ty.ty, attr_name))
     except AttributeError:
         raise TileTypeError(f"'{ty.ty.__name__}' object has no attribute '{attr_name}'")
+
+
+# ===========================================================================================
+# Dataclass attributes
+# ===========================================================================================
+
+@impl(getattr, overload=(DataclassTy, WILDCARD))
+def getattr_dataclass_impl(object: Var, name: Var):
+    ty = object.get_type()
+    val = object.get_aggregate()
+    assert isinstance(val, DataclassValue)
+    attr_name = require_constant_str(name)
+    field_idx = val.info.field_name_to_idx.get(attr_name)
+    if field_idx is None:
+        # TODO: user-defined methods and properties
+        raise TileTypeError(f"'{ty.cls.__name__}' object has no attribute '{attr_name}'")
+
+    return val.items[field_idx]
 
 
 # ===========================================================================================
@@ -4827,6 +4858,11 @@ def var2sym(var: Var) -> Any:
         tup_val = var.get_aggregate()
         assert isinstance(tup_val, TupleValue)
         return tuple(var2sym(x) for x in tup_val.items)
+    elif isinstance(ty, DataclassTy):
+        dc_val = var.get_aggregate()
+        assert isinstance(dc_val, DataclassValue)
+        return ty.cls(**{f.name: var2sym(dc_val.get_field(f.name))
+                         for f in dataclasses.fields(ty.cls)})
     elif isinstance(ty, ClosureTy):
         return SymbolicClosure(var)
     else:
@@ -4841,6 +4877,13 @@ def sym2var(x: Any) -> Var:
 
     if isinstance(x, tuple):
         return build_tuple(tuple(sym2var(item) for item in x))
+
+    cls = type(x)
+    if dataclasses.is_dataclass(cls):
+        info = get_dataclass_info(cls)
+        field_vars = tuple(sym2var(getattr(x, f.name))
+                           for f in dataclasses.fields(cls))
+        return build_dataclass_instance(field_vars, info)
 
     x = get_constant_value(x)
     return loosely_typed_const(x)

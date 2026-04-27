@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import inspect
 import itertools
 import threading
 from collections import defaultdict
@@ -241,6 +242,26 @@ class TupleValue(AggregateValue):
 
     def as_tuple(self) -> tuple["Var", ...]:
         return self.items
+
+
+@dataclass(frozen=True)
+class DataclassInfo:
+    cls: type
+    field_names: Sequence[str]
+    field_name_to_idx: Mapping[str, int]
+    init_signature: inspect.Signature
+
+
+@dataclass
+class DataclassValue(AggregateValue):
+    items: tuple[Var, ...]
+    info: DataclassInfo
+
+    def as_tuple(self) -> tuple["Var", ...]:
+        return self.items
+
+    def get_field(self, name: str):
+        return self.items[self.info.field_name_to_idx[name]]
 
 
 @dataclass
