@@ -18,7 +18,7 @@ from cuda.tile import _datatype as datatype
 from cuda.tile import RoundingMode, MemoryOrder, MemoryScope
 from cuda.tile._mutex import tile_mutex
 from cuda.tile._exception import TileTypeError, TileSyntaxError, TileError, \
-    TileStaticAssertionError, TileStaticEvalError, TileValueError
+    TileStaticAssertionError, TileStaticEvalError, TileValueError, TileUnsupportedFeatureError
 from cuda.tile._ir.ir import (
     Operation, Var, Loc, Block,
     add_operation, Builder,
@@ -3224,6 +3224,7 @@ def _matmul_broadcast_shape(x_shape: _TileShape, y_shape: _TileShape) -> \
 
 @dataclass(eq=False)
 class TileMma(Operation, opcode="tile_mma"):
+    use_fast_acc: bool = attribute(default=False)
     x: Var = operand()
     y: Var = operand()
     acc: Var = operand()
@@ -3243,13 +3244,13 @@ class TileMma(Operation, opcode="tile_mma"):
             return bc.encode_MmaIOp(ctx.builder, res_typeid, x_value, y_value,
                                     acc_value, signedness_lhs, signedness_rhs)
         else:
-            # TODO: consider expose fast_acc
             return bc.encode_MmaFOp(ctx.builder, res_typeid, x_value, y_value,
-                                    acc_value, fast_acc=False)
+                                    acc_value, fast_acc=self.use_fast_acc)
 
 
 @impl(ct.mma)
-def mma_impl(x: Var, y: Var, acc: Var) -> Var:
+def mma_impl(x: Var, y: Var, acc: Var, use_fast_acc: Var) -> Var:
+    use_fast_acc = require_constant_bool(use_fast_acc)
     x_tile_type = require_tile_type(x)
     y_tile_type = require_tile_type(y)
     acc_tile_type = require_tile_type(acc)
@@ -3263,10 +3264,21 @@ def mma_impl(x: Var, y: Var, acc: Var) -> Var:
     x_shape, y_shape, _, output_shape = _matmul_broadcast_shape(x_shape_orig, y_shape_orig)
     if acc_shape_orig != output_shape:
         raise TileTypeError(f'Expect acc shape to be {output_shape}, got {acc_shape_orig}')
+    if use_fast_acc:
+        if x_tile_type.dtype not in (datatype.float8_e4m3fn, datatype.float8_e5m2):
+            raise TileTypeError(
+                f'use_fast_acc is only supported for fp8 input dtypes '
+                f'(float8_e4m3fn, float8_e5m2), got {x_tile_type.dtype}')
+        cur_version = Builder.get_current().ir_ctx.tileiras_version
+        if cur_version < BytecodeVersion.V_13_3:
+            raise TileUnsupportedFeatureError(
+                f'use_fast_acc requires tileiras '
+                f'{BytecodeVersion.V_13_3.as_string()} or later. '
+                f'Current version is {cur_version.as_string()}.')
     datatype._resolve_mma_supported_dtype(x_tile_type.dtype, y_tile_type.dtype, acc_tile_type.dtype)
     x = _promote_and_broadcast_to(x, TileTy(x_tile_type.dtype, x_shape))
     y = _promote_and_broadcast_to(y, TileTy(y_tile_type.dtype, y_shape))
-    return add_operation(TileMma, acc_tile_type, x=x, y=y, acc=acc)
+    return add_operation(TileMma, acc_tile_type, use_fast_acc=use_fast_acc, x=x, y=y, acc=acc)
 
 
 @impl(ct.matmul)

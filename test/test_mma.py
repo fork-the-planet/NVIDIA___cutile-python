@@ -11,7 +11,8 @@ import cuda.tile as ct
 from util import (
     assert_close, assert_equal, require_hopper_or_newer, torch_to_tf32, is_ampere_or_ada
 )
-from conftest import dtype_id
+from conftest import dtype_id, get_tileiras_version
+from cuda.tile._bytecode.version import BytecodeVersion
 from cuda.tile._exception import TileTypeError, TileUnsupportedFeatureError
 
 
@@ -21,11 +22,12 @@ from cuda.tile._exception import TileTypeError, TileUnsupportedFeatureError
 def mma_kernel(A, B, C,
                tm: ct.Constant[int],
                tn: ct.Constant[int],
-               tk: ct.Constant[int]):
+               tk: ct.Constant[int],
+               use_fast_acc: ct.Constant[bool]):
     tx = ct.load(A, index=(0, 0), shape=(tm, tk))
     ty = ct.load(B, index=(0, 0), shape=(tk, tn))
     acc = ct.load(C, index=(0, 0), shape=(tm, tn))
-    acc = ct.mma(tx, ty, acc)
+    acc = ct.mma(tx, ty, acc, use_fast_acc=use_fast_acc)
     ct.store(C, index=(0, 0), tile=acc)
 
 
@@ -110,30 +112,54 @@ def test_mma_regular_float(tile_size, case):
     C = torch.ones((m, n), dtype=case.acc_dtype, device="cuda")
     ref = torch.mm(A, B, out_dtype=C.dtype) + C
     ct.launch(torch.cuda.current_stream(), (1,), mma_kernel,
-              (A, B, C, m, n, k))
+              (A, B, C, m, n, k, False))
     atol, rtol = get_tolerance(A.dtype)
     assert_close(C, ref, atol=atol, rtol=rtol)
+
+
+@ct.kernel
+def mma_fast_acc_kernel(A, B, C,
+                        tm: ct.Constant[int],
+                        tn: ct.Constant[int],
+                        tk: ct.Constant[int]):
+    tx = ct.load(A, index=(0, 0), shape=(tm, tk))
+    ty = ct.load(B, index=(0, 0), shape=(tk, tn))
+    acc = ct.load(C, index=(0, 0), shape=(tm, tn))
+    acc = ct.mma(tx, ty, acc, use_fast_acc=True)
+    ct.store(C, index=(0, 0), tile=acc)
 
 
 @require_hopper_or_newer()
 @pytest.mark.parametrize("tile_size", [(16, 16, 16)])
 @pytest.mark.parametrize("case", fp8_cases, ids=str)
-def test_mma_fp8(tile_size, case):
+@pytest.mark.parametrize("use_fast_acc", [True, False])
+def test_mma_fp8(tile_size, case, use_fast_acc):
+    if use_fast_acc and get_tileiras_version() < BytecodeVersion.V_13_3:
+        pytest.skip("use_fast_acc requires tileiras 13.3")
     m, n, k = tile_size
     A = torch.randn((m, k), dtype=torch.float32, device="cuda").to(case.dtype)
     B = torch.randn((n, k), dtype=torch.float32, device="cuda").to(case.dtype)
     C = torch.ones((m, n), dtype=case.acc_dtype, device="cuda")
     scale = torch.tensor([1.0], dtype=torch.float32, device="cuda")
     try:
-        ref = torch._scaled_mm(A, B.T, scale, scale, out_dtype=C.dtype) + C
+        ref = torch._scaled_mm(A, B.T, scale, scale, out_dtype=C.dtype,
+                               use_fast_accum=use_fast_acc) + C
     except (RuntimeError, ValueError) as e:
         assert 'Multiplication of two Float8_e5m2 matrices is not supported' in str(e)
         ref = None
     ct.launch(torch.cuda.current_stream(), (1,), mma_kernel,
-              (A, B.T, C, m, n, k))
+              (A, B.T, C, m, n, k, use_fast_acc))
     if ref is not None:
         atol, rtol = get_tolerance(A.dtype)
         assert_close(C, ref, atol=atol, rtol=rtol)
+
+
+def test_mma_fast_acc_non_fp8_error():
+    A = torch.randn((2, 4), dtype=torch.float16, device="cuda")
+    B = torch.randn((4, 2), dtype=torch.float16, device="cuda")
+    C = torch.zeros((2, 2), dtype=torch.float16, device="cuda")
+    with pytest.raises(TileTypeError, match="use_fast_acc is only supported for fp8"):
+        ct.launch(torch.cuda.current_stream(), (1,), mma_fast_acc_kernel, (A, B, C, 2, 2, 4))
 
 
 @pytest.mark.parametrize("tile_size", [(8, 2, 4)])
@@ -163,7 +189,7 @@ def test_mma_int(tile_size, case):
     C = torch.ones((m, n), dtype=case.acc_dtype, device="cuda")
     ref = C + (A.to(torch.float32) @ B.to(torch.float32)).to(C.dtype)
     ct.launch(torch.cuda.current_stream(), (1,), mma_kernel,
-              (A, B, C, m, n, k))
+              (A, B, C, m, n, k, False))
     assert_equal(C, ref)
 
 
@@ -175,7 +201,7 @@ def test_mma_mixed_int_uint(tile_size):
     C = torch.ones((m, n), dtype=torch.int32, device="cuda")
     ref = C + (A.to(torch.float32) @ B.to(torch.float32)).to(C.dtype)
     ct.launch(torch.cuda.current_stream(), (1,), mma_kernel,
-              (A, B, C, m, n, k))
+              (A, B, C, m, n, k, False))
     assert_equal(C, ref)
 
 
@@ -229,7 +255,7 @@ def test_mma_dtype_error(case):
     with pytest.raises(TileTypeError, match=case.message):
         ct.launch(torch.cuda.current_stream(),
                   (1,), mma_kernel,
-                  (A, B, C, 2, 2, 2))
+                  (A, B, C, 2, 2, 2, False))
 
 # ================ ct.matmul =================
 
@@ -405,4 +431,4 @@ def test_ampere_fp8_error(dtype):
         with pytest.raises(TileUnsupportedFeatureError,
                            match="is not supported on sm_80"):
             ct.launch(torch.cuda.current_stream(), (1,), mma_kernel,
-                      (A, B, C, 16, 16, 16))
+                      (A, B, C, 16, 16, 16, False))

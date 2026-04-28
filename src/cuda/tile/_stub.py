@@ -1701,7 +1701,7 @@ def zeros(shape, dtype) -> Tile:
 
 
 @stub
-def mma(x, y, /, acc) -> Tile:
+def mma(x, y, /, acc, *, use_fast_acc: bool = False) -> Tile:
     """Matrix multiply-accumulate.
 
     Computes ``(x @ y) + acc`` as a single operation
@@ -1712,6 +1712,11 @@ def mma(x, y, /, acc) -> Tile:
         x (Tile): LHS of the mma, 2D or 3D.
         y (Tile): RHS of the mma, 2D or 3D.
         acc (Tile): Accumulator of mma.
+        use_fast_acc (bool): Enable fast accumulation mode, which trades accumulator
+            precision for throughput. Requires fp8 input dtypes
+            (``float8_e4m3fn`` or ``float8_e5m2``). Currently only has an effect on
+            Hopper GPUs; silently ignored on other architectures. Default: ``False``
+            (since CTK 13.3).
 
     Supported datatypes:
 
