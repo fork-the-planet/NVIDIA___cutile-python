@@ -9,6 +9,7 @@ import pytest
 import cuda.lang as cl
 import torch
 
+from cuda.lang.compilation import KernelSignature, ScalarConstraint
 from cuda.tile import static_assert, TileTypeError
 from cuda.tile._cext import _spy_on_cuLaunchKernel_begin, _spy_on_cuLaunchKernel_end
 
@@ -68,6 +69,122 @@ def test_single_1d_array_with_constant_shape():
 
     assert x[0] == 13
     assert spy.get_dynamic_smem_size() == 33 * 4
+
+
+def test_dynamic_shared_alignment_size_program():
+    @cl.kernel
+    def kern(n):
+        desc = cl.shared_array(shape=(16,), dtype=cl.uint8, dynamic=True, alignment=128)
+        values = cl.shared_array(shape=(n,), dtype=cl.int32, dynamic=True)
+        values[0] = cl.int32(desc[0])
+
+    result = cl.compile_simt(
+        kern,
+        [KernelSignature((ScalarConstraint(dtype=cl.int32),))],
+        gpu_name="sm_80",
+        arch="compute_80",
+    )
+
+    assert result.dyn_smem_size_program is not None
+    assert result.dyn_smem_size_program.opcodes == [
+        "Const",
+        "Const",
+        "KernelArgI32",
+        "Mul",
+        "Add",
+    ]
+    assert result.dyn_smem_size_program.op_attrs == [128, 4, 0]
+    assert "alignment = 1024 : i64" in result.mlir
+
+
+def test_dynamic_shared_alignment_cannot_exceed_initial_alignment():
+    @cl.kernel
+    def kern():
+        smem = cl.shared_array(
+            shape=(1,), dtype=cl.uint8, dynamic=True, alignment=2048
+        )
+        smem[0] = cl.uint8(0)
+
+    with pytest.raises(TileTypeError, match="cannot exceed 1024"):
+        cl.compile_simt(
+            kern,
+            [KernelSignature(())],
+            gpu_name="sm_80",
+            arch="compute_80",
+        )
+
+
+def test_dynamic_shared_alignment_runtime_round_up_size_program():
+    @cl.kernel
+    def kern(n):
+        smem = cl.shared_array(
+            shape=(n,), dtype=cl.uint8, dynamic=True, alignment=128
+        )
+        values = cl.shared_array(shape=(1,), dtype=cl.int32, dynamic=True)
+        values[0] = cl.int32(smem[0])
+
+    result = cl.compile_simt(
+        kern,
+        [KernelSignature((ScalarConstraint(dtype=cl.int32),))],
+        gpu_name="sm_80",
+        arch="compute_80",
+    )
+
+    assert result.dyn_smem_size_program is not None
+    assert result.dyn_smem_size_program.opcodes == [
+        "KernelArgI32",
+        "RoundUpToPow2",
+        "Const",
+        "Add",
+    ]
+    assert result.dyn_smem_size_program.op_attrs == [0, 128, 4]
+
+
+def test_dynamic_shared_alignment_pads_final_allocation_to_current_alignment():
+    @cl.kernel
+    def kern(n):
+        header = cl.shared_array(
+            shape=(1,), dtype=cl.uint8, dynamic=True, alignment=128
+        )
+        values = cl.shared_array(
+            shape=(n,), dtype=cl.uint8, dynamic=True, alignment=4
+        )
+        values[0] = header[0]
+
+    result = cl.compile_simt(
+        kern,
+        [KernelSignature((ScalarConstraint(dtype=cl.int32),))],
+        gpu_name="sm_80",
+        arch="compute_80",
+    )
+
+    assert result.dyn_smem_size_program is not None
+    assert result.dyn_smem_size_program.opcodes == [
+        "Const",
+        "KernelArgI32",
+        "RoundUpToPow2",
+        "Add",
+    ]
+    assert result.dyn_smem_size_program.op_attrs == [128, 0, 4]
+
+
+def test_dynamic_shared_alignment_runtime_round_up_launch():
+    @cl.kernel
+    def kern(x, n):
+        smem = cl.shared_array(
+            shape=(n,), dtype=cl.uint8, dynamic=True, alignment=128
+        )
+        values = cl.shared_array(shape=(1,), dtype=cl.int32, dynamic=True)
+        smem[0] = cl.uint8(0)
+        values[0] = 42
+        x[0] = values[0] + cl.int32(smem[0])
+
+    x = torch.zeros((1,), dtype=torch.int32, device="cuda")
+    with spy_on_kernel_launch() as spy:
+        cl.launch(torch.cuda.current_stream(), (1,), (1,), kern, (x, 33,))
+
+    assert x[0] == 42
+    assert spy.get_dynamic_smem_size() == 128 + 4
 
 
 def test_dynamic_1d_array_and_static_1d_array():

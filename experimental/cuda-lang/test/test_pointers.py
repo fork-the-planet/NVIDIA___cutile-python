@@ -5,7 +5,9 @@
 import pytest
 import cuda.lang as cl
 import torch
+from cuda.lang._compile import compile_simt
 from cuda.lang._exception import TileError
+from cuda.lang.compilation import KernelSignature
 
 from .util import make_symbolic_tensor, make_symbolic_scalar, compile_for_arguments
 
@@ -171,6 +173,44 @@ def test_device_allocations(allocator, torch_dtype, cl_dtype):
     assert A[0, 0] == 1
     assert A[1, 1] == 2
     assert A[2, 2] == 3
+
+
+def test_device_allocation_alignment_lowering():
+    @cl.kernel
+    def kernel():
+        local = cl.local_array(shape=(4,), dtype=cl.int32, alignment=16)
+        shared = cl.shared_array(shape=(4,), dtype=cl.int32, alignment=128)
+        local[0] = cl.int32(1)
+        shared[0] = local[0]
+
+    result = compile_simt(
+        kernel,
+        [KernelSignature(())],
+        gpu_name="sm_80",
+        arch="compute_80",
+    )
+
+    assert "alignment = 16 : i64" in result.mlir
+    assert "alignment = 128 : i64" in result.mlir
+
+
+@pytest.mark.parametrize("allocator", [cl.local_array, cl.shared_array])
+@pytest.mark.parametrize("alignment", [0, -1, 3, True])
+def test_device_allocation_invalid_alignment(allocator, alignment):
+    def kernel():
+        allocator(shape=(1,), dtype=cl.int32, alignment=alignment)
+
+    with pytest.raises(TileError, match="alignment must"):
+        compile_for_arguments(kernel, ())
+
+
+@pytest.mark.parametrize("allocator", [cl.local_array, cl.shared_array])
+def test_device_allocation_alignment_must_be_constant(allocator):
+    def kernel(alignment):
+        allocator(shape=(1,), dtype=cl.int32, alignment=alignment)
+
+    with pytest.raises(TileError, match="alignment must be a compile-time constant"):
+        compile_for_arguments(kernel, (make_symbolic_scalar(cl.int32),))
 
 
 @pytest.mark.parametrize("allocator", [cl.local_array, cl.shared_array])

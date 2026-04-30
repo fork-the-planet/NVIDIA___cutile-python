@@ -290,7 +290,8 @@ struct HashVector {
     X(Const, 1, 0, 1) \
     X(KernelArgI32, 1, 0, 1) \
     X(Add, 0, 2, -1) \
-    X(Mul, 0, 2, -1)
+    X(Mul, 0, 2, -1) \
+    X(RoundUpToPow2, 1, 1, 0)
 
 #define SIZE_OPCODE_ENUM_ENTRY(name, _nattr, _min_st, _stack_eff) \
     name,
@@ -1456,6 +1457,13 @@ static int64_t size_program_eval(const SizeProgram& prog, const Vec<Word>& cuarg
         case SizeOpcode::KernelArgI32: *top++ = cuargs[*op_attrs++].i32; break;
         case SizeOpcode::Add: top[-2] += top[-1]; --top; break;  // TODO: overflow check?
         case SizeOpcode::Mul: top[-2] *= top[-1]; --top; break;  // TODO: overflow check?
+        case SizeOpcode::RoundUpToPow2: {
+            const int64_t alignment = *op_attrs++;
+            const int64_t mask = alignment - 1;
+            const int64_t value = top[-1];
+            top[-1] = (value + mask) & ~mask;
+            break;
+        }
         }
     }
     return stack[0];
@@ -2546,5 +2554,4 @@ Status tile_kernel_init(PyObject* m) {
 
     return OK;
 }
-
 

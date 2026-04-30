@@ -109,10 +109,17 @@ def _m_pointer_store_offset(pointer: Pointer[T], offset, value: T) -> None: ...
 
 
 @stub
-def shared_array(shape: tuple[int, ...], dtype: DType, dynamic: bool = False) -> Array:
+def shared_array(
+    shape: tuple[int, ...],
+    dtype: DType,
+    dynamic: bool = False,
+    alignment: int | None = None,
+) -> Array:
     """Create an on-device array in shared memory.
 
     Shared arrays must be declared at the beginning of the kernel.
+    The optional alignment is specified in bytes and must be a positive power of
+    two.
 
     If `dynamic` is `False` (default), the array will be placed in the statically allocated
     shared memory. In this case, `shape` must be a compile-time constant.
@@ -172,11 +179,16 @@ def shared_array(shape: tuple[int, ...], dtype: DType, dynamic: bool = False) ->
 
 
 @stub
-def local_array(shape: tuple[int, ...], dtype: DType) -> Array:
+def local_array(
+    shape: tuple[int, ...],
+    dtype: DType,
+    alignment: int | None = None,
+) -> Array:
     """Create an on-device array in local memory.
 
     Local arrays must be declared at the beginning of the kernel
-    and must have a dynamic shape.
+    and must have a dynamic shape. The optional alignment is specified in bytes
+    and must be a positive power of two.
 
     Examples:
 

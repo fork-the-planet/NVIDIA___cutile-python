@@ -584,6 +584,7 @@ class MemoryAllocation(Operation, opcode="alloc", memory_effect=MemoryEffect.STO
     memory_space: MemorySpace = attribute()
     shape: tuple[int, ...] = attribute()
     element_type: datatype.DType = attribute()
+    alignment: int | None = attribute()
 
 
 def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -595,10 +596,36 @@ def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(reversed(strides))
 
 
+def _dtype_byte_width(dtype: datatype.DType) -> int:
+    assert dtype.bitwidth % 8 == 0
+    return dtype.bitwidth // 8
+
+
+def _require_optional_alignment(alignment: Var) -> int | None:
+    if not alignment.is_constant():
+        raise TileTypeError("alignment must be a compile-time constant")
+
+    value = alignment.get_constant()
+    if value is None:
+        return None
+
+    if type(value) is not int:
+        raise TileTypeError("alignment must be an integer or None")
+
+    if value <= 0 or value & (value - 1):
+        raise TileTypeError("alignment must be a positive power of two")
+
+    return value
+
+
 @impl(stub.local_array)
-def local_array_impl(shape: Var, dtype: Var) -> Operation:
+def local_array_impl(shape: Var, dtype: Var, alignment: Var) -> Operation:
     shape = require_constant_int_tuple(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
+    alignment = _require_optional_alignment(alignment)
+    dtype_byte_width = _dtype_byte_width(dtype)
+    if alignment is not None and alignment < dtype_byte_width:
+        raise TileTypeError(f"Requested {alignment=} is less than {dtype_byte_width}")
     strides = _contiguous_strides(shape)
     index_dtype = datatype.int32
     array_type = ArrayTy(
@@ -614,6 +641,7 @@ def local_array_impl(shape: Var, dtype: Var) -> Operation:
         memory_space=MemorySpace.LOCAL,
         shape=shape,
         element_type=dtype,
+        alignment=alignment,
     )
     size_ty = TileTy(index_dtype, ())
     shape_vars = tuple(strictly_typed_const(extent, size_ty) for extent in shape)
@@ -626,7 +654,7 @@ def local_array_impl(shape: Var, dtype: Var) -> Operation:
 
 @dataclass(eq=False)
 class GetDynSharedMemoryBasePtr(Operation, opcode="get_dyn_shared_memory_base_ptr"):
-    pass
+    initial_alignment = 1024
 
 
 def get_dyn_shared_memory_base_ptr():
@@ -639,10 +667,11 @@ def get_dyn_shared_memory_base_ptr():
 class AllocDynSharedMemory(Operation, opcode="alloc_dyn_shared_memory",
                            memory_effect=MemoryEffect.STORE):
     shape: tuple[Var, ...] = operand()
+    alignment: int | None = attribute()
 
 
 @impl(stub.shared_array)
-def shared_array_impl(shape: Var, dtype: Var, dynamic: Var) -> Operation:
+def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> Operation:
     dynamic = require_constant_bool(dynamic)
 
     shape_ty = require_index_or_index_tuple_type(shape)
@@ -654,6 +683,10 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var) -> Operation:
         sizes = tuple_val.items
 
     dtype = require_dtype_spec(dtype)
+    alignment = _require_optional_alignment(alignment)
+    dtype_byte_width = _dtype_byte_width(dtype)
+    if alignment is not None and alignment < dtype_byte_width:
+        raise TileTypeError(f"Requested {alignment=} is less than {dtype_byte_width=}")
     index_dtype = datatype.int32
     size_ty = TileTy(index_dtype, ())
 
@@ -701,7 +734,8 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var) -> Operation:
     if dynamic:
         base_ptr = add_operation(AllocDynSharedMemory,
                                  _array_base_pointer_type(array_type),
-                                 shape=sizes)
+                                 shape=sizes,
+                                 alignment=alignment)
     else:
         if total_size is None:
             raise TileTypeError("Shape must be constant when `dynamic` is False")
@@ -712,6 +746,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var) -> Operation:
             memory_space=MemorySpace.SHARED,
             shape=ty_shape,
             element_type=dtype,
+            alignment=alignment,
         )
 
     array_value = ArrayValue(base_ptr=base_ptr, shape=tuple(shape_vars), strides=tuple(stride_vars))

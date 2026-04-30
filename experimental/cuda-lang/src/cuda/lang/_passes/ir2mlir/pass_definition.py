@@ -718,6 +718,7 @@ class IR2MLIR:
             res_type=concrete_result_type,
             arraySize=array_size,
             elem_type=elem_type,
+            alignment=operation.alignment,
         )
         return [alloc]
 
@@ -744,6 +745,7 @@ class IR2MLIR:
                 addr_space=int(operation.memory_space.value),
                 visibility_=mlir.llvm.Visibility.Default,
                 initializer=mlir.Region(),
+                alignment=operation.alignment,
             )
         base = mlir.llvm.add_AddressOfOp(
             res_type=concrete_result_type,
@@ -765,6 +767,7 @@ class IR2MLIR:
                 addr_space=addr_space,
                 visibility_=mlir.llvm.Visibility.Default,
                 initializer=mlir.Region(),
+                alignment=ops.GetDynSharedMemoryBasePtr.initial_alignment,
             )
         res_type = ir_type_to_mlir_type(operation.result_var.get_type())
         assert isinstance(res_type, mlir.llvm.LLVMPointerType)
