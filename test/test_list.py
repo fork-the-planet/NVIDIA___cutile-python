@@ -8,7 +8,6 @@ import math
 
 import cuda.tile as ct
 from cuda.tile._bytecode import BytecodeVersion
-from cuda.tile._datatype import int64
 from typing import Annotated
 from util import assert_equal
 from conftest import requires_tileiras
@@ -57,7 +56,7 @@ def test_add_list_of_arrays(kernel):
 
 
 ListOfArrayIndexedWithInt64 = Annotated[
-    list, ct.ListAnnotation(element=ct.ArrayAnnotation(index_dtype=int64))
+    list, ct.ListAnnotation(element=ct.IndexedWithInt64)
 ]
 
 

@@ -7,7 +7,7 @@ import functools
 import inspect
 import textwrap
 from dataclasses import dataclass
-from typing import Annotated, Any, TypeVar, Union, Literal, Optional, Protocol
+from typing import Annotated, Any, TypeVar, Union, Literal, Optional, Protocol, get_origin
 
 from cuda.tile._memory_model import MemoryOrder, MemoryScope
 from cuda.tile._execution import function, stub
@@ -1028,16 +1028,30 @@ class ListAnnotation:
     """A ``typing.Annotated`` metadata class for list parameters.
 
     Attributes:
-        element: Annotation for the list's element type. Currently must be an
-            :class:`ArrayAnnotation`.
+        element: Annotation for the list's element type. Must be an
+            :class:`ArrayAnnotation` or an ``Annotated`` type whose metadata
+            contains an :class:`ArrayAnnotation` (e.g. :data:`IndexedWithInt64`).
     """
     element: Any
 
     def __post_init__(self):
-        if not isinstance(self.element, ArrayAnnotation):
+        element = self.element
+        if get_origin(element) is Annotated:
+            array_anns = [m for m in element.__metadata__ if isinstance(m, ArrayAnnotation)]
+            if not array_anns:
+                raise TypeError(
+                    f"`element` must contain an ArrayAnnotation,"
+                    f" but no ArrayAnnotation found in {element!r}")
+            if len(array_anns) > 1:
+                raise TypeError(
+                    f"`element` must contain exactly one ArrayAnnotation,"
+                    f" but found multiple in {element!r}: {array_anns!r}")
+            element = array_anns[0]
+            object.__setattr__(self, 'element', element)
+        if not isinstance(element, ArrayAnnotation):
             raise TypeError(
                 f"`element` must be an ArrayAnnotation,"
-                f" got {type(self.element).__name__}")
+                f" got {type(element).__name__}")
 
 
 IndexedWithInt64 = Annotated[T, ArrayAnnotation(index_dtype=int64)]
