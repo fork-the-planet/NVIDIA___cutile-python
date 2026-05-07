@@ -12,6 +12,7 @@ class LoggingConfig:
     log_ir: bool = False
     log_flattened_ir: bool = False
     log_mlir: bool = False
+    log_ptx: bool = False
 
 
 _LOG_KEYS = {
@@ -19,6 +20,7 @@ _LOG_KEYS = {
     'IR': 'log_ir',
     'FLATIR': 'log_flattened_ir',
     'MLIR': 'log_mlir',
+    'PTX': 'log_ptx',
 }
 
 

@@ -44,6 +44,11 @@ def mlir2cubin(mlir_text: str, gpu_name: str, arch: str) -> bytes:
     custom_flags = os.environ.get("CUDA_LANG_MLIR2CUBIN_FLAGS", None)
     if custom_flags is not None:
         argv.extend(custom_flags.split())
+
+    log_flags = get_log_flags()
+    if log_flags.log_ptx:
+        argv.extend(['--dump-ptx'])
+
     try:
         completed = subprocess.run(
             argv, input=mlir_text.encode(), capture_output=True, check=True
@@ -55,7 +60,7 @@ def mlir2cubin(mlir_text: str, gpu_name: str, arch: str) -> bytes:
             compiler_flags=argv,
             compiler_version=None,
         )
-    if custom_flags is not None:
+    if custom_flags is not None or log_flags.log_ptx:
         compiler_stderr = completed.stderr.decode()
         if len(compiler_stderr) > 0:
             print("==== mlir2cubin stderr: ====", file=sys.stderr)

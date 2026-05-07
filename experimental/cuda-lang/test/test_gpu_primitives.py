@@ -3,7 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import cuda.lang as cl
+from cuda.lang.compilation import KernelSignature
 import torch
+
+from .util import require_blackwell_or_newer, require_hopper_or_newer
+
+
+@require_blackwell_or_newer()
+def test_setmaxregister_intrinsics_compile_to_mlir():
+    def kernel():
+        cl.setmaxregister_increase(64)
+        cl.setmaxregister_decrease(32)
+
+    result = cl.compile_simt(
+        kernel,
+        [KernelSignature(())],
+        gpu_name="sm_100a",
+        arch="compute_100a",
+    )
+
+    assert "llvm.nvvm.setmaxnreg.inc.sync.aligned.u32" in result.mlir
+    assert "llvm.nvvm.setmaxnreg.dec.sync.aligned.u32" in result.mlir
 
 
 def test_tid():
@@ -68,6 +88,63 @@ def test_grid_dim():
     out = torch.zeros(3, dtype=torch.int32, device="cuda")
     cl.launch(torch.cuda.current_stream(), (5, 6, 7), (1,), kernel, (out,))
     assert (out.cpu() == torch.tensor([5, 6, 7], dtype=torch.int32)).all()
+
+
+@require_hopper_or_newer()
+def test_elect_sync(capsys):
+    @cl.kernel()
+    def kernel(out):
+        tx, ty, tz = cl.thread_idx()
+        if cl.elect_sync():
+            out[tx, ty, tz] = 1
+    out = torch.zeros(3, 3, 3, dtype=torch.int32).cuda()
+    cl.launch(torch.cuda.current_stream(), (1,), (3, 3, 3), kernel, (out,))
+    assert sum(out.cpu().ravel().tolist()) == 1
+
+
+def test_warp_size_full_mask_and_ptx_comment(capsys):
+    ptx_comment = 'FOOBARBAZ'
+
+    @cl.kernel
+    def kernel(out):
+        tidx, _, _ = cl.thread_idx()
+        cl.ptx_comment(ptx_comment)
+        value = cl.shfl_sync(cl.full_mask(), tidx, 7)
+        if tidx == 0:
+            out[0] = cl.warp_size()
+            out[1] = value
+
+    from cuda.lang._logging import get_log_flags
+    get_log_flags().log_ptx = True
+    out = torch.zeros(2, dtype=torch.int32, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (32,), kernel, (out,))
+    assert (out.cpu() == torch.tensor([32, 7], dtype=torch.int32)).all()
+    captured = capsys.readouterr().err
+    assert ptx_comment in captured
+
+
+def test_lane_idx():
+    @cl.kernel
+    def kernel(out):
+        tidx, _, _ = cl.thread_idx()
+        out[tidx] = cl.lane_idx()
+
+    out = torch.zeros(64, dtype=torch.int32, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (64,), kernel, (out,))
+    expected = torch.tensor(list(range(32)) * 2, dtype=torch.int32)
+    assert (out.cpu() == expected).all()
+
+
+def test_warp_idx():
+    @cl.kernel
+    def kernel(out):
+        tidx, _, _ = cl.thread_idx()
+        out[tidx] = cl.warp_idx()
+
+    out = torch.zeros(64, dtype=torch.int32, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (64,), kernel, (out,))
+    expected = torch.tensor([0] * 32 + [1] * 32, dtype=torch.int32)
+    assert (out.cpu() == expected).all()
 
 
 def test_saxpy():

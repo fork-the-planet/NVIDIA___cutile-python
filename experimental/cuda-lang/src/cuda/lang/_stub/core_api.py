@@ -13,7 +13,7 @@ from cuda.tile._stub import (
     static_iter,
 )
 from cuda.tile._memory_model import MemoryOrder
-from cuda.lang._datatype import DType, MemorySpace
+from cuda.lang._datatype import DType, MemorySpace, int32
 from . import nvvm
 
 T = TypeVar("T")
@@ -133,6 +133,19 @@ class Pointer(Generic[T]):
 
 
 @function
+def warp_size():
+    return int32(32)
+
+
+FULL_MASK = 0xFFFFFFFF
+
+
+@function
+def full_mask():
+    return int32(FULL_MASK)
+
+
+@function
 def thread_idx() -> tuple[int, int, int]:
     """Gets the current thread indices as ``(x, y, z)``."""
     return (
@@ -169,6 +182,55 @@ def grid_dim() -> tuple[int, int, int]:
         nvvm.read_ptx_sreg_nctaid_x(),
         nvvm.read_ptx_sreg_nctaid_y(),
         nvvm.read_ptx_sreg_nctaid_z(),
+    )
+
+
+@function
+def lane_idx() -> int:
+    return nvvm.read_ptx_sreg_laneid()
+
+
+@function
+def warp_idx() -> int:
+    tx, ty, tz = thread_idx()
+    bdx, bdy, _ = block_dim()
+    tid = tx + ty * bdx + tz * bdx * bdy
+    return tid // warp_size()
+
+
+@function
+def cluster_idx() -> tuple[int, int, int]:
+    return (
+        nvvm.read_ptx_sreg_clusterid_x(),
+        nvvm.read_ptx_sreg_clusterid_y(),
+        nvvm.read_ptx_sreg_clusterid_z(),
+    )
+
+
+@function
+def cluster_dim() -> tuple[int, int, int]:
+    return (
+        nvvm.read_ptx_sreg_nclusterid_x(),
+        nvvm.read_ptx_sreg_nclusterid_y(),
+        nvvm.read_ptx_sreg_nclusterid_z(),
+    )
+
+
+@function
+def block_in_cluster_idx() -> tuple[int, int, int]:
+    return (
+        nvvm.read_ptx_sreg_cluster_ctaid_x(),
+        nvvm.read_ptx_sreg_cluster_ctaid_y(),
+        nvvm.read_ptx_sreg_cluster_ctaid_z(),
+    )
+
+
+@function
+def block_in_cluster_dim() -> tuple[int, int, int]:
+    return (
+        nvvm.read_ptx_sreg_cluster_nctaid_x(),
+        nvvm.read_ptx_sreg_cluster_nctaid_y(),
+        nvvm.read_ptx_sreg_cluster_nctaid_z(),
     )
 
 
@@ -313,6 +375,22 @@ def syncthreads() -> None:
     nvvm.barrier_cta_sync_all(0)
 
 
+@function
+def setmaxregister_increase(value: int32):
+    nvvm.setmaxnreg_inc_sync_aligned_u32(int32(value))
+
+
+@function
+def setmaxregister_decrease(value: int32):
+    nvvm.setmaxnreg_dec_sync_aligned_u32(int32(value))
+
+
+@function
+def elect_sync(mask: int32 = FULL_MASK):
+    _, pred = nvvm.elect_sync(mask)
+    return pred
+
+
 @stub
 def printf(format, *args) -> None:
     """Print the values at runtime from the device
@@ -411,6 +489,11 @@ def inline_ptx(ptx_code: str, *constraint_pairs: tuple) -> tuple:
             - ``C``: pointer value from ``array.get_base_pointer()``
 
     """
+
+
+@function
+def ptx_comment(comment: str):
+    inline_ptx(static_eval('// ' + comment))
 
 
 @stub
@@ -725,7 +808,7 @@ def shfl_xor_sync(mask: int, value: int, lane_mask: int, width: int = 32) -> int
 
 
 @function
-def syncwarp(mask: int = 0xFFFFFFFF) -> None:
+def syncwarp(mask: int = FULL_MASK) -> None:
     """
     Performs barrier synchronization for threads within a warp.
 
@@ -797,10 +880,18 @@ def reinterpret_pointer_as_array(
 
 
 __all__ = (
+    "warp_size",
+    "full_mask",
     "block_idx",
     "block_dim",
     "grid_dim",
     "thread_idx",
+    "lane_idx",
+    "warp_idx",
+    "cluster_idx",
+    "cluster_dim",
+    "block_in_cluster_idx",
+    "block_in_cluster_dim",
     "atomic_add",
     "atomic_sub",
     "atomic_and",
@@ -817,6 +908,9 @@ __all__ = (
     "shfl_down_sync",
     "shfl_xor_sync",
     "Constant",
+    "setmaxregister_increase",
+    "setmaxregister_decrease",
+    "elect_sync",
     "printf",
     "Array",
     "Pointer",
@@ -824,6 +918,7 @@ __all__ = (
     "shared_array",
     "local_array",
     "syncwarp",
+    "ptx_comment",
     "static_eval",
     "static_assert",
     "static_iter",
