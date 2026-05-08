@@ -86,9 +86,10 @@ async def _dispatch_hir_block_inner(block: hir.Block, builder: ir.Builder):
             _dispatch_hir_jump(block, scope)
     except Exception:
         if builder.ir_ctx.log_ir_on_error:
-            hir_params = ", ".join(p.name for p in block.params)
+            hir_params = ", ".join(str(p) for p in block.params)
             hir_lines = [str(c) for c in block.calls]
-            hir_lines.append(block.jump_str())
+            if block.jump is not None:
+                hir_lines.append(block.jump_str())
             hir_str = "\n".join("{}{}".format("--> " if i == cursor else "    ", c)
                                 for i, c in enumerate(hir_lines))
             print(f"==== HIR for ^{block.block_id}({hir_params}) ====\n{hir_str}\n",

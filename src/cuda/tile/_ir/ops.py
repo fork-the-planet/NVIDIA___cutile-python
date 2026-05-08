@@ -5218,7 +5218,7 @@ def var2sym(var: Var) -> Any:
         self_sym = var2sym(var.get_aggregate().bound_self)
         return MethodType(ty.func, self_sym)
     else:
-        raise NotImplementedError(f"Objects of type {ty} are not supported at compile time")
+        raise TileTypeError(f"Objects of type {ty} are not supported at compile time")
 
 
 def sym2var(x: Any) -> Var:
