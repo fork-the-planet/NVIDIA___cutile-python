@@ -4,6 +4,7 @@
 
 import functools
 import os
+import re
 from contextlib import contextmanager
 from typing import Dict, Tuple, Any, Optional
 import warnings
@@ -232,14 +233,56 @@ def encode_comparison(builder: bc.CodeBuilder, fn: str, lhs: bc.Value, rhs: bc.V
         raise TileInternalError(f'Unexpected dtype: {dtype}')
 
 
+def create_synthetic_linkage_name(func_desc: FunctionDesc) -> str:
+    # Build a synthetic linkage name for a helper function or lambda. Format:
+    #
+    #     <name>@<basename>:<line>:<column>_<specialization_id>
+    #
+    # By construction every FunctionDesc reaching this point has been
+    # concretized by hir2ir — only the kernel entry skips this path (it uses
+    # the externally-visible symbol instead), so the specialization_id is
+    # required here.
+    assert func_desc.specialization_id is not None, (
+        f"create_synthetic_linkage_name called on a FunctionDesc without a "
+        f"specialization_id: {func_desc}. hir2ir must concretize every "
+        f"non-entry function before bytecode generation."
+    )
+    base_name = os.path.basename(func_desc.filename) or "unknown"
+    stem = os.path.splitext(base_name)[0]
+    # Convert any non-alphanumeric chars to _.
+    stem = re.sub(r"[^A-Za-z0-9_]", "_", stem) or "anonymous"
+    func_part = func_desc.name if func_desc.name is not None else "lambda"
+    return (f"{func_part}@{stem}:{func_desc.line}:{func_desc.column}"
+            f"_{func_desc.specialization_id}")
+
+
 class DebugAttrMap:
-    def __init__(self, debug_attr_table: bc.DebugAttrTable, linkage_name: str, anonymize: bool):
+    def __init__(self,
+                 debug_attr_table: bc.DebugAttrTable,
+                 entry_symbol: str,
+                 anonymize: bool):
         self._subprogram_cache = {}
         self._debug_attr_table = debug_attr_table
-        self._linkage_name = linkage_name
+        self._entry_symbol = entry_symbol
         self._anonymize = anonymize
 
+    def _linkage_for(self, func_desc: FunctionDesc) -> str:
+        # The kernel entry point keeps the externally-visible symbol so it can
+        # be looked up by the loader. Every other function gets a per-function
+        # artificial linkage name.
+        if func_desc.is_entry:
+            return self._entry_symbol
+        return create_synthetic_linkage_name(func_desc)
+
     def get_subprogram(self, func_desc: FunctionDesc) -> bc.DebugAttrId:
+        # Every FunctionDesc reaching DI emission must satisfy: a function has
+        # no specialization_id iff it is the kernel entry. hir2ir leaves the
+        # entry's abstract desc as-is and concretizes everyone else; anything
+        # else is a bug.
+        assert func_desc.is_entry == (func_desc.specialization_id is None), (
+            f"FunctionDesc invariant violated: is_entry={func_desc.is_entry} "
+            f"but specialization_id={func_desc.specialization_id!r}: {func_desc}"
+        )
         try:
             return self._subprogram_cache[func_desc]
         except KeyError:
@@ -252,7 +295,7 @@ class DebugAttrMap:
             file=file_attr,
             line=func_desc.line,
             name="<lambda>" if func_desc.name is None else func_desc.name,
-            linkage_name=self._linkage_name,
+            linkage_name=self._linkage_for(func_desc),
             compile_unit=compile_unit_attr,
             scope_line=func_desc.line,
         )
@@ -435,7 +478,8 @@ def generate_bytecode_for_kernel(func_body: Block,
                                 num_worker_warps_per_cta=num_worker_warps)
 
     param_type_ids = [typeid(writer.type_table, p.get_type()) for p in func_body.params]
-    debug_attr_map = DebugAttrMap(writer.debug_attr_table, symbol, anonymize_debug_attr)
+    debug_attr_map = DebugAttrMap(writer.debug_attr_table, symbol,
+                                  anonymize=anonymize_debug_attr)
     func_debug_attr = debug_attr_map.get_debugattr(func_body.loc)
 
     with writer.function(name=symbol,

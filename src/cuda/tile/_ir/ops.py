@@ -167,7 +167,7 @@ class Loop(Operation, opcode="loop"):
 
 @impl(hir_stubs.loop)
 async def loop_impl(body: hir.Block, iterable: Var):
-    from .._passes.hir2ir import dispatch_hir_block
+    from .._passes.hir2ir import dispatch_hir_block, retarget_loc
 
     scope = Scope.get_current()
     range_ty = require_optional_range_type(iterable)
@@ -202,7 +202,7 @@ async def loop_impl(body: hir.Block, iterable: Var):
 
     # Process the loop body
     loop_info = ControlFlowInfo(stored_locals)
-    body_loc = body.loc.with_call_site(scope.call_site)
+    body_loc = retarget_loc(body.loc, scope)
     with enter_nested_block(body_loc) as new_body, scope.change_loop_info(loop_info), \
             scope.local.enter_branch():
         # Define body variables. Not all of them will eventually be kept,
@@ -396,7 +396,7 @@ async def _flatten_branch(branch: hir.Block) -> Var | None:
 
 @impl(hir_stubs.if_else)
 async def if_else_impl(cond: Var, then_block: hir.Block, else_block: hir.Block) -> Var | None:
-    from .._passes.hir2ir import dispatch_hir_block
+    from .._passes.hir2ir import dispatch_hir_block, retarget_loc
 
     require_bool(cond)
     if cond.is_constant():
@@ -415,7 +415,7 @@ async def if_else_impl(cond: Var, then_block: hir.Block, else_block: hir.Block) 
 
     # Convert the "then" branch from HIR to IR
     info = ControlFlowInfo(stored_locals)
-    then_loc = then_block.loc.with_call_site(scope.call_site)
+    then_loc = retarget_loc(then_block.loc, scope)
     with enter_nested_block(then_loc) as new_then_block, scope.change_if_else_info(info), \
             scope.local.enter_branch():
         await dispatch_hir_block(then_block)
@@ -427,7 +427,7 @@ async def if_else_impl(cond: Var, then_block: hir.Block, else_block: hir.Block) 
     #        EndBranch
     #    <else_block>
     # This is to avoid the situation where none of the branches yield.
-    else_loc = else_block.loc.with_call_site(scope.call_site)
+    else_loc = retarget_loc(else_block.loc, scope)
     if len(info.jumps) == 0:
         info = ControlFlowInfo(())
         with enter_nested_block(else_loc) as new_else_block, scope.change_if_else_info(info), \

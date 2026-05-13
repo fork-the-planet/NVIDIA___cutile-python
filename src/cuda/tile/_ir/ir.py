@@ -40,6 +40,13 @@ class IRContext:
         self.log_ir_on_error = log_ir_on_error
         self._aggregate_values: Dict[str, Any] = dict()
         self.tileiras_version: BytecodeVersion = tileiras_version
+        self._function_specialization_id_counter = itertools.count()
+
+    def next_function_specialization_id(self) -> str:
+        # Monotonic counter used as a unique id when creating concrete FunctionDescs
+        # to distinguish them in debug info. The monotonicity ensures that the
+        # emitted bytecode is deterministic for cache hits.
+        return f"s{next(self._function_specialization_id_counter)}"
 
     #  Make a Var with a unique name based on `name`.
     def make_var(self, name: str, loc: Loc) -> Var:

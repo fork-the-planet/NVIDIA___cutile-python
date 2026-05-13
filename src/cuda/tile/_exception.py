@@ -12,17 +12,25 @@ from unicodedata import east_asian_width
 
 @dataclass(eq=False, frozen=True)
 class FunctionDesc:
-    name: str | None
+    name: str | None  # None for lambdas
     filename: str
-    line: int
+    line: int  # 1-based
+    column: int  # 1-based
+    # If this FunctionDesc represents a concrete specialization of a source
+    # function other than the kernel entry point, this value will hold a
+    # unique identifier, which is used to distinguish distinct specialized
+    # functions in debug info.
+    specialization_id: str | None = None
+    # True for the FunctionDesc that represents the kernel entry point.
+    is_entry: bool = False
 
     def __str__(self):
-        return f"'{self.name}' @{self.filename}:{self.line}"
+        return f"'{self.name}' @{self.filename}:{self.line}:{self.column}"
 
     def short_str(self):
         if self.name is None:
             base_name = os.path.basename(self.filename)
-            return f"<lambda at {base_name}:{self.line}>"
+            return f"<lambda at {base_name}:{self.line}:{self.column}>"
         else:
             return f"<function {self.name}>"
 

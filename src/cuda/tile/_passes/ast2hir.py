@@ -52,7 +52,7 @@ def get_function_hir(pyfunc: Callable, entry_point: bool) -> hir.Function:
     assert len(mod.body[0].body) == 1
     func_def = mod.body[0].body[0]
     assert isinstance(func_def, ast.FunctionDef)
-    _fix_line_numbers(func_def, first_line)
+    _fix_line_and_column_numbers(func_def, first_line)
 
     func_globals = dict(pyfunc.__builtins__)
     func_globals.update(pyfunc.__globals__)
@@ -62,7 +62,8 @@ def get_function_hir(pyfunc: Callable, entry_point: bool) -> hir.Function:
             func_globals[name] = cell.cell_contents
 
     filename = inspect.getfile(pyfunc)
-    desc = FunctionDesc(func_def.name, filename, first_line)
+    desc = FunctionDesc(func_def.name, filename, first_line, func_def.col_offset + 1,
+                        is_entry=entry_point)
     local_names, _, _ = ast_get_all_local_names(func_def)
     ctx = _Context(filename, first_line, desc, func_globals, local_names, entry_point)
     signature = inspect.signature(pyfunc)
@@ -73,9 +74,9 @@ def get_function_hir(pyfunc: Callable, entry_point: bool) -> hir.Function:
     return ret
 
 
-# Translate the 1-based line numbers of the chunk we passed to the AST parser
-# to the original 1-based line numbers in the file.
-def _fix_line_numbers(tree: ast.AST, first_line: int):
+# Translate the 1-based line and 0-based column numbers of the chunk we passed to the
+# AST parser to the original line and column numbers in the file.
+def _fix_line_and_column_numbers(tree: ast.AST, first_line: int):
     for node in ast.walk(tree):
         if hasattr(node, "lineno"):
             # Why -2?
@@ -846,9 +847,8 @@ def _pass_stmt(stmt: ast.Pass, ctx: _Context) -> None:
 def _make_closure(node: ast.FunctionDef | ast.Lambda, ctx: _Context) -> hir.Value:
     signature, default_exprs = _signature_from_ast_arguments(node.args)
     default_values = tuple(_expr(x, ctx) for x in default_exprs)
-    line_no = node.lineno
     name = None if isinstance(node, ast.Lambda) else node.name
-    desc = FunctionDesc(name, ctx.filename, line_no)
+    desc = FunctionDesc(name, ctx.filename, node.lineno, node.col_offset + 1)
     new_locals, new_globals, _ = ast_get_all_local_names(node)
     local_names = (ctx.local_names - new_globals) | new_locals
     new_ctx = _Context(ctx.filename, ctx.first_line, desc, ctx.frozen_globals,

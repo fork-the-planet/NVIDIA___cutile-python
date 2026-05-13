@@ -11,7 +11,8 @@ from typing import Sequence, Mapping
 from .ast2hir import get_function_hir
 from .. import TileTypeError
 from .._coroutine_util import resume_after, run_coroutine
-from .._exception import Loc, TileSyntaxError, TileInternalError, TileError, TileRecursionError
+from .._exception import Loc, FunctionDesc, TileSyntaxError, TileInternalError, TileError, \
+    TileRecursionError
 from .._execution import is_stub
 from .._ir import hir, ir
 from .._ir.ir import Var, IRContext, BoundMethodValue, ClosureValue, TupleValue
@@ -35,10 +36,11 @@ def hir2ir(func_hir: hir.Function,
     run_coroutine(_hir2ir_coroutine(func_hir, param_aggregate_vars, ir_ctx))
 
 
-async def _hir2ir_coroutine(func_hir: hir.Function,
-                            param_aggregate_vars: Sequence[ir.Var],
-                            ir_ctx: IRContext):
-    scope = _create_scope(func_hir, ir_ctx, call_site=None, parent_scopes=())
+async def _hir2ir_coroutine(
+    func_hir: hir.Function, param_aggregate_vars: Sequence[ir.Var], ir_ctx: IRContext
+):
+    scope = _create_scope(func_hir, ir_ctx, call_site=None, parent_scopes=(),
+                          concrete_func_desc=func_hir.desc)
     for local_idx, var in zip(func_hir.param_local_indices, param_aggregate_vars, strict=True):
         scope.local[local_idx] = var
 
@@ -56,9 +58,28 @@ async def _hir2ir_coroutine(func_hir: hir.Function,
 
 
 def _create_scope(func_hir: hir.Function, ir_ctx: IRContext, call_site: Loc | None,
-                  parent_scopes: tuple[LocalScope, ...]) -> Scope:
+                  parent_scopes: tuple[LocalScope, ...],
+                  concrete_func_desc: FunctionDesc) -> Scope:
     local_scope = LocalScope(func_hir.local_names, ir_ctx)
-    return Scope(parent_scopes + (local_scope,), None, None, call_site, IntMap(), func_hir)
+    return Scope(parent_scopes + (local_scope,), None, None, call_site, IntMap(), func_hir,
+                 concrete_func_desc=concrete_func_desc)
+
+
+def _concretize_func_desc(func_hir: hir.Function, ir_ctx: IRContext) -> FunctionDesc:
+    # Mint a fresh FunctionDesc whose `specialization_id` makes its synthesized
+    # linkage name unique across every inlining.
+    return dataclasses.replace(func_hir.desc,
+                               specialization_id=ir_ctx.next_function_specialization_id())
+
+
+def retarget_loc(loc: Loc, scope: Scope) -> Loc:
+    # Splice in the scope's call site and, if this loc belongs to the function
+    # currently being inlined, swap in the per-specialization FunctionDesc so
+    # emitted ops carry the right debug info.
+    new_function = loc.function
+    if loc.function is scope.func_hir.desc:
+        new_function = scope.concrete_func_desc
+    return dataclasses.replace(loc, function=new_function, call_site=scope.call_site)
 
 
 async def dispatch_hir_block(block: hir.Block, cur_builder: ir.Builder | None = None):
@@ -72,7 +93,7 @@ async def _dispatch_hir_block_inner(block: hir.Block, builder: ir.Builder):
     try:
         scope = Scope.get_current()
         for cursor, call in enumerate(block.calls):
-            loc = call.loc.with_call_site(scope.call_site)
+            loc = retarget_loc(call.loc, scope)
             with _wrap_exceptions(loc), builder.change_loc(loc):
                 await _dispatch_call(call, scope)
             if builder.is_terminated:
@@ -81,7 +102,7 @@ async def _dispatch_hir_block_inner(block: hir.Block, builder: ir.Builder):
                 return
         cursor = len(block.calls)
 
-        loc = block.jump_loc.with_call_site(scope.call_site)
+        loc = retarget_loc(block.jump_loc, scope)
         with _wrap_exceptions(loc), builder.change_loc(loc):
             _dispatch_hir_jump(block, scope)
     except Exception:
@@ -155,9 +176,13 @@ async def _call_user_defined(callee_hir: hir.Function,
             raise TileSyntaxError("Variadic keyword parameters in user-defined"
                                   " functions are not supported")
 
-    # Activate a fresh Scope.
+    # Activate a fresh Scope. Each inlining gets its own concretized
+    # FunctionDesc so that DI never merges two specializations whose generated
+    # IR might differ.
     new_scope = _create_scope(callee_hir, builder.ir_ctx, call_site=builder.loc,
-                              parent_scopes=parent_scopes)
+                              parent_scopes=parent_scopes,
+                              concrete_func_desc=_concretize_func_desc(callee_hir,
+                                                                       builder.ir_ctx))
     with new_scope.make_current():
         # Call store_var() to bind arguments to parameters.
         for arg, local_idx, param_loc in zip(arg_list, callee_hir.param_local_indices,

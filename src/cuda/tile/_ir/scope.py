@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TypeVar, Generic
 
-from cuda.tile._exception import Loc, TileSyntaxError
+from cuda.tile._exception import Loc, FunctionDesc, TileSyntaxError
 from cuda.tile._ir import hir
 from cuda.tile._ir.hir import ResolvedName
 from cuda.tile._ir.ir import Operation, Var, IRContext
@@ -142,6 +142,9 @@ class Scope:
     call_site: Loc | None
     hir2ir_varmap: IntMap[Var]
     func_hir: hir.Function
+    # FunctionDesc that represents the concrete specialization of `func_hir`
+    # representing this scope.
+    concrete_func_desc: FunctionDesc
     context_stack: list[ContextManagerState] = dataclasses.field(default_factory=list)
     loop_context_stack_depth: int | None = None
 
