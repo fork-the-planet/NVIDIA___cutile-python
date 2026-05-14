@@ -1389,8 +1389,8 @@ class TestTiledViewAtomicTokenOrderMLIR(MLIRTestBase):
         ty = ct.load(Y, index=(0,), shape=(TILE,),
                      memory_order=ct.MemoryOrder.ACQUIRE,
                      memory_scope=ct.MemoryScope.DEVICE)
-        X.tiled_view((TILE,)).atomic_add(0, ty)
-        Y.tiled_view((TILE,)).atomic_add(0, ty)
+        X.tiled_view((TILE,)).atomic_store_add(0, ty)
+        Y.tiled_view((TILE,)).atomic_store_add(0, ty)
         ct.store(Y, index=(1,), tile=ty + 1,
                  memory_order=ct.MemoryOrder.RELEASE,
                  memory_scope=ct.MemoryScope.DEVICE)

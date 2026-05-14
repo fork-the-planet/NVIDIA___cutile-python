@@ -1825,12 +1825,12 @@ def getattr_tiled_view_traversal_steps_impl(object: Var, name: Var):
 @impl(getattr, overload=(TiledViewTy, "num_tiles"))
 @impl(getattr, overload=(TiledViewTy, "load"))
 @impl(getattr, overload=(TiledViewTy, "store"))
-@impl(getattr, overload=(TiledViewTy, "atomic_add"))
-@impl(getattr, overload=(TiledViewTy, "atomic_max"))
-@impl(getattr, overload=(TiledViewTy, "atomic_min"))
-@impl(getattr, overload=(TiledViewTy, "atomic_and"))
-@impl(getattr, overload=(TiledViewTy, "atomic_or"))
-@impl(getattr, overload=(TiledViewTy, "atomic_xor"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_add"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_max"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_min"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_and"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_or"))
+@impl(getattr, overload=(TiledViewTy, "atomic_store_xor"))
 def getattr_tiled_view_method(object: Var, name: Var):
     name = require_constant_str(name)
     unbound_func = getattr(ct.TiledView, name)
@@ -4805,25 +4805,25 @@ class TileAtomicRedView(Operation, opcode="tile_atomic_red_view", memory_effect=
         )
 
 
-_TILED_VIEW_ATOMIC_RMW_STUBS = {
-    "add": ct.TiledView.atomic_add,
-    "min": ct.TiledView.atomic_min,
-    "max": ct.TiledView.atomic_max,
-    "and": ct.TiledView.atomic_and,
-    "or":  ct.TiledView.atomic_or,
-    "xor": ct.TiledView.atomic_xor,
+_TILED_VIEW_ATOMIC_STORE_RMW_STUBS = {
+    "add": ct.TiledView.atomic_store_add,
+    "min": ct.TiledView.atomic_store_min,
+    "max": ct.TiledView.atomic_store_max,
+    "and": ct.TiledView.atomic_store_and,
+    "or":  ct.TiledView.atomic_store_or,
+    "xor": ct.TiledView.atomic_store_xor,
 }
 
 
-@_register_atomic_rmw_impls(_TILED_VIEW_ATOMIC_RMW_STUBS,
+@_register_atomic_rmw_impls(_TILED_VIEW_ATOMIC_STORE_RMW_STUBS,
                             min_version=BytecodeVersion.V_13_3)
-def tiled_view_atomic_rmw_impl(int_mode: Optional[AtomicRMWMode],
-                               uint_mode: Optional[AtomicRMWMode],
-                               float_mode: Optional[AtomicRMWMode],
-                               bitwise: bool,
-                               supported_dtypes: Sequence[DType],
-                               # --- end of fixed args ---
-                               self: Var, index: Var, update: Var):
+def tiled_view_atomic_store_rmw_impl(int_mode: Optional[AtomicRMWMode],
+                                     uint_mode: Optional[AtomicRMWMode],
+                                     float_mode: Optional[AtomicRMWMode],
+                                     bitwise: bool,
+                                     supported_dtypes: Sequence[DType],
+                                     # --- end of fixed args ---
+                                     self: Var, index: Var, update: Var):
     view_ty = require_tiled_view_type(self)
     if view_ty.dtype not in supported_dtypes:
         raise TileTypeError(f"Unsupported tiled view dtype: {view_ty.dtype}")

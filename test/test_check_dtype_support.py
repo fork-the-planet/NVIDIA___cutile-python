@@ -100,7 +100,7 @@ def test_atomic_red_view_add_bf16_requires_hopper():
     def kernel(x, y):
         tv_x = x.tiled_view((128,))
         update = y.tiled_view((128,)).load(0)
-        tv_x.atomic_add(0, update)
+        tv_x.atomic_store_add(0, update)
 
     x = make_tensor((128,), dtype=torch.bfloat16, device='cuda')
     y = torch.zeros_like(x)

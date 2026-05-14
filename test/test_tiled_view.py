@@ -465,12 +465,12 @@ class AtomicConfig(NamedTuple):
     supported_dtypes: Set
 
 
-def add_method(tv): return tv.atomic_add
-def and_method(tv): return tv.atomic_and
-def max_method(tv): return tv.atomic_max
-def min_method(tv): return tv.atomic_min
-def or_method(tv): return tv.atomic_or
-def xor_method(tv): return tv.atomic_xor
+def add_method(tv): return tv.atomic_store_add
+def and_method(tv): return tv.atomic_store_and
+def max_method(tv): return tv.atomic_store_max
+def min_method(tv): return tv.atomic_store_min
+def or_method(tv): return tv.atomic_store_or
+def xor_method(tv): return tv.atomic_store_xor
 
 
 tv_atomic_configs = {
@@ -584,7 +584,7 @@ def test_tiled_view_atomic_broadcast(tile_size, update_size):
     def kernel(x, y):
         tv_x = x.tiled_view(tile_size)
         update = y.tiled_view(update_size).load((0, 0))
-        tv_x.atomic_add((0, 0), update)
+        tv_x.atomic_store_add((0, 0), update)
 
     y_shape = update_size if len(update_size) > 0 else (1, 1)
     x = make_tensor(tile_size, dtype=torch.float32, device='cuda')
@@ -601,7 +601,7 @@ def test_tiled_view_atomic_shape_mismatch():
     def kernel(x, y):
         tv_x = x.tiled_view(16)
         update = y.tiled_view(8).load(0)
-        tv_x.atomic_add(0, update)
+        tv_x.atomic_store_add(0, update)
 
     x = torch.zeros((16,), dtype=torch.float32, device='cuda')
     y = torch.zeros((8,), dtype=torch.float32, device='cuda')
