@@ -75,7 +75,7 @@ def test_f4e2m1fn_requires_13_3():
 @pytest.mark.parametrize("val", [-1.0, -0.0, float("-inf"), float("-nan")])
 def test_f8e8m0fnu_rejects_negative(val):
     def kernel():
-        t = ct.full((2,), val, dtype=ct.float8_e8m0fnu)
+        t = ct.astile(val, dtype=ct.float8_e8m0fnu)
         ct.printf("%f", t)
 
     with pytest.raises(TileValueError,
@@ -87,7 +87,7 @@ def test_f8e8m0fnu_rejects_negative(val):
 @pytest.mark.parametrize("val", [float("nan"), float("-nan")])
 def test_f4e2m1fn_rejects_nan(val):
     def kernel():
-        t = ct.full((2,), val, dtype=ct.float4_e2m1fn)
+        t = ct.astile((val, val), dtype=ct.float4_e2m1fn)
         ct.printf("%f", t)
 
     with pytest.raises(TileValueError,

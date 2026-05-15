@@ -24,7 +24,7 @@ from cuda.tile._ir.ops_utils import (
 )
 from cuda.tile._ir.type import (
     PartitionViewTy, StridedViewTy, GatherScatterViewTy, Type, TileTy, PointerTy, TokenTy,
-    TupleTy, ArrayTy, size_to_bytecode,
+    ArrayTy, size_to_bytecode,
 )
 
 
@@ -101,6 +101,31 @@ def _constant_to_bytes(value: int | float, dtype: DType) -> bytes:
         return bits.to_bytes((bit_size + 7) // 8, "little")
     else:
         raise TypeError(f"Cannot make a constant out of {dtype}")
+
+
+# Encode a potentially nested constant tuple as the raw row-major byte buffer according to MLIR's
+# "DenseElementsAttr" non-splat format.
+def _constant_tuple_to_bytes(value, dtype: DType, shape: tuple[int, ...]) -> bytes:
+    # Note that MLIR requires bit packing for non-splat DenseElementsAttr<i1>
+    if dtype == datatype.bool_ and isinstance(value, tuple):
+        flat_bools = _flatten_bools(value)
+        bits = 0
+        for i, v in enumerate(flat_bools):
+            if v:
+                bits |= 1 << i
+        return bits.to_bytes((len(flat_bools) + 7) // 8, "little")
+
+    if len(shape) == 0:
+        return _constant_to_bytes(value, dtype)
+
+    assert len(value) == shape[0]
+    return b"".join(_constant_tuple_to_bytes(c, dtype, shape[1:]) for c in value)
+
+
+def _flatten_bools(value) -> tuple[bool]:
+    if not isinstance(value, tuple):
+        return (bool(value),)
+    return sum((_flatten_bools(v) for v in value), start=())
 
 
 def _get_type_conversion_encoder(from_dtype: Type, to_dtype: Type):
@@ -401,20 +426,23 @@ class BytecodeContext:
             value = bc.encode_BitcastOp(self.builder, typeid(self.type_table, toty), value)
         return value
 
-    def constant(self, value: int | float, ty: Type) -> bc.Value:
-        if isinstance(ty, TileTy):
-            dtype = ty.dtype
+    def constant(self, value, ty: Type) -> bc.Value:
+        if not isinstance(ty, TileTy):
+            raise TypeError(f"Cannot encode a constant of type {ty}; expected a TileTy")
+
+        def get_numel(v):
+            if not isinstance(v, tuple):
+                return 1
+            return sum(get_numel(i) for i in v)
+
+        if get_numel(value) == 1:
+            while isinstance(value, tuple):
+                value = value[0]
+            data = _constant_to_bytes(value, ty.dtype)
         else:
-            raise TypeError(f"Cannot make a constant tuple out of {ty}")
-
-        data = _constant_to_bytes(value, dtype)
+            assert isinstance(value, tuple)
+            data = _constant_tuple_to_bytes(value, ty.dtype, ty.shape)
         return bc.encode_ConstantOp(self.builder, typeid(self.type_table, ty), data)
-
-    def constant_tuple(self, value, ty: Type) -> Tuple[bc.Value, ...]:
-        if isinstance(ty, TupleTy):
-            return sum((self.constant_tuple(item_val, item_ty)
-                        for item_ty, item_val in zip(ty.value_types, value, strict=True)), ())
-        return self.constant(value, ty),
 
     def index_tuple(self,
                     index: tuple[Var, ...], *, keep_i64: bool = False) -> Tuple[bc.Value, ...]:

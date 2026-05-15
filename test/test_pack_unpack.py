@@ -7,18 +7,15 @@ import torch
 
 import cuda.tile as ct
 from cuda.tile._bytecode.version import BytecodeVersion
-from util import assert_equal, make_test_tensor, require_hopper_or_newer, require_blackwell_or_newer
+from util import assert_equal, make_test_tensor, require_blackwell_or_newer
 from cuda.tile._exception import TileTypeError
-from conftest import float_dtypes, int_dtypes, requires_tileiras, uint_dtypes, dtype_id
+from conftest import (
+    float8_dtypes, float_dtypes, int_dtypes, requires_tileiras, uint_dtypes, dtype_id
+)
 
 
 pytestmark = requires_tileiras(BytecodeVersion.V_13_3)
 
-float8_dtypes = [
-    pytest.param(torch.float8_e5m2, marks=require_hopper_or_newer()),
-    pytest.param(torch.float8_e4m3fn, marks=require_hopper_or_newer()),
-    pytest.param(torch.float8_e8m0fnu, marks=require_blackwell_or_newer()),
-]
 
 test_dtypes = (float_dtypes + int_dtypes + uint_dtypes +
                [torch.float64] + float8_dtypes)

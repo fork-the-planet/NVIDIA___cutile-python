@@ -14,6 +14,7 @@ from functools import cache
 from cuda.tile._bytecode.version import BytecodeVersion
 from cuda.tile._compile import _get_max_supported_bytecode_version, _SUPPORTED_VERSIONS
 from cuda.tile._cext import dev_features_enabled
+from util import require_blackwell_or_newer, require_hopper_or_newer
 
 
 def pytest_addoption(parser):
@@ -118,6 +119,12 @@ int_dtypes = [torch.int32, torch.int64, torch.int16, torch.int8]
 bool_dtypes = [torch.bool]
 uint_dtypes = [torch.uint8, torch.uint32, torch.uint64]
 arithmetic_dtypes = int_dtypes + uint_dtypes + float_dtypes + bool_dtypes
+float8_dtypes = [
+    pytest.param(torch.float8_e5m2, marks=require_hopper_or_newer()),
+    pytest.param(torch.float8_e4m3fn, marks=require_hopper_or_newer()),
+    pytest.param(torch.float8_e8m0fnu, marks=(require_blackwell_or_newer(),
+                                              requires_tileiras(BytecodeVersion.V_13_2))),
+]
 
 
 @pytest.fixture(params=float_dtypes, ids=dtype_id)

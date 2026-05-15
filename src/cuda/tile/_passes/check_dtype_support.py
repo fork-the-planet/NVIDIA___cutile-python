@@ -59,11 +59,17 @@ def _extract_dtypes(ty: Type | None) -> set[DType]:
 
 
 def _check_const_value(op: TypedConst):
+
+    def get_values(v):
+        if not isinstance(v, tuple):
+            return (v,)
+        return sum((get_values(c) for c in v), start=())
+
     dtype = next(iter(_extract_dtypes(op.result_vars[0].try_get_type())), None)
     entry = _DTYPE_INVALID_VALUE.get(dtype)
     if entry is not None:
         predicate, msg = entry
-        if predicate(op.value):
+        if any(predicate(v) for v in get_values(op.value)):
             raise TileValueError(msg, loc=op.loc)
 
 

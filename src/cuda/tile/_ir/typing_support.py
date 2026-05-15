@@ -190,7 +190,7 @@ def get_constant_value(val: Any) -> Any:
         return val
     if is_dtype(val):
         return to_dtype(val)
-    if isinstance(val, tuple) and not any(isinstance(x, tuple) for x in val):
+    if isinstance(val, tuple):
         return tuple(get_constant_value(x) for x in val)
     typ = type(val)
     prefix = "" if typ.__module__ == "builtins" else f"{typ.__module__}."

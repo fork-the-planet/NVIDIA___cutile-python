@@ -227,7 +227,7 @@ class _CurrentStub(threading.local):
 _current_stub = _CurrentStub()
 
 
-def _is_0d_tile(ty: Type, dtype_predicate: Callable[[DType], bool] = lambda _: True) -> bool:
+def is_0d_tile(ty: Type, dtype_predicate: Callable[[DType], bool] = lambda _: True) -> bool:
     return isinstance(ty, TileTy) and ty.ndim == 0 and dtype_predicate(ty.dtype)
 
 
@@ -235,7 +235,7 @@ def require_constant_int(var: Var) -> int:
     if not var.is_constant():
         raise _make_type_error("Expected an integer constant, but given value is not constant", var)
     ty = var.get_type()
-    if not _is_0d_tile(ty, is_integral):
+    if not is_0d_tile(ty, is_integral):
         raise _make_type_error(f"Expected an integer constant, but given value has type {ty}",
                                var)
     return var.get_constant()
@@ -251,14 +251,14 @@ def require_constant_bool(var: Var) -> bool:
     if not var.is_constant():
         raise _make_type_error("Expected a boolean constant, but given value is not constant", var)
     ty = var.get_type()
-    if not _is_0d_tile(ty, is_boolean):
+    if not is_0d_tile(ty, is_boolean):
         raise _make_type_error(f"Expected a boolean constant, but given value has type {ty}", var)
     return var.get_constant()
 
 
 def require_constant_scalar(var: Var) -> bool | int | float:
     ty = var.get_type()
-    if not _is_0d_tile(ty):
+    if not is_0d_tile(ty):
         raise _make_type_error(f"Expected a scalar constant, but given value has type {ty}", var)
     if not var.is_constant():
         raise _make_type_error(f"Expected a constant, but given value has non-constant type {ty}",
@@ -274,7 +274,7 @@ def require_constant_scalar_tuple(var: Var) -> tuple[bool | int | float, ...]:
     tuple_val = var.get_aggregate()
     assert isinstance(tuple_val, TupleValue)
     for i, (item_ty, item) in enumerate(zip(ty.value_types, tuple_val.items, strict=True)):
-        if not _is_0d_tile(item_ty):
+        if not is_0d_tile(item_ty):
             raise _make_type_error(f"Expected a tuple of scalar constants,"
                                    f" but item at position #{i} has type {item_ty}", var)
         if not item.is_constant():
@@ -323,6 +323,12 @@ def require_dtype_spec(var: Var) -> DType:
     return ty.dtype
 
 
+def require_optional_dtype_spec(var: Var) -> DType | None:
+    if var.is_constant() and var.get_constant() is None:
+        return None
+    return require_dtype_spec(var)
+
+
 def require_optional_constant_enum(var: Var, enum: EnumMeta):
     if var.is_constant() and var.get_constant() is None:
         return None
@@ -363,14 +369,14 @@ def require_constant_int_tuple(var: Var, allow_single_int: bool = False) -> Tupl
                                " but given value is not constant", var)
 
     ty = var.get_type()
-    if allow_single_int and _is_0d_tile(ty):
+    if allow_single_int and is_0d_tile(ty):
         return require_constant_int(var),
 
     if not isinstance(ty, TupleTy):
         raise _make_type_error(f"Expected a tuple, but given value has type {ty}", var)
 
     for i, item_ty in enumerate(ty.value_types):
-        if not _is_0d_tile(item_ty, is_integral):
+        if not is_0d_tile(item_ty, is_integral):
             raise _make_type_error(f"Expected a tuple of integers,"
                                    f" but element #{i} has type {item_ty}", var)
 
@@ -472,7 +478,7 @@ def require_signed_integer_0d_tile_type(var: Var) -> TileTy:
 
 def require_bool(var: Var) -> TileTy:
     ty = var.get_type()
-    if not _is_0d_tile(ty, is_boolean):
+    if not is_0d_tile(ty, is_boolean):
         raise _make_type_error(f"Expected a bool, but given value has type {ty}", var)
     return ty
 

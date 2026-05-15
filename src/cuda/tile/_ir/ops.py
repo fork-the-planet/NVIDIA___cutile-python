@@ -4,6 +4,7 @@
 import builtins
 import dataclasses
 import enum
+import functools
 import math
 import operator
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ import cuda.tile._stub as ct
 from cuda.tile import _datatype as datatype
 from cuda.tile import RoundingMode, MemoryOrder, MemoryScope
 from cuda.tile._mutex import tile_mutex
-from cuda.tile._exception import TileTypeError, TileSyntaxError, TileError, \
+from cuda.tile._exception import TileInternalError, TileTypeError, TileSyntaxError, TileError, \
     TileStaticAssertionError, TileStaticEvalError, TileValueError, TileUnsupportedFeatureError
 from cuda.tile._ir.ir import (
     Operation, Var, Loc, Block, add_operation, Builder, enter_nested_block, nested_block,
@@ -34,7 +35,8 @@ from .type import (
 from . import hir, hir_stubs
 from .hir import ResolvedName
 from .op_impl import (
-    ImplRegistry, require_constant_int, require_constant_int_tuple,
+    ImplRegistry, is_0d_tile, require_constant_int, require_constant_int_tuple,
+    require_optional_dtype_spec,
     require_signed_integer_0d_tile_type,
     require_tile_type, normalize_axis, require_dtype_spec,
     require_constant_bool, require_optional_constant_enum,
@@ -3283,14 +3285,14 @@ def num_tiles_impl(array: Var, axis: Var, shape: Var, order: Var) -> Var:
     return space_shape[axis]
 
 
-def full_const(shape: Sequence[int], fill_value: int | float, dtype: DType) -> Var:
+def _const(shape: Sequence[int], value: int | float | bool | tuple, dtype: DType) -> Var:
     res_ty = make_tile_ty(dtype, shape)
-    return strictly_typed_const(fill_value, res_ty)
+    return strictly_typed_const(value, res_ty)
 
 
 def full(shape: Sequence[int], fill_value: Var, dtype: DType) -> Var:
     if fill_value.is_constant():
-        return full_const(shape, fill_value.get_constant(), dtype)
+        return _const(shape, fill_value.get_constant(), dtype)
     fill_value = astype(fill_value, dtype)
     return broadcast_to(fill_value, shape)
 
@@ -3307,14 +3309,93 @@ def full_impl(shape: Var, fill_value: Var, dtype: Var) -> Var:
 def ones_impl(shape: Var, dtype: Var) -> Var:
     shape = require_constant_shape(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
-    return full_const(shape, 1, dtype)
+    return _const(shape, 1, dtype)
 
 
 @impl(ct.zeros)
 def zeros_impl(shape: Var, dtype: Var) -> Var:
     shape = require_constant_shape(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
-    return full_const(shape, 0, dtype)
+    return _const(shape, 0, dtype)
+
+
+def _path_str(path: tuple[int, ...]) -> str:
+    return "value" + "".join(f"[{i}]" for i in path)
+
+
+def _tuple_shape(ty: Type, path: tuple[int, ...]) -> tuple[int, ...]:
+    path_str = _path_str(path)
+    if not isinstance(ty, TupleTy):
+        if not isinstance(ty, TileTy):
+            raise TileTypeError(
+                f"Expected scalar elements at {path_str}; "
+                f"got element of type {ty}")
+
+        if ty.ndim != 0:
+            raise TileTypeError(
+                f"Expected scalar elements at {path_str}; "
+                f"got a tile of shape {ty.shape}")
+
+        assert is_0d_tile(ty)
+        return ()
+
+    n = len(ty)
+    if not _is_power_of_2(n):
+        raise TileTypeError(f"Tuple length {n} at {path_str} is not a power of 2")
+
+    inner_shapes = {_tuple_shape(t, path + (i,)) for i, t in enumerate(ty.value_types)}
+    if len(inner_shapes) != 1:
+        raise TileTypeError(f"Tuple has non-uniform inner shapes at {path_str}")
+
+    return (n,) + inner_shapes.pop()
+
+
+def _flatten_tuple(value: Var) -> tuple[Var, ...]:
+    value_ty = value.get_type()
+    if not isinstance(value_ty, TupleTy):
+        return (value,)
+    return sum((_flatten_tuple(i) for i in value.get_aggregate().items), start=())
+
+
+def _cat_tuple(tiles: tuple[Var, ...]) -> Var:
+    if len(tiles) == 0:
+        raise TileInternalError("Expected non-empty tile tuple")
+
+    if len(tiles) == 1:
+        require_0d_tile_type(tiles[0])
+        return reshape(tiles[0], (1,))
+
+    assert len(tiles) % 2 == 0
+    mid = len(tiles) // 2
+    left = _cat_tuple(tiles[:mid])
+    right = _cat_tuple(tiles[mid:])
+    return cat((left, right), axis=0)
+
+
+@impl(ct.astile)
+def astile_impl(value: Var, dtype: Var) -> Var:
+    dtype: Optional[DType] = require_optional_dtype_spec(dtype)
+    value_ty = value.get_type()
+    if is_0d_tile(value_ty):
+        return value if dtype is None else astype(value, dtype)
+
+    if not isinstance(value_ty, TupleTy):
+        raise TileTypeError(
+                f"Expected a scalar or (possibly nested) tuple of scalars; "
+                f"got value of type {value_ty}")
+
+    shape = _tuple_shape(value_ty, path=())
+    tiles = _flatten_tuple(value)
+    dtype = (functools.reduce(promote_dtypes, (require_0d_tile_type(t).dtype for t in tiles))
+             if dtype is None
+             else dtype)
+
+    if value.is_constant():
+        return _const(shape, value.get_constant(), dtype)
+
+    tiles = tuple(astype(t, dtype) for t in tiles)
+    flat = _cat_tuple(tiles)
+    return reshape(flat, shape)
 
 
 _TileShape = Tuple[int, ...]
@@ -4116,29 +4197,24 @@ class TileCat(Operation, opcode="tile_cat"):
         return bc.encode_CatOp(ctx.builder, return_type_id, x_value, y_value, self.axis)
 
 
-def cat(tiles: Var, axis: int) -> Var:
-    tuple_ty = require_tuple_type(tiles)
-    items = tiles.get_aggregate().items
-    if len(items) == 1:
-        return items[0]
-
-    if len(tuple_ty) == 0:
+def cat(tiles: tuple[Var, ...], axis: int) -> Var:
+    if len(tiles) == 0:
         raise TileTypeError("cat() received an empty tuple")
-    elif len(items) == 1:
-        return items[0]
-    elif len(tuple_ty) > 2:
-        raise TileTypeError(f"cat() supports at most 2 tiles, got {len(tuple_ty)}")
+    if len(tiles) == 1:
+        return tiles[0]
+    if len(tiles) > 2:
+        raise TileTypeError(f"cat() supports at most 2 tiles, got {len(tiles)}")
 
-    x_tile, y_tile = items
+    x_tile, y_tile = tiles
 
-    if not isinstance(first_tile := tuple_ty.value_types[0], TileTy):
-        raise TileTypeError(f"Expected tuple of Tile, got a {first_tile}")
+    if not isinstance(first_tile_ty := tiles[0].get_type(), TileTy):
+        raise TileTypeError(f"Expected tuple of Tile, got a {first_tile_ty}")
 
-    dtype = first_tile.dtype
-    rank = first_tile.ndim
-    shape_value = list(first_tile.shape)
+    dtype = first_tile_ty.dtype
+    rank = first_tile_ty.ndim
+    shape_value = list(first_tile_ty.shape)
     axis = normalize_axis(axis, rank)
-    for tile_ty in tuple_ty.value_types[1:]:
+    for tile_ty in (t.get_type() for t in tiles[1:]):
         if not isinstance(tile_ty, TileTy):
             raise TileTypeError(f"Expected tuple of Tile, got a {tile_ty}")
         if tile_ty.ndim != rank:
@@ -4167,8 +4243,9 @@ def _is_power_of_2(x: int):
 
 @impl(ct.cat)
 def cat_impl(tiles: Var, axis: Var) -> Var:
+    require_tuple_type(tiles)
     const_axis = require_constant_int(axis)
-    return cat(tiles, const_axis)
+    return cat(tiles.get_aggregate().items, const_axis)
 
 
 # Does not support broadcasting or type promotion

@@ -37,9 +37,11 @@ Factory
    :nosignatures:
 
    arange
+   astile
    full
    ones
    zeros
+
 
 .. _operations-shape-dtype:
 
