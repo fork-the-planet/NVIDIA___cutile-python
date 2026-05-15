@@ -5,14 +5,13 @@
 import numpy as np
 import pytest
 import torch
-import cupy as cp
 # Move cutile types to the top level?
 import cuda.tile as ct
 
 from pathlib import Path
 from math import ceil
 from util import assert_equal, jit_kernel
-from conftest import float_dtypes, int_dtypes, bool_dtypes, dtype_id
+from conftest import float_dtypes, int_dtypes, bool_dtypes, dtype_id, get_cupy_or_skip
 from cuda.tile._exception import TileTypeError
 from dataclasses import dataclass
 
@@ -65,7 +64,7 @@ def test_full_np_value_call(dtype, value, use_cupy, tmp_path: Path):
     dtype_str = torch_to_dtype_str[dtype].numpy
     if use_cupy:
         dtype_str = dtype_str.replace("np.", "cp.")
-        globals = {"cp": cp}
+        globals = {"cp": get_cupy_or_skip()}
     else:
         globals = {"np": np}
     value_str = str(value) if value is not None else ""
@@ -157,7 +156,7 @@ def test_full_np_dtype(value_dtype, use_cupy: bool, tmp_path: Path):
         dtype_str = dtype_str.replace("np.", "cp.")
         if value_str == "np.inf":
             value_str = "cp.inf"
-        globals = {"cp": cp}
+        globals = {"cp": get_cupy_or_skip()}
     else:
         globals = {"np": np}
     kernel = create_full_kernel("create_full_np_dtype", value_str, dtype_str,

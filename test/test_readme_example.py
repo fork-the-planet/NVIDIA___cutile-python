@@ -14,7 +14,7 @@ import sys
 file_path = os.path.realpath(__file__)
 
 
-def test_readme():
+def test_readme(cupy):
     readme_path = os.path.join(os.path.dirname(file_path), "..", "README.md")
     readme_txt = open(readme_path, 'r').read()
     header = "Example\n-------\n```python"

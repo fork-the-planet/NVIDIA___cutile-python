@@ -4,10 +4,8 @@
 
 import torch
 from torch.testing import make_tensor
-import cupy
 import cuda.tile as ct
 from ctypes import c_void_p
-from cuda.bindings.driver import CUstream
 
 
 @ct.kernel
@@ -38,12 +36,12 @@ def test_torch_pass_stream_ptr():
 
 
 # -- Test CuPy Stream --
-def test_cupy_pass_stream():
+def test_cupy_pass_stream(cupy):
     stream = cupy.cuda.Stream()
     _test_stream(stream, stream.synchronize)
 
 
-def test_cupy_pass_stream_ptr():
+def test_cupy_pass_stream_ptr(cupy):
     stream = cupy.cuda.Stream()
     _test_stream(stream.ptr, stream.synchronize)
 
@@ -59,6 +57,7 @@ def test_numba_pass_stream_ptr(numba_cuda):
     handle = stream.handle
     # numba-cuda < 0.30: handle is ctypes c_void_p
     # numba-cuda >= 0.30: handle is cuda.bindings.driver.CUstream
+    from cuda.bindings.driver import CUstream
     if isinstance(handle, c_void_p):
         stream_ptr = handle.value
     elif isinstance(handle, CUstream):

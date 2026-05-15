@@ -6,7 +6,6 @@
 
 #example-begin
 import cuda.tile as ct
-import cupy
 
 TILE_SIZE = 16
 
@@ -18,18 +17,17 @@ def vector_add_kernel(a, b, result):
     b_tile = ct.load(b, index=(block_id,), shape=(TILE_SIZE,))
     result_tile = a_tile + b_tile
     ct.store(result, index=(block_id,), tile=result_tile)
-
-# Host-side function that launches the above kernel.
-def vector_add(a: cupy.ndarray, b: cupy.ndarray, result: cupy.ndarray):
-    assert a.shape == b.shape == result.shape
-    grid = (ct.cdiv(a.shape[0], TILE_SIZE), 1, 1)
-    ct.launch(cupy.cuda.get_current_stream(), grid, vector_add_kernel, (a, b, result))
 #example-end
-
 
 import numpy as np
 
-def test_vector_add():
+def test_vector_add(cupy):
+    # Host-side function that launches the above kernel.
+    def vector_add(a: cupy.ndarray, b: cupy.ndarray, result: cupy.ndarray):
+        assert a.shape == b.shape == result.shape
+        grid = (ct.cdiv(a.shape[0], TILE_SIZE), 1, 1)
+        ct.launch(cupy.cuda.get_current_stream(), grid, vector_add_kernel, (a, b, result))
+
     rng = cupy.random.default_rng()
     a = rng.random(128)
     b = rng.random(128)

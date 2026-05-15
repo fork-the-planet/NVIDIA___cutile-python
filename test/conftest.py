@@ -218,3 +218,16 @@ cuda.to_device(numpy.ones(10))
         pytest.xfail(f"Numba smoke test failed {result.returncode}. Skip.")
     import numba
     return numba.cuda
+
+
+def get_cupy_or_skip():
+    try:
+        import cupy as cupy
+    except ImportError:
+        pytest.skip("Cupy not installed. Skip test.")
+    return cupy
+
+
+@pytest.fixture(scope="session")
+def cupy():
+    return get_cupy_or_skip()
