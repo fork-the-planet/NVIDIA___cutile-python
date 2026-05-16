@@ -11,6 +11,7 @@ from typing import Sequence, Mapping
 from .ast2hir import get_function_hir
 from .. import TileTypeError
 from .._coroutine_util import resume_after, run_coroutine
+from .._datatype import PointerInfo
 from .._exception import Loc, FunctionDesc, TileSyntaxError, TileInternalError, TileError, \
     TileRecursionError
 from .._execution import is_stub
@@ -241,6 +242,7 @@ async def _call_builtin(callee, arg_list: list[Var | tuple[Var, ...]], builder: 
 
 
 _DTYPE_CONSTRUCTOR_SIGNATURE = inspect.signature(lambda x=0, /: None)
+_POINTER_INFO_SIGNATURE = inspect.signature(PointerInfo)
 
 
 async def call(callee_var: Var, args, kwargs) -> Var | None:
@@ -275,6 +277,9 @@ async def call(callee_var: Var, args, kwargs) -> Var | None:
         assert len(dataclass_info.field_names) + 1 == len(arg_list)
         items = tuple(arg_list[param_names.index(name)] for name in dataclass_info.field_names)
         return build_dataclass_instance(items, dataclass_info)
+    elif isinstance(callee_ty, TypeTy) and callee_ty.ty is PointerInfo:
+        arg_list = _bind_args(_POINTER_INFO_SIGNATURE, "PointerInfo", args, kwargs)
+        return await _call_builtin(PointerInfo, arg_list, builder)
     else:
         raise TileTypeError(f"Cannot call an object of type {callee_ty}")
 

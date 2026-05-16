@@ -7,7 +7,8 @@ from typing import Any
 
 import cuda.lang._ir.type as ir_type
 import cuda.lang._mlir as mlir
-import cuda.lang._datatype as dtype
+import cuda.lang._datatype as datatype
+from cuda.tile._datatype import is_pointer_dtype, PointerInfo
 from cuda.lang._exception import TileInternalError
 
 
@@ -17,23 +18,13 @@ def ir_type_to_mlir_type(ir_type: Any) -> mlir.Type:
 
 
 @ir_type_to_mlir_type.register
-def pointer_type_to_mlir_type(src_type: ir_type.PointerTy) -> mlir.Type:
-    return mlir.llvm.LLVMPointerType(addressSpace=int(src_type.memory_space.value))
-
-
-@ir_type_to_mlir_type.register
-def opaque_pointer_type_to_mlir_type(src_type: ir_type.OpaquePointerTy) -> mlir.Type:
-    return mlir.llvm.LLVMPointerType(addressSpace=int(src_type.memory_space.value))
-
-
-@ir_type_to_mlir_type.register
 def tensor_map_type_to_mlir_type(src_type: ir_type.TensorMapTy) -> mlir.Type:
     return mlir.llvm.LLVMPointerType()
 
 
 @ir_type_to_mlir_type.register
 def tile_type_to_mlir_type(src_type: ir_type.TileTy) -> mlir.Type:
-    element_type = ir_type_to_mlir_type(src_type.dtype)
+    element_type = dtype_to_mlir_type(src_type.dtype)
     if src_type.shape == ():
         return element_type
     if not ir_type.is_vector_ty(src_type):
@@ -45,33 +36,36 @@ def tile_type_to_mlir_type(src_type: ir_type.TileTy) -> mlir.Type:
     )
 
 
-@ir_type_to_mlir_type.register
-def basic_scalar_type_to_mlir_type(src_type: dtype.DType) -> mlir.Type:
-    match src_type:
+def dtype_to_mlir_type(dtype: datatype.DType) -> mlir.Type:
+    if is_pointer_dtype(dtype):
+        info = PointerInfo(dtype)
+        return mlir.llvm.LLVMPointerType(addressSpace=int(info.memory_space.value))
+
+    match dtype:
         case (
-            dtype.int8
-            | dtype.int16
-            | dtype.int32
-            | dtype.int64
-            | dtype.bool_
-            | dtype.uint8
-            | dtype.uint16
-            | dtype.uint32
-            | dtype.uint64
+            datatype.int8
+            | datatype.int16
+            | datatype.int32
+            | datatype.int64
+            | datatype.bool_
+            | datatype.uint8
+            | datatype.uint16
+            | datatype.uint32
+            | datatype.uint64
         ):
             return mlir.IntegerType(
-                width=src_type.bitwidth, signedness=mlir.SignednessSemantics.SIGNLESS
+                width=dtype.bitwidth, signedness=mlir.SignednessSemantics.SIGNLESS
             )
-        case dtype.float16:
+        case datatype.float16:
             return mlir.Float16Type()
-        case dtype.bfloat16:
+        case datatype.bfloat16:
             return mlir.BFloat16Type()
-        case dtype.float32:
+        case datatype.float32:
             return mlir.Float32Type()
-        case dtype.float64:
+        case datatype.float64:
             return mlir.Float64Type()
         case _:
-            raise NotImplementedError(f"Unable to convert {src_type=} to MLIR type")
+            raise NotImplementedError(f"Unable to convert {dtype=} to MLIR type")
 
 
 @singledispatch
@@ -142,10 +136,10 @@ def _get_type_conversion_encoder(
     to_mlir_type = ir_type_to_mlir_type(to_type)
 
     def kind(t):
-        if dtype.is_float(t):
+        if datatype.is_float(t):
             return "f"
-        if dtype.is_integral(t) or dtype.is_boolean(t):
-            return "si" if dtype.is_signed(t) else "ui"
+        if datatype.is_integral(t) or datatype.is_boolean(t):
+            return "si" if datatype.is_signed(t) else "ui"
         raise TileInternalError(f"Unsupported dtype: {t}")
 
     from_kind, to_kind = kind(from_dtype), kind(to_dtype)
@@ -170,7 +164,7 @@ def _get_type_conversion_encoder(
 
     if from_dtype.bitwidth < to_dtype.bitwidth:
         assert from_kind in ("si", "ui")
-        if dtype.is_signed(from_dtype):
+        if datatype.is_signed(from_dtype):
             return partial(mlir.arith.add_ExtSIOp, out_type=to_mlir_type)
         else:
             return partial(mlir.arith.add_ExtUIOp, out_type=to_mlir_type)

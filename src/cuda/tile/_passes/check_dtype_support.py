@@ -6,9 +6,10 @@ import math
 from typing import Callable
 from cuda.tile._ir.ir import Block
 from cuda.tile._ir.ops import TileAtomicRMW, TileAtomicRedView, TypedConst, AtomicRMWMode
-from cuda.tile._ir.type import TileTy, PointerTy, Type
+from cuda.tile._ir.type import TileTy, Type
 from cuda.tile._datatype import (
-    DType, float4_e2m1fn, float8_e4m3fn, float8_e5m2, float8_e8m0fnu, bfloat16
+    DType, float4_e2m1fn, float8_e4m3fn, float8_e5m2, float8_e8m0fnu, bfloat16, is_pointer_dtype,
+    PointerInfo
 )
 from cuda.tile._bytecode.version import BytecodeVersion
 from cuda.tile._exception import TileUnsupportedFeatureError, TileValueError
@@ -52,10 +53,15 @@ def _extract_dtypes(ty: Type | None) -> set[DType]:
         return result
 
     if isinstance(ty, TileTy):
-        ty = ty.dtype
-    if isinstance(ty, PointerTy):
-        ty = ty.pointee_type.dtype
-    return {ty} if isinstance(ty, DType) else set()
+        dtype = ty.dtype
+        while is_pointer_dtype(dtype):
+            info = PointerInfo(dtype)
+            if info.opaque:
+                return set()
+            dtype = info.pointee_dtype
+        return {dtype}
+
+    return set()
 
 
 def _check_const_value(op: TypedConst):

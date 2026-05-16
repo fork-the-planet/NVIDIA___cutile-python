@@ -20,7 +20,7 @@ def loadme(ptr: cl.Pointer[Any], mo: cl.MemoryOrder):
 
 @cl.function
 def storeme(ptr: cl.Pointer[Any], mo: cl.MemoryOrder):
-    ptr.store(ptr.dtype(0), ordering=mo, alignment=16)
+    ptr.store(0, ordering=mo, alignment=16)
 
 
 @pytest.mark.parametrize(

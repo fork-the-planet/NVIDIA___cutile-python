@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) <2026> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
-import dataclasses
 import math
 import re
 import operator
@@ -22,11 +21,11 @@ from cuda.tile._ir.op_impl import (
     require_index_or_index_tuple_type,
     require_array_type,
     WILDCARD,
-    require_tile_type, require_constant_bool,
+    require_tile_type, require_constant_bool, require_constant_pointer_info,
 )
 from cuda.lang._ir.type import (
-    OpaquePointerTy, LocalArrayContextManagerTy, ContextManagerState, TensorMapTy,
-    dtype_to_tensor_map_type, ArrayValue
+    LocalArrayContextManagerTy, ContextManagerState, TensorMapTy,
+    dtype_to_tensor_map_type, ArrayValue, PointerInfoTy
 )
 from cuda.tile._ir.ops import (
     binary_arithmetic,
@@ -60,11 +59,12 @@ from cuda.tile._ir.ops import (
     PointerOffset,
     TilePrintf,
     printf_impl,
-    Unary,
+    Unary, implicit_cast,
 )
 from cuda.tile._ir.ir import MemoryEffect, make_aggregate
 from cuda.lang._exception import TileTypeError
 import cuda.lang._datatype as datatype
+from cuda.tile._datatype import is_pointer_dtype, pointer_dtype, PointerInfo, opaque_pointer_dtype
 import cuda.lang._mlir as mlir
 
 from .. import _stub as stub
@@ -75,7 +75,6 @@ from .type import (
     make_vector_ty,
     is_vector_ty,
     ArrayTy,
-    PointerTy,
     TileTy,
     TupleTy,
     TupleValue
@@ -98,6 +97,68 @@ from cuda.tile._ir.typing_support import I32_TY, BOOL_TY
 cuda_lang_impl_registry = tile_impl_registry.clone()
 impl = cuda_lang_impl_registry.impl
 overload_dispatcher = cuda_lang_impl_registry.overload_dispatcher
+
+
+# -------------------------------------------------------------------------------------
+# Pointer dtype APIs
+# -------------------------------------------------------------------------------------
+
+@impl(is_pointer_dtype)
+def is_pointer_dtype_impl(dtype: Var) -> Var:
+    dtype = require_dtype_spec(dtype)
+    return loosely_typed_const(is_pointer_dtype(dtype))
+
+
+@impl(pointer_dtype)
+def pointer_dtype_impl(pointee_dtype: Var, memory_space: Var) -> Var:
+    pointee_dtype = require_dtype_spec(pointee_dtype)
+    memory_space = require_constant_enum(memory_space, MemorySpace)
+    res = pointer_dtype(pointee_dtype, memory_space)
+    return loosely_typed_const(res)
+
+
+@impl(opaque_pointer_dtype)
+def opaque_pointer_dtype_impl(memory_space: Var) -> Var:
+    memory_space = require_constant_enum(memory_space, MemorySpace)
+    res = opaque_pointer_dtype(memory_space)
+    return loosely_typed_const(res)
+
+
+@impl(PointerInfo)
+def pointer_info_impl(dtype: Var) -> Var:
+    dtype = require_dtype_spec(dtype)
+    try:
+        res = PointerInfo(dtype)
+    except TypeError as e:
+        raise TileTypeError(str(e))
+
+    return loosely_typed_const(res)
+
+
+@impl(getattr, overload=(PointerInfoTy, "opaque"))
+def pointer_info_opaque_impl(object: Var, name: Var) -> Var:
+    info = require_constant_pointer_info(object)
+    return loosely_typed_const(info.opaque)
+
+
+@impl(getattr, overload=(PointerInfoTy, "pointee_dtype"))
+def pointer_info_pointee_dtype_impl(object: Var, name: Var) -> Var:
+    info = require_constant_pointer_info(object)
+    try:
+        pointee_dtype = info.pointee_dtype
+    except ValueError as e:
+        raise TileTypeError(str(e))
+
+    return loosely_typed_const(pointee_dtype)
+
+
+@impl(getattr, overload=(PointerInfoTy, "memory_space"))
+def pointer_info_memory_space_impl(object: Var, name: Var) -> Var:
+    info = require_constant_pointer_info(object)
+    return loosely_typed_const(info.memory_space)
+
+
+# -------------------------------------------------------------------------------------
 
 
 @dataclass(eq=False)
@@ -212,15 +273,13 @@ def require_matching_array_value_type(array: Var, value: Var) -> tuple[ArrayTy, 
 
 def require_any_pointer_var(var: Var) -> TileTy:
     ty = require_tile_type(var)
-    if ty.shape != () or not isinstance(ty.dtype, (PointerTy, OpaquePointerTy)):
+    if ty.shape != () or not is_pointer_dtype(ty.dtype):
         raise TileTypeError(f"Expected a scalar pointer, got {ty}")
     return ty
 
 
 def _array_base_pointer_type(array_ty: ArrayTy) -> TileTy:
-    return TileTy(
-        PointerTy(TileTy(array_ty.dtype, ()), array_ty.memory_space)
-    )
+    return TileTy(pointer_dtype(array_ty.dtype, array_ty.memory_space))
 
 
 def _get_array_base_pointer(array: Var) -> Var:
@@ -430,7 +489,7 @@ def atomic_cas_impl(A: Var, idx: Var, old: Var, val: Var) -> Var:
 
 def require_pointer_var(var: Var) -> TileTy:
     ty = require_tile_type(var)
-    if ty.shape != () or not isinstance(ty.dtype, PointerTy):
+    if ty.shape != () or not is_pointer_dtype(ty.dtype):
         raise TileTypeError(f"Expected a pointer, got {ty}")
     return ty
 
@@ -450,9 +509,7 @@ def _pointer_load(
     ordering: Var,
 ) -> Var:
     pointer_tile_ty = require_pointer_var(pointer)
-    pointee = pointer_tile_ty.dtype.pointee_type
-    assert isinstance(pointee, TileTy)
-    assert pointee.shape == ()
+    pointee_dtype = PointerInfo(pointer_tile_ty.dtype).pointee_dtype
     count = require_optional_constant_int(count)
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
@@ -460,9 +517,9 @@ def _pointer_load(
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
         raise TileTypeError("Expected explicit alignment on atomic load")
     if count is None or count == 1:
-        result_ty = TileTy(pointee.dtype, ())
+        result_ty = TileTy(pointee_dtype)
     else:
-        result_ty = make_vector_ty(pointee.dtype, count)
+        result_ty = make_vector_ty(pointee_dtype, count)
     [result] = add_operation(
         LoadPointer,
         (result_ty,),
@@ -481,11 +538,17 @@ def _pointer_store(
     volatile: Var,
     ordering: Var,
 ) -> None:
+    pointer_tile_ty = require_pointer_var(pointer)
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(StorePointer, ordering)
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
         raise TileTypeError("Expected explicit alignment on atomic store")
+
+    pointee_dtype = PointerInfo(pointer_tile_ty.dtype).pointee_dtype
+    value = implicit_cast(value, pointee_dtype,
+                          "Stored value type is incompatible with pointer type")
+
     add_operation(
         StorePointer,
         (),
@@ -509,7 +572,7 @@ def _pointer_with_offset(pointer: Var, offset: Var) -> Var:
 
 
 def _is_pointer_type(ty):
-    return isinstance(ty, TileTy) and isinstance(ty.dtype, (PointerTy, OpaquePointerTy))
+    return isinstance(ty, TileTy) and is_pointer_dtype(ty.dtype)
 
 
 @impl(operator.add)
@@ -545,20 +608,18 @@ def sub_impl(x: Var, y: Var) -> Var:
 def address_space_cast_impl(value: Var, memory_space: Var) -> Var:
     pointer_tile_ty = require_any_pointer_var(value)
     memory_space = require_constant_enum(memory_space, MemorySpace)
-    match pointer_tile_ty.dtype:
-        case PointerTy():
-            result_ty = TileTy(
-                dataclasses.replace(pointer_tile_ty.dtype, memory_space=memory_space)
-            )
-        case OpaquePointerTy():
-            result_ty = TileTy(OpaquePointerTy(memory_space))
-        case _:
-            raise TileTypeError(f"Expected a pointer type, got {pointer_tile_ty}")
-    return add_operation(
-        AddrSpaceCast,
-        result_ty,
-        pointer=value,
-    )
+    if not is_pointer_dtype(pointer_tile_ty.dtype):
+        raise TileTypeError(f"Expected a pointer type, got {pointer_tile_ty}")
+
+    info = PointerInfo(pointer_tile_ty.dtype)
+
+    if info.opaque:
+        new_dtype = opaque_pointer_dtype(memory_space)
+    else:
+        new_dtype = pointer_dtype(info.pointee_dtype, memory_space)
+
+    result_ty = TileTy(new_dtype)
+    return add_operation(AddrSpaceCast, result_ty, pointer=value)
 
 
 @impl(stub.reinterpret_pointer_as_array)
@@ -572,15 +633,14 @@ def reinterpret_pointer_as_array_impl(pointer: Var, dtype: Var, shape: Var, stri
     shape = require_constant_int_tuple(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
     strides = _contiguous_strides(shape)
-    element_ty = TileTy(dtype)
-    memory_space = pointer_tile_ty.dtype.memory_space
+    memory_space = PointerInfo(pointer_tile_ty.dtype).memory_space
 
-    typed_pointer_ty = TileTy(PointerTy(element_ty, memory_space=memory_space), ())
+    typed_pointer_ty = TileTy(pointer_dtype(dtype, memory_space))
     if pointer.get_type() != typed_pointer_ty:
         pointer = _reinterpret_pointer(pointer, typed_pointer_ty)
     index_dtype = datatype.int32
     array_ty = ArrayTy(
-        element_ty,
+        dtype,
         shape=shape,
         strides=strides,
         index_dtype=index_dtype,
@@ -608,10 +668,6 @@ def vector_element_count_impl(object: Var, name: Var):
 @impl(getattr, overload=(TileTy, "dtype"))
 def tile_dtype_impl(object: Var, name: Var):
     dtype = require_tile_type(object).dtype
-    if isinstance(dtype, PointerTy):
-        pointee_ty = dtype.pointee_type
-        assert isinstance(pointee_ty, TileTy)
-        return loosely_typed_const(pointee_ty.dtype)
     return loosely_typed_const(dtype)
 
 
@@ -630,7 +686,7 @@ def pointer_load_impl(
     alignment: Var,
     volatile: Var,
     ordering: Var,
-) -> Operation:
+) -> Var:
     return _pointer_load(self, count, alignment, volatile, ordering)
 
 
@@ -762,7 +818,7 @@ def enter_context_local_array_impl(manager: Var):
     strides = _contiguous_strides(mgr_ty.shape)
     index_dtype = datatype.int32
     array_type = ArrayTy(
-        TileTy(mgr_ty.dtype, ()),
+        mgr_ty.dtype,
         shape=mgr_ty.shape,
         strides=strides,
         index_dtype=index_dtype,
@@ -794,8 +850,7 @@ class GetDynSharedMemoryBasePtr(Operation, opcode="get_dyn_shared_memory_base_pt
 
 
 def get_dyn_shared_memory_base_ptr():
-    u8_ty = TileTy(datatype.uint8, ())
-    result_ty = TileTy(PointerTy(u8_ty, MemorySpace.SHARED), ())
+    result_ty = TileTy(pointer_dtype(datatype.uint8, MemorySpace.SHARED))
     return add_operation(GetDynSharedMemoryBasePtr, result_ty)
 
 
@@ -867,7 +922,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
     stride_vars.reverse()
 
     array_type = ArrayTy(
-        TileTy(dtype, ()),
+        dtype,
         shape=tuple(ty_shape),
         strides=tuple(ty_strides),
         index_dtype=index_dtype,
@@ -1235,7 +1290,7 @@ def require_tensor_map_ty(var: Var) -> TensorMapTy:
 @impl(stub.TensorMap.as_opaque_ptr)
 def tensor_map_as_opaque_ptr_impl(self: Var):
     require_tensor_map_ty(self)
-    result_ty = TileTy(OpaquePointerTy(), ())
+    result_ty = TileTy(opaque_pointer_dtype())
     return add_operation(TensorMapAsOpaquePtr, result_ty, tensor_map=self)
 
 
@@ -1248,7 +1303,7 @@ def require_constant_result_dtype(dtype: Var) -> Type:
         if const_dtype == datatype.any_opaque_ptr:
             raise TileTypeError("Result type cannot have no memory space")
         memory_space = datatype.MemorySpace(const_dtype.value)
-        return TileTy(OpaquePointerTy(memory_space=memory_space))
+        return TileTy(opaque_pointer_dtype(memory_space=memory_space))
     elif is_vector_ty(const_dtype):
         return const_dtype
     elif isinstance(const_dtype, datatype.DType):

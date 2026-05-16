@@ -89,7 +89,6 @@ The following old nvvm intrinsics now have canonical IR representations:
 from typing import Any
 import cuda.lang as cl
 from cuda.lang import _datatype as datatype
-from cuda.lang._ir.type import OpaquePointerTy, PointerTy
 from cuda.lang._datatype import (
     is_literal_or_exact_dtype,
     satisfies_pointer_constraint,
@@ -97,7 +96,6 @@ from cuda.lang._datatype import (
 from cuda.lang._execution import stub, function
 from cuda.lang._exception import TileTypeError
 from cuda.tile import static_assert, static_eval
-from cuda.tile._ir.type import PointerTy as TilePointerTy
 
 from cuda.lang._stub._nvvm_support import (
     satisfies_scalar_integral_constraint,

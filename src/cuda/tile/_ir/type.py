@@ -15,12 +15,13 @@ import operator
 from typing import TYPE_CHECKING
 
 from cuda.tile._exception import Loc, TileTypeError, TileValueError
+from cuda.tile._memory_model import MemorySpace
 from cuda.tile._stub import Tile, Array
 from cuda.tile._numeric_semantics import PaddingMode
 from .aggregate_value import AggregateValue
 
 if TYPE_CHECKING:
-    from cuda.tile._datatype import DType
+    from cuda.tile._datatype import DType, PointerInfo
     from cuda.tile._ir.ir import Var
     from cuda.tile._ir import hir
     from cuda.tile._ir.scope import LocalScope
@@ -181,6 +182,16 @@ class DTypeSpec(Type):
 # Data type constant that is also callable, e.g. np.float32(1.0)
 class DTypeConstructor(DTypeSpec):
     pass
+
+
+# ============== Type of PointerInfo ==========
+
+@dataclass(frozen=True)
+class PointerInfoTy(Type):
+    info: "PointerInfo"
+
+    def __repr__(self):
+        return f"<{self.info}>"
 
 
 # ============== Tuple ===============
@@ -352,29 +363,6 @@ class FormattedStringValue(AggregateValue):
         return self.values
 
 
-# ============== Pointer Type ===============
-
-
-class MemorySpace(enum.Enum):
-    GENERIC = 0
-    GLOBAL = 1
-    SHARED = 3
-    CONSTANT = 4
-    LOCAL = 5
-    TENSOR = 6
-    SHARED_CLUSTER = 7
-
-
-@dataclass(frozen=True)
-class PointerTy(Type):
-    pointee_type: Type
-    memory_space: MemorySpace = MemorySpace.GENERIC
-
-    def __str__(self):
-        memspc = "" if self.memory_space == MemorySpace.GENERIC else f", {self.memory_space}"
-        return f"Pointer[{self.pointee_type}{memspc}]"
-
-
 # ============== Tile Type ===============
 
 
@@ -467,15 +455,15 @@ class SymbolicTile(Symbol, Tile):
 
 class ArrayTy(Type):
     def __init__(self,
-                 element_type: Type,
+                 dtype: "DType",
                  /,
                  shape: Tuple[Optional[int], ...],
                  strides: Tuple[Optional[int], ...],
                  index_dtype=None,
                  memory_space: MemorySpace = MemorySpace.GENERIC):
-        from .._datatype import int32
-        assert isinstance(element_type, Type)
-        self.element_type = element_type
+        from .._datatype import int32, DType
+        assert isinstance(dtype, DType)
+        self.dtype = dtype
         self.shape = shape
         self.strides = strides
         self.index_dtype = int32 if index_dtype is None else index_dtype
@@ -491,9 +479,10 @@ class ArrayTy(Type):
         return True
 
     def aggregate_item_types(self) -> tuple["Type", ...]:
-        base_ptr_ty = PointerTy(self.element_type, self.memory_space)
-        base_ptr_tile_ty = TileTy(base_ptr_ty, ())
-        size_ty = TileTy(self.index_dtype, ())
+        from .._datatype import pointer_dtype
+        base_ptr_ty = pointer_dtype(self.dtype, self.memory_space)
+        base_ptr_tile_ty = TileTy(base_ptr_ty)
+        size_ty = TileTy(self.index_dtype)
         return (base_ptr_tile_ty,) + (size_ty,) * (self.ndim * 2)
 
     def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":
@@ -504,37 +493,27 @@ class ArrayTy(Type):
     def ndim(self):
         return len(self.shape)
 
-    @property
-    def dtype(self) -> "DType":
-        assert isinstance(self.element_type, TileTy)
-        assert self.element_type.shape == ()
-        return self.element_type.dtype
-
     def __eq__(self, other: Type):
         return (isinstance(other, ArrayTy)
-                and self.element_type == other.element_type
+                and self.dtype == other.dtype
                 and self.shape == other.shape
                 and self.strides == other.strides
                 and self.index_dtype == other.index_dtype
                 and self.memory_space == other.memory_space)
 
     def __hash__(self):
-        return hash(("ArrayTy", self.element_type, self.shape, self.strides, self.index_dtype,
+        return hash(("ArrayTy", self.dtype, self.shape, self.strides, self.index_dtype,
                      self.memory_space))
 
     def __str__(self):
         from .._datatype import int32
-        if isinstance(self.element_type, TileTy) and self.element_type.shape == ():
-            type_str = str(self.element_type.dtype)
-        else:
-            type_str = str(self.element_type)
         shape_str = ('?' if x is None else str(x) for x in self.shape)
         shape_str = "(" + ','.join(shape_str) + ")"
         strides_str = ('?' if x is None else str(x) for x in self.strides)
         strides_str = "(" + ','.join(strides_str) + ")"
         indexty_str = "" if self.index_dtype == int32 else f",index_dtype={self.index_dtype}]"
         memspc = "" if self.memory_space == MemorySpace.GENERIC else f", {self.memory_space}"
-        return f"Array[{type_str},{shape_str}:{strides_str}{indexty_str}{memspc}]"
+        return f"Array[{self.dtype},{shape_str}:{strides_str}{indexty_str}{memspc}]"
 
 
 @dataclass
@@ -735,20 +714,19 @@ class TiledViewValue(AggregateValue):
 @dataclass(frozen=True)
 class RawArrayMemoryTy(Type):
     """Type for a RawArrayMemory object that allows load/store by element offset (no index math)."""
-    element_type: Type
+    dtype: "DType"
 
-    @property
-    def dtype(self):
-        assert isinstance(self.element_type, TileTy)
-        assert self.element_type.shape == ()
-        return self.element_type.dtype
+    def __post_init__(self):
+        from .._datatype import DType
+        assert isinstance(self.dtype, DType)
 
     def is_aggregate(self) -> bool:
         return True
 
     def aggregate_item_types(self) -> tuple["Type", ...]:
-        base_ptr_ty = PointerTy(self.element_type)
-        base_ptr_tile_ty = TileTy(base_ptr_ty, ())
+        from .._datatype import pointer_dtype
+        base_ptr_dtype = pointer_dtype(self.dtype)
+        base_ptr_tile_ty = TileTy(base_ptr_dtype)
         return (base_ptr_tile_ty,)
 
     def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":
@@ -756,11 +734,7 @@ class RawArrayMemoryTy(Type):
         return RawArrayMemoryValue(items[0])
 
     def __str__(self):
-        if isinstance(self.element_type, TileTy) and self.element_type.shape == ():
-            type_str = str(self.element_type.dtype)
-        else:
-            type_str = str(self.element_type)
-        return f"RawArrayMemory[{type_str}]"
+        return f"RawArrayMemory[{self.dtype}]"
 
 
 @dataclass
@@ -782,10 +756,10 @@ class ListTy(Type):
         return True
 
     def aggregate_item_types(self) -> tuple["Type", ...]:
-        from .._datatype import int32, int64
-        ptr_ty = PointerTy(TileTy(int64, ()))
-        ptr_tile_ty = TileTy(ptr_ty, ())
-        len_ty = TileTy(int32, ())
+        from .._datatype import int32, int64, pointer_dtype
+        ptr_dtype = pointer_dtype(int64)
+        ptr_tile_ty = TileTy(ptr_dtype)
+        len_ty = TileTy(int32)
         return ptr_tile_ty, len_ty
 
     def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":

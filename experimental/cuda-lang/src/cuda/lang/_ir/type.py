@@ -15,7 +15,6 @@ from cuda.tile._ir.type import (
     DTypeConstructor,
     NoneType,
     ModuleTy,
-    PointerTy,
     TokenTy,
     TypeTy,
     EnumTy,
@@ -23,7 +22,8 @@ from cuda.tile._ir.type import (
     ContextManagerState,
     MemorySpace,
     ArrayValue,
-    TupleValue
+    TupleValue,
+    PointerInfoTy
 )
 import cuda.tile._datatype as datatype
 from cuda.tile._datatype import DType
@@ -54,17 +54,6 @@ def make_vector_ty(dtype: DType, length: int) -> TileTy:
             f"Expected vector length to be a positive power of two, got {length}"
         )
     return TileTy(dtype, (length,))
-
-
-@dataclass(frozen=True, eq=True)
-class OpaquePointerTy(Type):
-    memory_space: MemorySpace = MemorySpace.GENERIC
-
-    def __str__(self) -> str:
-        return f'OpaquePtr[{self.memory_space}]'
-
-    def __repr__(self) -> str:
-        return str(self)
 
 
 @dataclass(frozen=True)
@@ -120,9 +109,7 @@ __all__ = (
     "FunctionTy",
     "DTypeConstructor",
     "NoneType",
-    "OpaquePointerTy",
     "ModuleTy",
-    "PointerTy",
     "TokenTy",
     "TypeTy",
     "EnumTy",
@@ -131,4 +118,5 @@ __all__ = (
     "MemorySpace",
     "ArrayValue",
     "TupleValue",
+    "PointerInfoTy",
 )

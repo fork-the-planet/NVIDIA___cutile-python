@@ -165,7 +165,7 @@ def _get_array_ty(param: ArrayConstraint):
             raise NotImplementedError("Negative strides are currently not supported:"
                                       " please specify stride_lower_bound_incl=0")
 
-    return ArrayTy(TileTy(param.dtype),
+    return ArrayTy(param.dtype,
                    shape=(None,) * param.ndim,
                    strides=param.stride_constant,
                    index_dtype=param.index_dtype)

@@ -5,11 +5,11 @@
 from __future__ import annotations
 from types import FunctionType
 from typing import TYPE_CHECKING
-import functools
 
 from cuda.lang._ir import ir
 from cuda.tile import _cext
 from cuda.tile._cext import launch_extended as launch
+from cuda.tile._execution import function, stub
 
 if TYPE_CHECKING:
     from cuda.lang.compilation import KernelSignature
@@ -21,31 +21,6 @@ __all__ = [
     "launch",
     "stub",
 ]
-
-
-def function(func=None, /):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapped(*args, **kwargs):
-            raise TypeError("Device functions cannot be called from the host.")
-        return wrapped
-
-    if func is None:
-        return decorator
-    else:
-        return decorator(func)
-
-
-def stub(func=None, /):
-    def decorate(func):
-        func = function(func)
-        func._cutile_python_stub = True
-        return func
-
-    if func is None:
-        return decorate
-    else:
-        return decorate(func)
 
 
 class kernel(_cext.TileDispatcher):

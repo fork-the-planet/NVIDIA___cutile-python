@@ -17,7 +17,7 @@ from cuda.tile._memory_model import MemoryOrder, MemoryScope
 import cuda.tile._bytecode as bc
 
 from .ir import Operation, Builder
-from .type import TileTy, PointerTy, LooselyTypedScalar
+from .type import TileTy, LooselyTypedScalar
 from .typing_support import typeof_pyval
 from .._datatype import DType, _DTypePromotionImpl, NumericDTypeCategory, NumericDTypeCategories, \
     get_int_min_max
@@ -205,15 +205,14 @@ def memory_order_has_release(memory_order: MemoryOrder):
     return memory_order in (MemoryOrder.RELEASE, MemoryOrder.ACQ_REL)
 
 
-def get_dtype(ty: TileTy | LooselyTypedScalar) -> datatype.DType | PointerTy:
+def get_dtype(ty: TileTy | LooselyTypedScalar) -> datatype.DType:
     if isinstance(ty, LooselyTypedScalar):
         ty = typeof_pyval(ty.value)
     assert isinstance(ty, TileTy)
     return ty.dtype
 
 
-def change_dtype(ty: TileTy, new_dtype: datatype.DType | PointerTy) \
-        -> TileTy:
+def change_dtype(ty: TileTy, new_dtype: datatype.DType) -> TileTy:
     assert isinstance(ty, TileTy)
     return TileTy(new_dtype, ty.shape)
 

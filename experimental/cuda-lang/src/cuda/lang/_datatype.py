@@ -7,13 +7,12 @@ from typing import TypeAlias, Union, Any
 
 from cuda.lang._ir.type import (
     MemorySpace,
-    OpaquePointerTy,
-    PointerTy,
     TileTy,
     is_vector_ty,
     make_vector_ty,
 )
-from cuda.tile._ir.type import PointerTy as TilePointerTy, SymbolicTile
+from cuda.tile._stub import Tile
+from cuda.tile._ir.type import SymbolicTile
 from cuda.tile._ir.typing_support import is_dtype, register_dtypes, to_dtype
 from cuda.tile._datatype import (
     DType,
@@ -46,7 +45,7 @@ from cuda.tile._datatype import (
     is_integral,
     is_signed,
     get_signedness,
-    default_int_type,
+    default_int_type, is_pointer_dtype, PointerInfo,
 )
 
 
@@ -139,11 +138,7 @@ def is_literal_or_exact_dtype(value: Any, dtype: DType):
 
 
 def is_any_pointer(value):
-    return (
-        isinstance(value, SymbolicTile)
-        and value.ndim == 0
-        and isinstance(value.dtype, (PointerTy, OpaquePointerTy, TilePointerTy))
-    )
+    return isinstance(value, Tile) and value.ndim == 0 and is_pointer_dtype(value.dtype)
 
 
 def satisfies_pointer_constraint(value, constraint: OpaquePointerSpec):
@@ -153,13 +148,8 @@ def satisfies_pointer_constraint(value, constraint: OpaquePointerSpec):
     if constraint == any_opaque_ptr:
         return True
 
-    pointer_ty = value.dtype
-    if isinstance(pointer_ty, TilePointerTy):
-        if constraint == opaque_ptr:
-            return True
-        return pointer_ty.memory_space.value == constraint.value
-
-    return pointer_ty.memory_space.value == constraint.value
+    info = PointerInfo(value.dtype)
+    return info.memory_space.value == constraint.value
 
 
 __all__ = [

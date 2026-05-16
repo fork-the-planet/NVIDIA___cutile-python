@@ -16,6 +16,10 @@ from ._execution import (
 from ._compile import compile_simt
 
 from ._stub import (
+    pointer_dtype,
+    opaque_pointer_dtype,
+    is_pointer_dtype,
+    PointerInfo,
     warp_size,
     full_mask,
     block_idx,
@@ -97,6 +101,10 @@ from ._datatype import (
 )
 
 __all__ = (
+    "pointer_dtype",
+    "opaque_pointer_dtype",
+    "is_pointer_dtype",
+    "PointerInfo",
     "function",
     "kernel",
     "launch",

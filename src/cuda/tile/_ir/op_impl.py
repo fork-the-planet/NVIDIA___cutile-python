@@ -12,8 +12,8 @@ from enum import EnumMeta
 from typing import Optional, NamedTuple, Tuple, Sequence, Any, Union, Callable
 
 from cuda.tile._datatype import (
-        is_integral, is_float,
-        is_boolean, is_signed, DType)
+    is_integral, is_float,
+    is_boolean, is_signed, DType, PointerInfo)
 from cuda.tile._bytecode.version import BytecodeVersion
 from cuda.tile._exception import TileTypeError, TileUnsupportedFeatureError
 from cuda.tile._ir.ops_utils import get_dtype
@@ -22,7 +22,7 @@ from .typing_support import datatype, get_signature
 from .ir import Var, Builder
 from .type import TiledViewTy, TupleTy, TileTy, DTypeSpec, EnumTy, StringTy, ArrayTy, SliceType, \
     ListTy, LooselyTypedScalar, RangeIterType, FunctionTy, ClosureTy, BoundMethodTy, \
-    DTypeConstructor, Type, RawArrayMemoryTy, DataclassTy, TupleValue
+    DTypeConstructor, Type, RawArrayMemoryTy, DataclassTy, TupleValue, PointerInfoTy
 
 
 def _verify_params_match(stub_sig: inspect.Signature, func_sig: inspect.Signature):
@@ -327,6 +327,14 @@ def require_optional_dtype_spec(var: Var) -> DType | None:
     if var.is_constant() and var.get_constant() is None:
         return None
     return require_dtype_spec(var)
+
+
+def require_constant_pointer_info(var: Var) -> PointerInfo:
+    ty = var.get_type()
+    if not isinstance(ty, PointerInfoTy):
+        raise _make_type_error(f"Expected a PointerInfo object, but given value has type {ty}", var)
+    assert var.is_constant()
+    return ty.info
 
 
 def require_optional_constant_enum(var: Var, enum: EnumMeta):

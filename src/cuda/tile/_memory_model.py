@@ -46,3 +46,13 @@ class MemoryOrder(Enum):
 
     ACQ_REL = "acq_rel"
     """Combined acquire and release semantics."""
+
+
+class MemorySpace(Enum):
+    GENERIC = 0
+    GLOBAL = 1
+    SHARED = 3
+    CONSTANT = 4
+    LOCAL = 5
+    TENSOR = 6
+    SHARED_CLUSTER = 7

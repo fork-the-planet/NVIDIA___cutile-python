@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from functools import singledispatchmethod
 from typing import Sequence
 
+from cuda.lang._datatype import is_pointer_dtype, PointerInfo
 from cuda.lang._ir import ir, ops
 from cuda.lang import _mlir as mlir
 from cuda.tile._memory_model import MemoryOrder
@@ -18,11 +19,11 @@ import cuda.lang._ir.type as ir_type
 from cuda.lang.compilation import KernelSignature
 import cuda.lang._datatype as datatype
 from cuda.lang._exception import TileTypeError
-from cuda.tile._ir.type import TileTy, PointerTy
+from cuda.tile._ir.type import TileTy
 from .type_conversion import (
     ir_type_to_mlir_type,
     mlir_constant_of_type,
-    convert_dtype,
+    convert_dtype, dtype_to_mlir_type,
 )
 
 
@@ -187,7 +188,7 @@ def _get_mlir_unary_op_for_op_and_type(
         case "invert" if datatype.is_boolean(dtype):
 
             def invert(operand):
-                mlir_bool = ir_type_to_mlir_type(datatype.bool_)
+                mlir_bool = dtype_to_mlir_type(datatype.bool_)
                 false = mlir_constant_of_type(mlir_bool, 0)
                 cmp = mlir.arith.add_CmpIOp(
                     predicate=mlir.arith.CmpIPredicate.eq, lhs=operand, rhs=false
@@ -622,7 +623,7 @@ class IR2MLIR:
                 return [value]
             case ir_type.TileTy():
                 assert target_type.shape == (), "Tile types must be scalar"
-                mlir_type = ir_type_to_mlir_type(target_type.dtype)
+                mlir_type = ir_type_to_mlir_type(target_type)
                 cst = mlir_constant_of_type(mlir_type, value)
                 return [cst]
             case _:
@@ -733,11 +734,9 @@ class IR2MLIR:
     def lower_pointer_offset(
         self, operation: ops.PointerOffset
     ) -> Sequence[mlir.Value]:
-        pointer_type = _require_scalar_type(operation.pointer.get_type()).dtype
-        assert isinstance(pointer_type, ir_type.PointerTy), (
-            f"Expected a typed pointer, got {pointer_type}"
-        )
-        element_type = ir_type_to_mlir_type(pointer_type.pointee_type)
+        ptr_dtype = _require_scalar_type(operation.pointer.get_type()).dtype
+        info = PointerInfo(ptr_dtype)
+        element_type = dtype_to_mlir_type(info.pointee_dtype)
 
         pointer = self.get_var(operation.pointer)
         offset = self.get_var(operation.offset)
@@ -753,11 +752,10 @@ class IR2MLIR:
 
     @lower_operation.register
     def lower_load_pointer(self, operation: ops.LoadPointer) -> Sequence[mlir.Value]:
-        pointer_type = _require_scalar_type(operation.pointer.get_type()).dtype
+        ptr_dtype = _require_scalar_type(operation.pointer.get_type()).dtype
         ordering = _get_llvm_memory_ordering(operation.ordering)
-        assert isinstance(pointer_type, ir_type.PointerTy), (
-            f"Expected a typed pointer, got {pointer_type}"
-        )
+        info = PointerInfo(ptr_dtype)
+        assert not info.opaque, f"Expected a typed pointer, got {ptr_dtype}"
         result_type = ir_type_to_mlir_type(operation.result_var.get_type())
         pointer = self.get_var(operation.pointer)
         result = mlir.llvm.add_LoadOp(
@@ -790,10 +788,11 @@ class IR2MLIR:
         result_ty = operation.result_var.get_type()
         assert isinstance(result_ty, TileTy)
         assert result_ty.shape == ()
-        assert isinstance(result_ty.dtype, PointerTy)
+        assert is_pointer_dtype(result_ty.dtype)
 
+        info = PointerInfo(result_ty.dtype)
         result_ty_mlir = ir_type_to_mlir_type(result_ty)
-        elem_type_mlir = ir_type_to_mlir_type(result_ty.dtype.pointee_type)
+        elem_type_mlir = dtype_to_mlir_type(info.pointee_dtype)
 
         with self.func_region.blocks[0].prepend_here():
             array_size = mlir_constant_of_type(T.i64(), operation.count)
@@ -822,9 +821,9 @@ class IR2MLIR:
         result_ty = operation.result_var.get_type()
         assert isinstance(result_ty, TileTy)
         assert result_ty.shape == ()
-        assert isinstance(result_ty.dtype, PointerTy)
 
-        elem_type = ir_type_to_mlir_type(result_ty.dtype.pointee_type)
+        info = PointerInfo(result_ty.dtype)
+        elem_type = dtype_to_mlir_type(info.pointee_dtype)
         global_type = mlir.llvm.LLVMArrayType(
             elementType=elem_type,
             numElements=operation.count,
@@ -882,9 +881,7 @@ class IR2MLIR:
         ptx_code = operation.ptx_code
         ro_args = tuple(self.get_var(arg) for arg in operation.read_only_operands)
         rw_args = tuple(self.get_var(arg) for arg in operation.read_write_operands)
-        wo_args = tuple(
-            ir_type_to_mlir_type(arg) for arg in operation.write_only_operands
-        )
+        wo_args = tuple(dtype_to_mlir_type(arg) for arg in operation.write_only_operands)
         results = mlir.nvvm.add_InlinePtxOp(
             ptxCode=ptx_code,
             readOnlyArgs=ro_args,
@@ -1012,7 +1009,7 @@ class IR2MLIR:
     ) -> Sequence[mlir.Value]:
         value = self.get_var(operation.pointer)
         ir_result_type = operation.result_var.get_type()
-        if ir_result_type.dtype.memory_space.value == value.type.addressSpace:
+        if PointerInfo(ir_result_type.dtype).memory_space.value == value.type.addressSpace:
             return [value]
         mlir_result_type = ir_type_to_mlir_type(ir_result_type)
         result = mlir.llvm.add_AddrSpaceCastOp(

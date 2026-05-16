@@ -8,8 +8,8 @@ from math import gcd
 from typing import Dict, Sequence, TypeVar, Generic, Any
 
 from cuda.tile._ir.ops_utils import get_dtype
-from cuda.tile._ir.type import PointerTy, ListValue
-from cuda.tile._datatype import is_integral
+from cuda.tile._ir.type import ListValue, TileTy
+from cuda.tile._datatype import is_integral, PointerInfo
 from cuda.tile._ir.ir import Var, Block
 from cuda.tile._ir.ops import Assign, GetArrayListItem, \
     Loop, IfElse, Continue, Break, EndBranch, PointerOffset, \
@@ -252,9 +252,10 @@ def _analyze_aliases_in_block(block: Block,
             # (Array.slice) Divby of a block of pointers (like ptr + arange for
             # ct.gather) are handled by tileiras.
             ptr_ty = op.pointer.get_type()
-            assert isinstance(ptr_ty.dtype, PointerTy)
+            assert isinstance(ptr_ty, TileTy)
+            ptr_info = PointerInfo(ptr_ty.dtype)
             if all(x == 1 for x in ptr_ty.shape):
-                bitwidth = ptr_ty.dtype.pointee_type.dtype.bitwidth
+                bitwidth = ptr_info.pointee_dtype.bitwidth
                 BYTE_BITWIDTH = 8
                 if bitwidth % BYTE_BITWIDTH == 0:
                     offset_divby = state.tracker[op.offset].div_by * (bitwidth // BYTE_BITWIDTH)

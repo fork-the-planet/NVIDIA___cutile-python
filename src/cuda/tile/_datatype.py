@@ -8,7 +8,8 @@ from typing import Optional, Any, Callable, Tuple
 from enum import IntEnum
 
 from cuda.tile._exception import TileTypeError
-from cuda.tile._execution import function
+from cuda.tile._execution import function, stub
+from cuda.tile._memory_model import MemorySpace
 import cuda.tile._bytecode as bc
 
 
@@ -33,8 +34,8 @@ class DType:
     They can be |kernel| parameters.
     """
 
-    def __init__(self, name: str, bitwidth: int, py_type: Callable[[Any], Any],
-                 bytecode_type: bc.SimpleType):
+    def __init__(self, name: str, bitwidth: int, py_type: Callable[[Any], Any] | None,
+                 bytecode_type: bc.SimpleType | None):
         self._name = name
         self._bitwidth = bitwidth
         self._py_type = py_type
@@ -378,13 +379,15 @@ class _DTypePromotionImpl:
 
     @classmethod
     def promote_dtypes(cls, t1: DType, t2: DType, force_float: bool = False) -> DType:
+        if t1 == t2 and (not force_float or is_float(t1)):
+            return t1
         if is_restricted_arithmetic(t1) or is_restricted_arithmetic(t2):
-            if t1 == t2:
-                return t1
             raise TileTypeError(
                 f"Implicit promotion of {t1} and {t2} is not supported as it involves restricted "
                 f"arithmetic dtypes in an unsupported way. Please perform an explicit cast instead."
             )
+        if is_pointer_dtype(t1) or is_pointer_dtype(t2):
+            raise TileTypeError("Implicit promotion of pointer dtypes is not supported")
         idx1, idx2 = dtype_to_enum[t1], dtype_to_enum[t2]
         if idx1 >= len(cls._common_dtype_table) or idx2 >= len(cls._common_dtype_table[idx1]):
             raise IndexError(f"Invalid dtypes in common dtype table: {t1}, {t2}")
@@ -587,3 +590,103 @@ def _generate_rst_table(common_dtype_table) -> str:
     lines.append("* ERR: Implicit promotion between these types is not supported")
 
     return "\n".join(lines)
+
+
+# ============== Pointer DType ===============
+
+
+class PointerInfo:
+    def __new__(cls, dtype: DType) -> "PointerInfo":
+        try:
+            return _pointer_dtype_to_info[dtype]
+        except KeyError:
+            raise TypeError(f"'{dtype}' is not a pointer dtype")
+
+    @property
+    @stub(host=True)
+    def opaque(self) -> bool:
+        return self._pointee_dtype is None
+
+    @property
+    @stub(host=True)
+    def pointee_dtype(self) -> DType:
+        if self._pointee_dtype is None:
+            raise ValueError("Opaque pointer has no pointee dtype")
+        return self._pointee_dtype
+
+    @property
+    @stub(host=True)
+    def memory_space(self) -> MemorySpace:
+        return self._memory_space
+
+    def __repr__(self):
+        if self.opaque:
+            type_str = "opaque"
+        else:
+            type_str = f"pointee_dtype={self.pointee_dtype}"
+
+        if self.memory_space is MemorySpace.GENERIC:
+            memspc_str = ""
+        else:
+            memspc_str = f", MemorySpace.{self.memory_space._name_}"
+
+        return f"PointerInfo({type_str}{memspc_str})"
+
+
+@stub(host=True)
+def is_pointer_dtype(dtype: DType) -> bool:
+    return dtype in _pointer_dtype_to_info
+
+
+@stub(host=True)
+def pointer_dtype(pointee_dtype: DType,
+                  memory_space: MemorySpace = MemorySpace.GENERIC) -> DType:
+    assert pointee_dtype is not None
+    return _get_pointer_dtype(pointee_dtype, memory_space)
+
+
+@stub(host=True)
+def opaque_pointer_dtype(memory_space: MemorySpace = MemorySpace.GENERIC) -> DType:
+    return _get_pointer_dtype(None, memory_space)
+
+
+def _get_pointer_dtype(pointee_dtype: DType | None, memory_space: MemorySpace) -> DType:
+    try:
+        return _pointer_dtypes[(pointee_dtype, memory_space)]
+    except KeyError:
+        pass
+
+    match memory_space:
+        case MemorySpace.SHARED:
+            bitwidth = 32
+        case _:
+            bitwidth = 64
+
+    params = []
+    if pointee_dtype is None:
+        name = "opaque_pointer"
+    else:
+        assert isinstance(pointee_dtype, DType)
+        name = "pointer"
+        params.append(str(pointee_dtype))
+
+    if memory_space != MemorySpace.GENERIC:
+        params.append(f"MemorySpace.{memory_space._name_}")
+
+    if len(params) > 0:
+        name += "[" + ", ".join(params) + "]"
+
+    dtype = DType(name, bitwidth, None, None)
+    _pointer_dtypes[(pointee_dtype, memory_space)] = dtype
+    info = object.__new__(PointerInfo)
+    info._pointee_dtype = pointee_dtype
+    info._memory_space = memory_space
+    _pointer_dtype_to_info[dtype] = info
+
+    from ._ir.typing_support import register_dtypes
+    register_dtypes({dtype: dtype}, usable_as_constructor=False)
+    return dtype
+
+
+_pointer_dtype_to_info: dict[DType, PointerInfo] = dict()
+_pointer_dtypes: dict[tuple[DType | None, MemorySpace], DType] = dict()

@@ -8,6 +8,7 @@ from cuda.tile._stub import (
     static_assert,
     static_iter,
 )
+from cuda.tile._datatype import is_pointer_dtype, pointer_dtype, opaque_pointer_dtype, PointerInfo
 
 from . import nvvm
 from . import libdevice
@@ -65,6 +66,10 @@ from .tensor_map import (
 
 
 __all__ = (
+    "is_pointer_dtype",
+    "pointer_dtype",
+    "opaque_pointer_dtype",
+    "PointerInfo",
     "warp_size",
     "full_mask",
     "block_idx",

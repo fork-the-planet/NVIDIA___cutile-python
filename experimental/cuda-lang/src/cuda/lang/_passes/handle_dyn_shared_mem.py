@@ -9,6 +9,7 @@ from cuda.lang._ir.ops import AllocDynSharedMemory, GetDynSharedMemoryBasePtr, \
     get_dyn_shared_memory_base_ptr, _pointer_with_offset, _reinterpret_pointer
 from cuda.lang._datatype import int32
 from cuda.lang._exception import TileTypeError
+from cuda.tile._datatype import PointerInfo
 from cuda.tile._ir.ops import assign, _is_power_of_2
 from cuda.tile._ir.type import TileTy
 
@@ -73,11 +74,10 @@ def _get_alignment(alloc_op: AllocDynSharedMemory) -> int:
 def _get_item_size(alloc_op: AllocDynSharedMemory) -> int:
     pointer_tile_ty = alloc_op.result_var.get_type()
     assert isinstance(pointer_tile_ty, TileTy)
-    poinee_ty = pointer_tile_ty.dtype.pointee_type
-    assert isinstance(poinee_ty, TileTy)
-    assert poinee_ty.shape == ()
-    assert poinee_ty.dtype.bitwidth % 8 == 0
-    return poinee_ty.dtype.bitwidth // 8
+    info = PointerInfo(pointer_tile_ty.dtype)
+    pointee_dtype = info.pointee_dtype
+    assert pointee_dtype.bitwidth % 8 == 0
+    return pointee_dtype.bitwidth // 8
 
 
 def _round_up(value: int, alignment: int) -> int:

@@ -8,9 +8,10 @@ from enum import Enum, IntEnum
 from functools import lru_cache
 from types import ModuleType, FunctionType
 from typing import Any, Callable, Mapping, Union
+
 from cuda.tile import _datatype as datatype
 from cuda.tile._exception import TileTypeError, TileValueError
-from .type import DataclassInfo
+from .type import DataclassInfo, PointerInfoTy
 
 from .type import Type, TupleTy, DTypeConstructor, DTypeSpec, NONE, StringTy, \
     ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar, \
@@ -165,6 +166,8 @@ def typeof_pyval(val) -> Type:
         return FunctionTy(val)
     if (t := _safe_get(dtype_registry, val)) is not None:
         return t
+    if isinstance(val, datatype.PointerInfo):
+        return PointerInfoTy(val)
 
     if isinstance(val, type):
         return TypeTy(val)

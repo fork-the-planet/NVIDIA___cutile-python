@@ -12,7 +12,7 @@ import warnings
 from cuda.tile import _datatype as datatype
 from cuda.tile._bytecode.attribute import make_load_store_hints
 from cuda.tile._bytecode.version import BytecodeVersion
-from cuda.tile._datatype import get_signedness
+from cuda.tile._datatype import get_signedness, is_pointer_dtype, PointerInfo
 from cuda.tile import DType
 import cuda.tile._bytecode as bc
 from cuda.tile._compiler_options import CompilerOptions
@@ -23,14 +23,15 @@ from cuda.tile._ir.ops_utils import (
     get_default_rounding_mode,
 )
 from cuda.tile._ir.type import (
-    PartitionViewTy, StridedViewTy, GatherScatterViewTy, Type, TileTy, PointerTy, TokenTy,
+    PartitionViewTy, StridedViewTy, GatherScatterViewTy, Type, TileTy, TokenTy,
     ArrayTy, size_to_bytecode,
 )
 
 
-def dtype_typeid(tt: bc.TypeTable, dtype: datatype.DType | PointerTy) -> bc.TypeId:
-    if isinstance(dtype, PointerTy):
-        pointee = dtype_typeid(tt, dtype.pointee_type.dtype)
+def dtype_typeid(tt: bc.TypeTable, dtype: datatype.DType) -> bc.TypeId:
+    if is_pointer_dtype(dtype):
+        pointee_dtype = PointerInfo(dtype).pointee_dtype
+        pointee = dtype_typeid(tt, pointee_dtype)
         return tt.pointer(pointee)
     return tt.simple(dtype._bytecode_type)
 

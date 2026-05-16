@@ -28,7 +28,7 @@ from cuda.tile._ir.ir import (
     BlockRestriction,
 )
 from .type import (
-    var2sym, PointerTy, TupleValue, BoundMethodValue, ArrayValue, DataclassValue, DataclassInfo,
+    var2sym, TupleValue, BoundMethodValue, ArrayValue, DataclassValue, DataclassInfo,
     RangeValue, ListValue, TiledViewValue, ClosureValue, FormattedStringValue, RawArrayMemoryValue,
     IndexSliceValue
 )
@@ -71,7 +71,7 @@ from .type import (
     ContextManagerLifecycle, ContextManagerTy, Symbol
 )
 from cuda.tile._datatype import (
-    DType, is_integral, is_float, is_signed, is_boolean,
+    DType, is_integral, is_float, is_signed, is_boolean, is_pointer_dtype, PointerInfo,
 )
 from cuda.tile._ir2bytecode import (
     BytecodeContext, typeid,
@@ -651,7 +651,7 @@ class MakeDummy(Operation, opcode="make_dummy"):
         ty = ctx.typeof(self.result_var)
         if isinstance(ty, TokenTy):
             return bc.encode_MakeTokenOp(ctx.builder, ctx.type_table.Token)
-        if isinstance(ty, TileTy) and isinstance(ty.dtype, PointerTy):
+        if isinstance(ty, TileTy) and is_pointer_dtype(ty.dtype):
             int_ty = TileTy(dtype=datatype.int64, shape=ty.shape)
             const = ctx.constant(0, int_ty)
             return bc.encode_IntToPtrOp(ctx.builder, typeid(ctx.type_table, ty), const)
@@ -2282,7 +2282,7 @@ def array_slice_impl(self: Var, axis: Var, start: Var, stop: Var) -> Var:
 
     new_shape_ty = tuple(None if i == const_axis else dim for i, dim in enumerate(array_ty.shape))
     new_array_ty = ArrayTy(
-        array_ty.element_type,
+        array_ty.dtype,
         shape=new_shape_ty,
         strides=array_ty.strides,
         index_dtype=array_ty.index_dtype,
@@ -2477,7 +2477,7 @@ def get_raw_memory_impl(self: Var) -> Var:
     array_val = self.get_aggregate()
     assert isinstance(array_val, ArrayValue)
     base_ptr = array_val.base_ptr
-    raw_mem_ty = RawArrayMemoryTy(TileTy(array_ty.dtype, ()))
+    raw_mem_ty = RawArrayMemoryTy(array_ty.dtype)
     [ret] = unflatten_aggregates((base_ptr,), (raw_mem_ty,), (raw_mem_ty,))
     return ret
 
@@ -2513,7 +2513,7 @@ def raw_array_memory_load_offset_impl(self: Var, offset: Var, mask: Var,
         if not is_shape_broadcastable_to(padding_shape, pointer_shape):
             raise TileTypeError(f"Padding shape {padding_shape} is not broadcastable to the"
                                 f" offset shape {pointer_shape}")
-        padding_var = _implicit_cast(padding_value, array_dtype, "Invalid padding value")
+        padding_var = implicit_cast(padding_value, array_dtype, "Invalid padding value")
         padding_var = broadcast_to(padding_var, pointer_shape)
 
     latency_val = require_optional_constant_int(latency)
@@ -2603,7 +2603,7 @@ class TileStore(Operation, opcode="tile_store", memory_effect=MemoryEffect.STORE
         )
 
 
-def _implicit_cast(src: Var, target_dtype: DType, error_context: str) -> Var:
+def implicit_cast(src: Var, target_dtype: DType, error_context: str) -> Var:
     ty = require_tile_maybe_loose_type(src)
     try:
         check_implicit_cast(ty, target_dtype)
@@ -2650,7 +2650,7 @@ def tile_store_impl(array: Var, index: Var, tile: Var, order: Var,
         raise TileTypeError(f"Index size {len(index_items)}"
                             f" does not match the array rank {array_ty.ndim}")
 
-    tile = _implicit_cast(tile, array_ty.dtype, "Stored tile is incompatible with array's dtype")
+    tile = implicit_cast(tile, array_ty.dtype, "Stored tile is incompatible with array's dtype")
     order = require_constant_axis_order(order, array_ty.ndim)
     mem_order = require_constant_enum(memory_order, MemoryOrder)
     mem_scope = require_constant_enum(memory_scope, MemoryScope)
@@ -2687,7 +2687,8 @@ def load_pointer(pointer: Var, mask: Optional[Var], padding_value: Optional[Var]
                  latency: Optional[int]) -> tuple[Var, Var]:
     pointer_ty = pointer.get_type()
     shape = pointer_ty.shape
-    dtype = pointer_ty.dtype.pointee_type.dtype
+    info = PointerInfo(pointer_ty.dtype)
+    dtype = info.pointee_dtype
     result_ty = TileTy(dtype, shape)
     return add_operation(LoadPointer, (result_ty, TokenTy()),
                          pointer=pointer, mask=mask, padding_value=padding_value,
@@ -2764,7 +2765,7 @@ def gather_impl(array: Var, indices: Var, mask: Var, padding_value: Var,
                             f" index shape {pointer_ty}")
     array_dtype = array.get_type().dtype
 
-    padding_value = _implicit_cast(padding_value, array_dtype, "Invalid padding value")
+    padding_value = implicit_cast(padding_value, array_dtype, "Invalid padding value")
     padding_value = broadcast_to(padding_value, pointer_shape)
 
     # Handle the latency hint
@@ -2803,8 +2804,8 @@ def _get_scatter_value(value: Var, pointer_shape: Tuple[int, ...], array_dtype: 
                             f" to the index shape {pointer_shape}")
 
     if cast_dtype:
-        value = _implicit_cast(value, array_dtype,
-                               f"Stored value is incompatible with {array_name}'s dtype")
+        value = implicit_cast(value, array_dtype,
+                              f"Stored value is incompatible with {array_name}'s dtype")
     return broadcast_to(value, pointer_shape)
 
 
@@ -3092,7 +3093,7 @@ def _cast_rmw_update_dtype(update: Var, target_dtype: DType, bitwise: bool) -> V
                 f"({target_dtype})"
             )
         return update
-    return _implicit_cast(update, target_dtype, "Update is incompatible with the target dtype")
+    return implicit_cast(update, target_dtype, "Update is incompatible with the target dtype")
 
 
 def _atomic_rmw_core(int_mode: Optional[AtomicRMWMode],
@@ -3808,7 +3809,7 @@ def _make_reduce_scan_body(
                 raise TileTypeError(f"{op_name} function returned"
                                     f" a tile of non-scalar shape {r_ty.shape}{extra_ctx}")
             error_ctx = f"{op_name} function returned a tile of unexpected dtype{extra_ctx}"
-            cast_results.append(_implicit_cast(r, xi.get_type().dtype, error_ctx))
+            cast_results.append(implicit_cast(r, xi.get_type().dtype, error_ctx))
 
         return tuple(cast_results)
 
@@ -4845,8 +4846,8 @@ def tiled_view_store_impl(self: Var, index: Var, tile: Var, latency: Var, allow_
                             f" to the tiled view's tile shape {view_ty.tile_shape}")
 
     tile = broadcast_to(tile, view_ty.tile_shape)
-    tile = _implicit_cast(tile, view_ty.dtype,
-                          "Stored tile is incompatible with tiled view's dtype")
+    tile = implicit_cast(tile, view_ty.dtype,
+                         "Stored tile is incompatible with tiled view's dtype")
     [array] = self.get_aggregate().as_tuple()
     order = get_default_order(view_ty.ndim)
     _tile_store_impl_inner(array, index_items, tile, order, latency, allow_tma,
@@ -5044,8 +5045,8 @@ def store_advanced_impl(array: Var, indices: Var, tile: Var,
         raise TileTypeError(
             f"Tile shape {tile_ty.shape} does not match the shape implied by "
             f"indices {tile_shape}")
-    tile = _implicit_cast(tile, array_ty.dtype,
-                          "Stored tile dtype is incompatible with array dtype")
+    tile = implicit_cast(tile, array_ty.dtype,
+                         "Stored tile dtype is incompatible with array dtype")
     latency_val = require_optional_constant_int(latency)
     allow_tma_val = require_optional_constant_bool(allow_tma)
     _check_load_store_hints(latency_val, allow_tma_val)
