@@ -16,8 +16,6 @@ from cuda.tile._ir.type import SymbolicTile
 from cuda.tile._ir.typing_support import is_dtype, register_dtypes, to_dtype
 from cuda.tile._datatype import (
     DType,
-    ArithmeticDType,
-    NumericDType,
     bfloat16,
     bool_,
     float8_e8m0fnu,
@@ -40,7 +38,6 @@ from cuda.tile._datatype import (
     is_restricted_float,
     is_unrestricted_float,
     is_arithmetic,
-    is_restricted_arithmetic,
     is_boolean,
     is_integral,
     is_signed,
@@ -48,11 +45,11 @@ from cuda.tile._datatype import (
     default_int_type,
     is_pointer_dtype,
     PointerInfo,
+    _define_dtype, _DTypeDefinition,
 )
 
 
-mbarrier = DType('mbarrier', bitwidth=64, py_type=None, bytecode_type=None)
-register_dtypes({mbarrier: mbarrier}, usable_as_constructor=False)
+mbarrier = _define_dtype('mbarrier', _DTypeDefinition(bitwidth=64))
 
 
 def vector_ty(dtype: DType, length: int) -> TileTy:
@@ -163,7 +160,6 @@ __all__ = [
     "is_restricted_float",
     "is_unrestricted_float",
     "is_arithmetic",
-    "is_restricted_arithmetic",
     "is_boolean",
     "is_integral",
     "is_signed",
@@ -191,8 +187,6 @@ __all__ = [
     "float4_e2m1fn",
     "mbarrier",
     "DType",
-    "NumericDType",
-    "ArithmeticDType",
     "vector_ty",
     "to_torch_dtype",
     "default_int_type",

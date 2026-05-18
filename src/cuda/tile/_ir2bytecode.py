@@ -12,7 +12,8 @@ import warnings
 from cuda.tile import _datatype as datatype
 from cuda.tile._bytecode.attribute import make_load_store_hints
 from cuda.tile._bytecode.version import BytecodeVersion
-from cuda.tile._datatype import get_signedness, is_pointer_dtype, PointerInfo
+from cuda.tile._datatype import get_signedness, is_pointer_dtype, PointerInfo, \
+    dtype_simple_bytecode_type
 from cuda.tile import DType
 import cuda.tile._bytecode as bc
 from cuda.tile._compiler_options import CompilerOptions
@@ -33,7 +34,7 @@ def dtype_typeid(tt: bc.TypeTable, dtype: datatype.DType) -> bc.TypeId:
         pointee_dtype = PointerInfo(dtype).pointee_dtype
         pointee = dtype_typeid(tt, pointee_dtype)
         return tt.pointer(pointee)
-    return tt.simple(dtype._bytecode_type)
+    return tt.simple(dtype_simple_bytecode_type(dtype))
 
 
 def tensor_view_typeid(tt: bc.TypeTable, array_ty: ArrayTy) -> bc.TypeId:
@@ -97,8 +98,8 @@ def _constant_to_bytes(value: int | float, dtype: DType) -> bytes:
     elif datatype.is_float(dtype):
         # Note that TF32 is stored as 3 bytes despite the "32" in its name.
         # Its float_bit_size() is 19 bits, which is rounded up to 24 bits.
-        bits = bc.float_to_bits(value, dtype._bytecode_type)
-        bit_size = bc.float_bit_size(dtype._bytecode_type)
+        bits = bc.float_to_bits(value, dtype_simple_bytecode_type(dtype))
+        bit_size = bc.float_bit_size(dtype_simple_bytecode_type(dtype))
         return bits.to_bytes((bit_size + 7) // 8, "little")
     else:
         raise TypeError(f"Cannot make a constant out of {dtype}")

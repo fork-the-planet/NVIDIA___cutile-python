@@ -7,6 +7,7 @@ import torch
 import operator
 import cuda.lang as cl
 from cuda.lang._datatype import is_integral, is_signed
+from cuda.tile._datatype import numeric_dtype_category
 
 
 _ALL_ARITHMETIC_DTYPES = [
@@ -64,7 +65,7 @@ def test_type_conversions(from_dtype, to_dtype):
     a = torch.zeros(1, dtype=to_torch_dtype, device="cuda")
     b = torch.tensor([2], dtype=from_torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b))
-    assert a[0] == to_cl_dtype._py_type(b[0])
+    assert a[0] == numeric_dtype_category(to_cl_dtype).pytype(b[0])
 
 
 @pytest.mark.parametrize(
@@ -88,7 +89,7 @@ def test_arithmetic(dtype, operation):
     b = torch.tensor([2], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, c))
-    assert c[0] == cl_dtype._py_type(operation(10, 2))
+    assert c[0] == numeric_dtype_category(cl_dtype).pytype(operation(10, 2))
 
 
 @pytest.mark.parametrize(
@@ -110,7 +111,7 @@ def test_unary_arithmetic(dtype, operation):
     a = torch.tensor([10], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, c))
-    expected = cl_dtype._py_type(operation(10))
+    expected = numeric_dtype_category(cl_dtype).pytype(operation(10))
     assert c[0] == expected
 
 
@@ -128,7 +129,7 @@ def test_integer_division(dtype, operation):
     b = torch.tensor([3], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, c))
-    assert c[0] == cl_dtype._py_type(operation(10, 3))
+    assert c[0] == numeric_dtype_category(cl_dtype).pytype(operation(10, 3))
 
 
 @pytest.mark.parametrize("dtype", _SIGNED_INTEGRAL_DTYPES, ids=_dtype_to_str)
@@ -143,7 +144,7 @@ def test_integer_floordiv_signed_rounds_down(dtype):
     b = torch.tensor([2], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, c))
-    assert c[0] == cl_dtype._py_type(-3 // 2)
+    assert c[0] == numeric_dtype_category(cl_dtype).pytype(-3 // 2)
 
 
 @pytest.mark.parametrize("dtype", _INTEGRAL_DTYPES, ids=_dtype_to_str)
@@ -165,7 +166,7 @@ def test_integer_bitwise(dtype, operation, lhs, rhs):
     b = torch.tensor([rhs], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, c))
-    assert c[0] == cl_dtype._py_type(operation(lhs, rhs))
+    assert c[0] == numeric_dtype_category(cl_dtype).pytype(operation(lhs, rhs))
 
 
 @pytest.mark.parametrize("dtype", _INTEGRAL_DTYPES, ids=_dtype_to_str)
@@ -184,8 +185,8 @@ def test_integer_bitwise_multiple_outputs(dtype):
     out_and = torch.tensor([0], dtype=torch_dtype, device="cuda")
     out_or = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, out_and, out_or))
-    assert out_and[0] == cl_dtype._py_type(lhs & rhs)
-    assert out_or[0] == cl_dtype._py_type(lhs | rhs)
+    assert out_and[0] == numeric_dtype_category(cl_dtype).pytype(lhs & rhs)
+    assert out_or[0] == numeric_dtype_category(cl_dtype).pytype(lhs | rhs)
 
 
 @pytest.mark.parametrize("dtype", _INTEGRAL_DTYPES, ids=_dtype_to_str)
@@ -211,7 +212,7 @@ def test_integer_bitshift(dtype, operation, lhs, rhs, signed_only):
     b = torch.tensor([rhs], dtype=torch_dtype, device="cuda")
     c = torch.tensor([0], dtype=torch_dtype, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (a, b, c))
-    assert c[0] == cl_dtype._py_type(operation(lhs, rhs))
+    assert c[0] == numeric_dtype_category(cl_dtype).pytype(operation(lhs, rhs))
 
 
 @pytest.mark.parametrize(

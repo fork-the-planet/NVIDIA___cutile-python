@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import ModuleType, FunctionType
 from typing import Any, Callable, Mapping, Union
 
-from cuda.tile import _datatype as datatype
+from cuda.tile import _datatype as datatype, DType
 from cuda.tile._exception import TileTypeError, TileValueError
 from .type import DataclassInfo, PointerInfoTy
 
@@ -26,17 +26,19 @@ U64_TY = TileTy(datatype.uint64)
 
 # Store mapping from 3rd party dtype objects
 # e.g. np.float32 -> float32, torch.bfloat16 -> bfloat16
-dtype_registry = {}
+_dtype_registry: dict[Any, DTypeSpec] = {}
 
 
 def register_dtypes(dtypes: Mapping[Any, datatype.DType], usable_as_constructor=False):
     cls = DTypeConstructor if usable_as_constructor else DTypeSpec
     for t1, t2 in dtypes.items():
-        dtype_registry[t1] = cls(t2)
+        _dtype_registry[t1] = cls(t2)
 
 
 def to_dtype(x: Any):
-    return dtype_registry[x].dtype
+    if isinstance(x, DType):
+        return x
+    return _dtype_registry[x].dtype
 
 
 def _safe_get(dict, key, default=None):
@@ -47,11 +49,19 @@ def _safe_get(dict, key, default=None):
 
 
 def is_dtype(x: Any):
-    return _safe_get(dtype_registry, x) is not None
+    return isinstance(x, DType) or _safe_get(_dtype_registry, x) is not None
 
 
-def is_dtype_constructor(x: Any):
-    return isinstance(_safe_get(dtype_registry, x), DTypeConstructor)
+def _is_dtype_allowed_as_constructor(dtype: DType) -> bool:
+    # Only allow byte aligned numeric dtypes as constructors
+    return datatype.is_numeric(dtype) and (dtype.bitwidth % 8 == 0)
+
+
+def is_dtype_constructor(x: Any) -> bool:
+    if isinstance(x, DType):
+        return _is_dtype_allowed_as_constructor(x)
+    else:
+        return isinstance(_safe_get(_dtype_registry, x), DTypeConstructor)
 
 
 # Store mapping from a type to a handler that convert value of that type to IR Type
@@ -119,7 +129,7 @@ BUILTIN_FUNCS = {
 def get_signature(f) -> inspect.Signature:
     if stub := BUILTIN_FUNCS.get(f):
         f = stub
-    elif f in dtype_registry:
+    elif is_dtype_constructor(f):
         # Data type constructors
         f = lambda x=0, /: None  # noqa: E731
     return inspect.signature(f)
@@ -132,7 +142,7 @@ def is_supported_builtin_func(x: Any) -> bool:
 def typeof_pyval(val) -> Type:
     if val is None:
         return NONE
-    if (t := _safe_get(dtype_registry, type(val))):
+    if (t := _safe_get(_dtype_registry, type(val))):
         return TileTy(t.dtype)
     if isinstance(val, bool):
         return TileTy(datatype.bool_)
@@ -165,7 +175,12 @@ def typeof_pyval(val) -> Type:
         return FunctionTy(val)
     if is_supported_builtin_func(val):
         return FunctionTy(val)
-    if (t := _safe_get(dtype_registry, val)) is not None:
+    if isinstance(val, datatype.DType):
+        if _is_dtype_allowed_as_constructor(val):
+            return DTypeConstructor(val)
+        else:
+            return DTypeSpec(val)
+    if (t := _safe_get(_dtype_registry, val)) is not None:
         return t
     if isinstance(val, datatype.PointerInfo):
         return PointerInfoTy(val)
@@ -246,14 +261,6 @@ def get_dataclass_info(cls) -> DataclassInfo:
 
     init_signature = inspect.signature(cls.__init__)
     return DataclassInfo(cls, field_names, field_name_to_idx, init_signature)
-
-
-# =====CuTile native support ===========
-# register cuTile native dtype types
-for dtype in datatype.dtype_to_enum:
-    # only allow byte aligned dtypes as constructors
-    usable_as_constructor = (dtype.bitwidth % 8 == 0)
-    register_dtypes({dtype: dtype}, usable_as_constructor)
 
 
 # ========= Numpy support ===========

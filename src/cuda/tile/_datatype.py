@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
-from typing import Optional, Any, Callable, Tuple
+import threading
+from dataclasses import dataclass
+from functools import cache
+from typing import Optional, Tuple
 from enum import IntEnum
 
 from cuda.tile._exception import TileTypeError
@@ -17,9 +20,7 @@ __all__ = ["bool_", "uint8", "uint16", "uint32", "uint64",
            "int8", "int16", "int32", "int64",
            "float16", "float32", "float64",
            "bfloat16", "tfloat32", "float8_e4m3fn", "float8_e5m2",
-           "float8_e8m0fnu", "float4_e2m1fn",
-           "DType", "NumericDType", "ArithmeticDType",
-           "NumericDTypeCategories"]
+           "float8_e8m0fnu", "float4_e2m1fn", "DType"]
 
 
 class DType:
@@ -34,178 +35,35 @@ class DType:
     They can be |kernel| parameters.
     """
 
-    def __init__(self, name: str, bitwidth: int, py_type: Callable[[Any], Any] | None,
-                 bytecode_type: bc.SimpleType | None):
-        self._name = name
-        self._bitwidth = bitwidth
-        self._py_type = py_type
-        self._bytecode_type = bytecode_type
+    def __new__(self):
+        raise TypeError("DType objects cannot be created")
+
+    def __reduce__(self):
+        return _define_dtype, (self.__name__, _dtype_defs[self])
 
     @property
     @function(host=True, tile=False)
     def bitwidth(self):
         """The number of bits in an element of the |data type|."""
-        return self._bitwidth
+        return _dtype_defs[self].bitwidth
 
     @property
     @function(host=True, tile=False)
     def name(self):
         """The name of the |data type|."""
-        return self._name
-
-    @property
-    @function(host=True, tile=False)
-    def __name__(self) -> str:
-        return self._name
+        return self.__name__
 
     @function(host=True, tile=False)
     def __repr__(self):
-        return f"<DType '{self._name}'>"
+        return f"<DType '{self.__name__}'>"
 
     @function(host=True, tile=False)
     def __str__(self):
-        return self._name
+        return self.__name__
 
-    @function
-    def __call__(self, value):
+    @stub
+    def __call__(self, value, /):
         """Construct a Scalar of this |data type| from a value."""
-
-    @function(host=True, tile=True)
-    def __eq__(self, other):
-        return isinstance(other, DType) and self._name == other._name
-
-    @function(host=True, tile=False)
-    def __hash__(self):
-        return hash(self._name)
-
-
-class NumericDType(DType):
-    """A *numeric* |dtype| represents numbers."""
-
-
-class ArithmeticDType(NumericDType):
-    """An *arithmetic* |dtype| is a |numeric dtype| that supports general arithmetic operations
-    such as addition, subtraction, multiplication, and division."""
-
-
-bool_ = ArithmeticDType('bool_', 8, bool, bc.SimpleType.I1)
-bool_.__doc__ = """A 8-bit |arithmetic dtype| (``True`` or ``False``)."""
-
-uint8 = ArithmeticDType('uint8', 8, int, bc.SimpleType.I8)
-uint8.__doc__ = """A 8-bit unsigned integer |arithmetic dtype| whose values exist on the interval \
-[0, +256]."""
-
-uint16 = ArithmeticDType('uint16', 16, int, bc.SimpleType.I16)
-uint16.__doc__ = """A 16-bit unsigned integer |arithmetic dtype| whose values exist on the \
-interval [0, +65,536]."""
-
-uint32 = ArithmeticDType('uint32', 32, int, bc.SimpleType.I32)
-uint32.__doc__ = """A 32-bit unsigned integer |arithmetic dtype| whose values exist on the \
-interval [0, +4,294,967,295]."""
-
-uint64 = ArithmeticDType('uint64', 64, int, bc.SimpleType.I64)
-uint64.__doc__ = """A 64-bit unsigned integer |arithmetic dtype| whose values exist on the \
-interval [0, +18,446,744,073,709,551,615]."""
-
-int8 = ArithmeticDType('int8', 8, int, bc.SimpleType.I8)
-int8.__doc__ = """A 8-bit signed integer |arithmetic dtype| whose values exist on the interval \
-[−128, +127]."""
-
-int16 = ArithmeticDType('int16', 16, int, bc.SimpleType.I16)
-int16.__doc__ = """A 16-bit signed integer |arithmetic dtype| whose values exist on the interval \
-[−32,768, +32,767]."""
-
-int32 = ArithmeticDType('int32', 32, int, bc.SimpleType.I32)
-int32.__doc__ = """A 32-bit signed integer |arithmetic dtype| whose values exist on the interval \
-[−2,147,483,648, +2,147,483,647]."""
-
-int64 = ArithmeticDType('int64', 64, int, bc.SimpleType.I64)
-int64.__doc__ = """A 64-bit signed integer |arithmetic dtype| whose values exist on the interval \
-[−9,223,372,036,854,775,808, +9,223,372,036,854,775,807]."""
-
-float16 = ArithmeticDType('float16', 16, float, bc.SimpleType.F16)
-float16.__doc__ = """A IEEE 754 half-precision (16-bit) binary floating-point |arithmetic dtype| \
-(see |IEEE 754-2019|)."""
-
-float32 = ArithmeticDType('float32', 32, float, bc.SimpleType.F32)
-float32.__doc__ = """A IEEE 754 single-precision (32-bit) binary floating-point |arithmetic dtype| \
-(see |IEEE 754-2019|)."""
-
-float64 = ArithmeticDType('float64', 64, float, bc.SimpleType.F64)
-float64.__doc__ = """A IEEE 754 double-precision (64-bit) binary floating-point |arithmetic dtype| \
-(see |IEEE 754-2019|)."""
-
-bfloat16 = ArithmeticDType('bfloat16', 16, float, bc.SimpleType.BF16)
-bfloat16.__doc__ = """A 16-bit floating-point |arithmetic dtype| with 1 sign bit, 8 exponent bits, \
-and 7 mantissa bits."""
-
-tfloat32 = NumericDType("tfloat32", 32, float, bc.SimpleType.TF32)
-tfloat32.__doc__ = """A 32-bit tensor floating-point |numeric dtype| with 1 sign \
-bit, 8 exponent bits, and 10 mantissa bits (19-bit representation stored in 32-bit container)."""
-
-float8_e4m3fn = NumericDType("float8_e4m3fn", 8, float, bc.SimpleType.F8E4M3FN)
-float8_e4m3fn.__doc__ = """An 8-bit floating-point |numeric dtype| with 1 sign bit, \
-4 exponent bits, and 3 mantissa bits."""
-
-float8_e5m2 = NumericDType("float8_e5m2", 8, float, bc.SimpleType.F8E5M2)
-float8_e5m2.__doc__ = """An 8-bit floating-point |numeric dtype| with 1 sign bit, \
-5 exponent bits, and 2 mantissa bits."""
-
-float8_e8m0fnu = NumericDType("float8_e8m0fnu", 8, float, bc.SimpleType.F8E8M0FNU)
-float8_e8m0fnu.__doc__ = """An 8-bit floating-point |numeric dtype| with no sign bit, \
-8 exponent bits, and 0 mantissa bits."""
-
-float4_e2m1fn = NumericDType("float4_e2m1fn", 4, float, bc.SimpleType.F4E2M1FN)
-float4_e2m1fn.__doc__ = """A 4-bit floating-point |numeric dtype| with 1 sign bit, \
-2 exponent bits, and 1 mantissa bit."""
-
-
-class DTypeEnum(IntEnum):
-    B1 = 0
-    U8 = 1
-    U16 = 2
-    U32 = 3
-    U64 = 4
-    I8 = 5
-    I16 = 6
-    I32 = 7
-    I64 = 8
-    F16 = 9
-    F32 = 10
-    F64 = 11
-    BF = 12
-    TF32 = 13
-    F8E4M3FN = 14
-    F8E5M2 = 15
-    F8E8M0FNU = 16
-    F4E2M1FN = 17
-
-
-dtype_to_enum = {
-    bool_: DTypeEnum.B1,
-    uint8: DTypeEnum.U8,
-    uint16: DTypeEnum.U16,
-    uint32: DTypeEnum.U32,
-    uint64: DTypeEnum.U64,
-    int8: DTypeEnum.I8,
-    int16: DTypeEnum.I16,
-    int32: DTypeEnum.I32,
-    int64: DTypeEnum.I64,
-    float16: DTypeEnum.F16,
-    float32: DTypeEnum.F32,
-    float64: DTypeEnum.F64,
-    bfloat16: DTypeEnum.BF,
-    tfloat32: DTypeEnum.TF32,
-    float8_e4m3fn: DTypeEnum.F8E4M3FN,
-    float8_e5m2: DTypeEnum.F8E5M2,
-    float8_e8m0fnu: DTypeEnum.F8E8M0FNU,
-    float4_e2m1fn: DTypeEnum.F4E2M1FN,
-}
-_enum_to_dtype = dict((i, t) for t, i in dtype_to_enum.items())
-
-
-default_int_type = int32
-default_float_type = float32
 
 
 class NumericDTypeCategory(IntEnum):
@@ -214,40 +72,183 @@ class NumericDTypeCategory(IntEnum):
     Float = 2
     RestrictedFloat = 3
 
+    @property
+    def pytype(self) -> type:
+        match self:
+            case NumericDTypeCategory.Boolean: return bool
+            case NumericDTypeCategory.Integral: return int
+            case NumericDTypeCategory.Float: return float
+            case NumericDTypeCategory.RestrictedFloat: return float
+            case _: assert False, self
 
-class NumericDTypeCategories:
-    """|Numeric dtypes| are grouped into categories, which dictate what
-    promotions and conversions are allowed.
+    @property
+    def arithmetic(self) -> bool:
+        match self:
+            case NumericDTypeCategory.Boolean: return True
+            case NumericDTypeCategory.Integral: return True
+            case NumericDTypeCategory.Float: return True
+            case NumericDTypeCategory.RestrictedFloat: return False
+            case _: assert False, self
+
+
+class IntegerInfo:
     """
-    Boolean = [bool_]
-    Integral = [uint8, uint16, uint32, uint64, int8, int16, int32, int64]
-    Float = [float16, float32, float64, bfloat16]
-    RestrictedFloat = [tfloat32, float8_e4m3fn, float8_e5m2, float8_e8m0fnu, float4_e2m1fn]
+    Machine information for integer data types, similar to numpy.iinfo.
+    """
+    @stub(host=True)
+    def __init__(self, dtype: DType):
+        definition = _dtype_defs[dtype]
+        if not isinstance(definition, _IntegerDTypeDefinition):
+            raise TypeError(f"'{dtype}' is not an integer dtype")
+        self._dtype = dtype
+        self._definition = definition
 
-    @classmethod
-    def get_category(cls, t: DType) -> NumericDTypeCategory:
-        """Return the category for a given |dtype|."""
-        if t in cls.Boolean:
-            return NumericDTypeCategory.Boolean
-        elif t in cls.Integral:
-            return NumericDTypeCategory.Integral
-        elif t in cls.Float:
-            return NumericDTypeCategory.Float
-        elif t in cls.RestrictedFloat:
-            return NumericDTypeCategory.RestrictedFloat
-        raise RuntimeError(f'Unknown dtype category for {t}')
+    @property
+    def dtype(self) -> DType:
+        return self._dtype
+
+    @property
+    def bits(self) -> int:
+        return self._definition.bitwidth
+
+    @property
+    def min(self) -> int:
+        return self._definition.get_min_value()
+
+    @property
+    def max(self) -> int:
+        return self._definition.get_max_value()
+
+    def __eq__(self, other):
+        return isinstance(other, IntegerInfo) and self._dtype == other._dtype
+
+    def __hash__(self):
+        return hash(self._dtype)
 
 
-#: All numeric |dtypes|.
-numeric_dtypes = (NumericDTypeCategories.Boolean +
-                  NumericDTypeCategories.Integral +
-                  NumericDTypeCategories.Float +
-                  NumericDTypeCategories.RestrictedFloat)
+@dataclass(frozen=True, kw_only=True)
+class _DTypeDefinition:
+    bitwidth: int
+    numeric_category: NumericDTypeCategory | None = None
+    simple_bytecode_type: bc.SimpleType | None = None
 
-#: All arithmetic |dtypes|.
-arithmetic_dtypes = (NumericDTypeCategories.Boolean +
-                     NumericDTypeCategories.Integral +
-                     NumericDTypeCategories.Float)
+
+@dataclass(frozen=True, kw_only=True)
+class _IntegerDTypeDefinition(_DTypeDefinition):
+    signed: bool
+
+    def get_min_value(self) -> int:
+        return -(1 << (self.bitwidth - 1)) if self.signed else 0
+
+    def get_max_value(self) -> int:
+        return (1 << (self.bitwidth - 1)) - 1 if self.signed else (1 << self.bitwidth) - 1
+
+
+@dataclass(frozen=True, kw_only=True)
+class _PointerDTypeDefinition(_DTypeDefinition):
+    pointee_dtype: DType | None  # None for opaque pointers
+    memory_space: MemorySpace
+
+
+_dtype_defs: dict[DType, _DTypeDefinition] = dict()
+_dtype_by_name: dict[str, DType] = dict()
+_dtype_lock = threading.Lock()
+
+
+def _define_dtype(name: str, definition: _DTypeDefinition) -> DType:
+    assert isinstance(definition, _DTypeDefinition)
+    with _dtype_lock:
+        if name in _dtype_by_name:
+            existing = _dtype_by_name[name]
+            assert _dtype_defs[existing] == definition
+            return existing
+
+        dtype = object.__new__(DType)
+        dtype.__name__ = name
+        _dtype_defs[dtype] = definition
+        _dtype_by_name[name] = dtype
+        return dtype
+
+
+def _numeric_dtype(name: str,
+                   bitwidth: int,
+                   category: NumericDTypeCategory,
+                   bc_type: bc.SimpleType) -> DType:
+    definition = _DTypeDefinition(bitwidth=bitwidth,
+                                  numeric_category=category,
+                                  simple_bytecode_type=bc_type)
+    return _define_dtype(name, definition)
+
+
+def _integer_dtype(name: str, bitwidth: int, signed: bool, bc_type: bc.SimpleType) -> DType:
+    definition = _IntegerDTypeDefinition(bitwidth=bitwidth,
+                                         numeric_category=NumericDTypeCategory.Integral,
+                                         simple_bytecode_type=bc_type,
+                                         signed=signed)
+    dtype = _define_dtype(name, definition)
+    signedness = "signed" if signed else "unsigned"
+    dtype.__doc__ = (f"{bitwidth}-bit {signedness} integer |arithmetic dtype| with values"
+                     f" on the interval"
+                     f" [{definition.get_min_value()}, +{definition.get_max_value()}]")
+    return dtype
+
+
+bool_ = _numeric_dtype('bool_', 8, NumericDTypeCategory.Boolean, bc.SimpleType.I1)
+bool_.__doc__ = """A 8-bit |arithmetic dtype| (``True`` or ``False``)."""
+
+uint8 = _integer_dtype('uint8', 8, False, bc.SimpleType.I8)
+uint16 = _integer_dtype('uint16', 16, False, bc.SimpleType.I16)
+uint32 = _integer_dtype('uint32', 32, False, bc.SimpleType.I32)
+uint64 = _integer_dtype('uint64', 64, False, bc.SimpleType.I64)
+int8 = _integer_dtype('int8', 8, True, bc.SimpleType.I8)
+int16 = _integer_dtype('int16', 16, True, bc.SimpleType.I16)
+int32 = _integer_dtype('int32', 32, True, bc.SimpleType.I32)
+int64 = _integer_dtype('int64', 64, True, bc.SimpleType.I64)
+
+float16 = _numeric_dtype('float16', 16, NumericDTypeCategory.Float, bc.SimpleType.F16)
+float16.__doc__ = """A IEEE 754 half-precision (16-bit) binary floating-point |arithmetic dtype| \
+(see |IEEE 754-2019|)."""
+
+float32 = _numeric_dtype('float32', 32, NumericDTypeCategory.Float, bc.SimpleType.F32)
+float32.__doc__ = """A IEEE 754 single-precision (32-bit) binary floating-point |arithmetic dtype| \
+(see |IEEE 754-2019|)."""
+
+float64 = _numeric_dtype('float64', 64, NumericDTypeCategory.Float, bc.SimpleType.F64)
+float64.__doc__ = """A IEEE 754 double-precision (64-bit) binary floating-point |arithmetic dtype| \
+(see |IEEE 754-2019|)."""
+
+bfloat16 = _numeric_dtype('bfloat16', 16, NumericDTypeCategory.Float, bc.SimpleType.BF16)
+bfloat16.__doc__ = """A 16-bit floating-point |arithmetic dtype| with 1 sign bit, 8 exponent bits, \
+and 7 mantissa bits."""
+
+tfloat32 = _numeric_dtype("tfloat32", 32, NumericDTypeCategory.RestrictedFloat, bc.SimpleType.TF32)
+tfloat32.__doc__ = """A 32-bit tensor floating-point |numeric dtype| with 1 sign \
+bit, 8 exponent bits, and 10 mantissa bits (19-bit representation stored in 32-bit container)."""
+
+float8_e4m3fn = _numeric_dtype("float8_e4m3fn", 8, NumericDTypeCategory.RestrictedFloat,
+                               bc.SimpleType.F8E4M3FN)
+float8_e4m3fn.__doc__ = """An 8-bit floating-point |numeric dtype| with 1 sign bit, \
+4 exponent bits, and 3 mantissa bits."""
+
+float8_e5m2 = _numeric_dtype("float8_e5m2", 8, NumericDTypeCategory.RestrictedFloat,
+                             bc.SimpleType.F8E5M2)
+float8_e5m2.__doc__ = """An 8-bit floating-point |numeric dtype| with 1 sign bit, \
+5 exponent bits, and 2 mantissa bits."""
+
+float8_e8m0fnu = _numeric_dtype("float8_e8m0fnu", 8, NumericDTypeCategory.RestrictedFloat,
+                                bc.SimpleType.F8E8M0FNU)
+float8_e8m0fnu.__doc__ = """An 8-bit floating-point |numeric dtype| with no sign bit, \
+8 exponent bits, and 0 mantissa bits."""
+
+float4_e2m1fn = _numeric_dtype("float4_e2m1fn", 4, NumericDTypeCategory.RestrictedFloat,
+                               bc.SimpleType.F4E2M1FN)
+float4_e2m1fn.__doc__ = """A 4-bit floating-point |numeric dtype| with 1 sign bit, \
+2 exponent bits, and 1 mantissa bit."""
+
+
+default_int_type = int32
+default_float_type = float32
+
 
 #: Unsigned integral |dtypes|. These |dtypes| are arithmetic.
 unsigned_integral_dtypes = [uint64, uint32, uint16, uint8]
@@ -256,18 +257,44 @@ unsigned_integral_dtypes = [uint64, uint32, uint16, uint8]
 signed_integral_dtypes = [int64, int32, int16, int8]
 
 
+def is_numeric(t: DType) -> bool:
+    return _dtype_defs[t].numeric_category is not None
+
+
+def numeric_dtype_category(t: DType) -> NumericDTypeCategory:
+    cat = _dtype_defs[t].numeric_category
+    if cat is None:
+        raise ValueError(f"{t} is not a numeric dtype")
+    return cat
+
+
+def dtype_simple_bytecode_type(t: DType) -> bc.SimpleType:
+    ret = _dtype_defs[t].simple_bytecode_type
+    assert ret is not None
+    return ret
+
+
 def is_boolean(t: DType) -> bool:
-    return t in NumericDTypeCategories.Boolean
+    return _dtype_defs[t].numeric_category == NumericDTypeCategory.Boolean
 
 
 def is_integral(t: DType) -> bool:
-    return t in NumericDTypeCategories.Integral
+    return _dtype_defs[t].numeric_category == NumericDTypeCategory.Integral
 
 
 def is_signed(t: DType) -> bool:
     """Returns True if the |dtype| is a signed numeric type, such as a signed integer or
     a floating-point type."""
-    return t in numeric_dtypes and t not in unsigned_integral_dtypes and t != bool_
+    info = _dtype_defs[t]
+    match info.numeric_category:
+        case None: return False
+        case NumericDTypeCategory.Boolean: return False
+        case NumericDTypeCategory.Integral:
+            assert isinstance(info, _IntegerDTypeDefinition)
+            return info.signed
+        case NumericDTypeCategory.Float: return True
+        case NumericDTypeCategory.RestrictedFloat: return True
+        case _: assert False, info.numeric_category
 
 
 _signedness = (bc.Signedness.Unsigned, bc.Signedness.Signed)
@@ -278,25 +305,23 @@ def get_signedness(t: DType) -> bc.Signedness:
 
 
 def is_float(t: DType) -> bool:
-    return t in NumericDTypeCategories.Float or t in NumericDTypeCategories.RestrictedFloat
+    return _dtype_defs[t].numeric_category in (NumericDTypeCategory.Float,
+                                               NumericDTypeCategory.RestrictedFloat)
 
 
 def is_unrestricted_float(t: DType) -> bool:
-    return t in NumericDTypeCategories.Float
+    return _dtype_defs[t].numeric_category == NumericDTypeCategory.Float
 
 
 def is_restricted_float(t: DType) -> bool:
-    return t in NumericDTypeCategories.RestrictedFloat
+    return _dtype_defs[t].numeric_category == NumericDTypeCategory.RestrictedFloat
 
 
 def is_arithmetic(t: DType) -> bool:
     """Returns True if the |dtype| supports general arithmetic operations such as
     addition, subtraction, multiplication, and division."""
-    return t in arithmetic_dtypes
-
-
-def is_restricted_arithmetic(t: DType) -> bool:
-    return t in NumericDTypeCategories.RestrictedFloat
+    cat = _dtype_defs[t].numeric_category
+    return cat is not None and cat.arithmetic
 
 
 def broadcast_shapes(s1: Tuple[int, ...], s2: Tuple[int, ...]) -> Tuple[int, ...]:
@@ -320,28 +345,27 @@ def broadcast_shapes(s1: Tuple[int, ...], s2: Tuple[int, ...]) -> Tuple[int, ...
 
 # ============= Arithmetic Promotion ==============
 
-
 class _DTypePromotionImpl:
 
     # shorter alias to make the table
-    b1 = DTypeEnum.B1
-    u8 = DTypeEnum.U8
-    u16 = DTypeEnum.U16
-    u32 = DTypeEnum.U32
-    u64 = DTypeEnum.U64
-    i8 = DTypeEnum.I8
-    i16 = DTypeEnum.I16
-    i32 = DTypeEnum.I32
-    i64 = DTypeEnum.I64
-    f16 = DTypeEnum.F16
-    f32 = DTypeEnum.F32
-    f64 = DTypeEnum.F64
-    bf = DTypeEnum.BF
-    tf = DTypeEnum.TF32
-    f8e4m3fn = DTypeEnum.F8E4M3FN
-    f8e5m2 = DTypeEnum.F8E5M2
-    f8e8m0fnu = DTypeEnum.F8E8M0FNU
-    f4e2m1fn = DTypeEnum.F4E2M1FN
+    b1 = bool_
+    u8 = uint8
+    u16 = uint16
+    u32 = uint32
+    u64 = uint64
+    i8 = int8
+    i16 = int16
+    i32 = int32
+    i64 = int64
+    f16 = float16
+    f32 = float32
+    f64 = float64
+    bf = bfloat16
+    tf32 = tfloat32
+    f8e4m3fn = float8_e4m3fn
+    f8e5m2 = float8_e5m2
+    f8e8m0fnu = float8_e8m0fnu
+    f4e2m1fn = float4_e2m1fn
     na = None
 
     # Entries for restricted arithmetic dtypes will never be reached, but we need to keep them
@@ -355,40 +379,43 @@ class _DTypePromotionImpl:
     # Signed and unsigned requires explicit type cast
     # Restricted floats requires explicit type cast
     # Float16 and BFloat 16 requires explicit type cast
+
+    _order = [
+      b1,  u8,  u16, u32, u64, i8,  i16, i32, i64, f16, f32, f64, bf,  tf32, f8e4m3fn, f8e5m2,    f8e8m0fnu, f4e2m1fn   # noqa
+    ]
     _common_dtype_table = [
-     # b1, u8, u16, u32, u64, i8,  i16, i32, i64, f16, f32, f64, bf,  tf, f8e4m3fn, f8e5m2, f8e8m0fnu, f4e2m1fn    # noqa
-     [b1,  u8,  u16, u32, u64, i8,  i16, i32, i64, f16, f32, f64, bf,  na,  na,       na,        na,        na],        # b1  # noqa
-     [u8,  u8,  u16, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,  na,       na,        na,        na],        # u8  # noqa
-     [u16, u16, u16, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,  na,       na,        na,        na],        # u16  # noqa
-     [u32, u32, u32, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,  na,       na,        na,        na],        # u32  # noqa
-     [u64, u64, u64, u64, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,  na,       na,        na,        na],        # u64  # noqa
-     [i8,  na,  na,  na,  na,  i8,  i16, i32, i64, f16, f32, f64, bf,  na,  na,       na,        na,        na],        # i8  # noqa
-     [i16, na,  na,  na,  na,  i16, i16, i32, i64, f16, f32, f64, bf,  na,  na,       na,        na,        na],        # i16  # noqa
-     [i32, na,  na,  na,  na,  i32, i32, i32, i64, f16, f32, f64, bf,  na,  na,       na,        na,        na],        # i32  # noqa
-     [i64, na,  na,  na,  na,  i64, i64, i64, i64, f16, f32, f64, bf,  na,  na,       na,        na,        na],        # i64  # noqa
-     [f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f32, f64, na,  na,  na,       na,        na,        na],        # f16  # noqa
-     [f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f64, f32, na,  na,       na,        na,        na],        # f32  # noqa
-     [f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, na,  na,       na,        na,        na],        # f64  # noqa
-     [bf,  bf,  bf,  bf,  bf,  bf,  bf,  bf,  bf,  na,  f32, f64, bf,  na,  na,       na,        na,        na],        # bf  # noqa
-     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  tf,  na,       na,        na,        na],        # tf  # noqa
-     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  f8e4m3fn, na,        na,        na],        # f8e4m3fn  # noqa
-     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,       f8e5m2,    na,        na],        # f8e5m2  # noqa
-     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,       na,        f8e8m0fnu, na],        # f8e8m0fnu  # noqa
-     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,       na,        na,        f4e2m1fn],  # f4e2m1fn  # noqa
+     [b1,  u8,  u16, u32, u64, i8,  i16, i32, i64, f16, f32, f64, bf,  na,   na,       na,        na,        na],        # b1  # noqa
+     [u8,  u8,  u16, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,   na,       na,        na,        na],        # u8  # noqa
+     [u16, u16, u16, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,   na,       na,        na,        na],        # u16  # noqa
+     [u32, u32, u32, u32, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,   na,       na,        na,        na],        # u32  # noqa
+     [u64, u64, u64, u64, u64, na,  na,  na,  na,  f16, f32, f64, bf,  na,   na,       na,        na,        na],        # u64  # noqa
+     [i8,  na,  na,  na,  na,  i8,  i16, i32, i64, f16, f32, f64, bf,  na,   na,       na,        na,        na],        # i8  # noqa
+     [i16, na,  na,  na,  na,  i16, i16, i32, i64, f16, f32, f64, bf,  na,   na,       na,        na,        na],        # i16  # noqa
+     [i32, na,  na,  na,  na,  i32, i32, i32, i64, f16, f32, f64, bf,  na,   na,       na,        na,        na],        # i32  # noqa
+     [i64, na,  na,  na,  na,  i64, i64, i64, i64, f16, f32, f64, bf,  na,   na,       na,        na,        na],        # i64  # noqa
+     [f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f32, f64, na,  na,   na,       na,        na,        na],        # f16  # noqa
+     [f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f64, f32, na,   na,       na,        na,        na],        # f32  # noqa
+     [f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, na,   na,       na,        na,        na],        # f64  # noqa
+     [bf,  bf,  bf,  bf,  bf,  bf,  bf,  bf,  bf,  na,  f32, f64, bf,  na,   na,       na,        na,        na],        # bf  # noqa
+     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  tf32, na,       na,        na,        na],        # tf32  # noqa
+     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,   f8e4m3fn, na,        na,        na],        # f8e4m3fn  # noqa
+     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,   na,       f8e5m2,    na,        na],        # f8e5m2  # noqa
+     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,   na,       na,        f8e8m0fnu, na],        # f8e8m0fnu  # noqa
+     [na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,  na,   na,       na,        na,        f4e2m1fn],  # f4e2m1fn  # noqa
     ]
 
     @classmethod
     def promote_dtypes(cls, t1: DType, t2: DType, force_float: bool = False) -> DType:
         if t1 == t2 and (not force_float or is_float(t1)):
             return t1
-        if is_restricted_arithmetic(t1) or is_restricted_arithmetic(t2):
+        if is_restricted_float(t1) or is_restricted_float(t2):
             raise TileTypeError(
                 f"Implicit promotion of {t1} and {t2} is not supported as it involves restricted "
-                f"arithmetic dtypes in an unsupported way. Please perform an explicit cast instead."
+                f"float dtypes. Please perform an explicit cast instead."
             )
         if is_pointer_dtype(t1) or is_pointer_dtype(t2):
             raise TileTypeError("Implicit promotion of pointer dtypes is not supported")
-        idx1, idx2 = dtype_to_enum[t1], dtype_to_enum[t2]
+        idx1, idx2 = cls._order.index(t1), cls._order.index(t2)
         if idx1 >= len(cls._common_dtype_table) or idx2 >= len(cls._common_dtype_table[idx1]):
             raise IndexError(f"Invalid dtypes in common dtype table: {t1}, {t2}")
         ret = cls._common_dtype_table[idx1][idx2]
@@ -396,17 +423,7 @@ class _DTypePromotionImpl:
             msg = (f'Implicit promotion of {t1} and {t2} is not supported. '
                    'Please perform an explict cast instead.')
             raise TileTypeError(msg)
-        res_type = _enum_to_dtype[ret]
-        return res_type if not force_float or is_float(res_type) else default_float_type
-
-
-def get_int_min_max(t: DType) -> Tuple[int, int]:
-    assert is_integral(t)
-    if is_signed(t):
-        n = 1 << (t.bitwidth - 1)
-        return -n, n - 1
-    else:
-        return 0, (1 << t.bitwidth) - 1
+        return ret if not force_float or is_float(ret) else default_float_type
 
 
 _mma_supported_dtypes = {
@@ -499,9 +516,11 @@ def _is_public(dtype_name: str) -> bool:
 def _generate_rst_dtype_promotion_table() -> str:
     """Generate an RST table representation of the dtype promotion rules."""
     # Skip dtypes not exposed in cuda.tile yet. Promomotion table is append only.
-    n = sum(1 for dtype in _enum_to_dtype.values() if _is_public(dtype.name))
-    table = _DTypePromotionImpl._common_dtype_table
-    return _generate_rst_table([row[:n] for row in table[:n]])
+    return _generate_rst_table()
+
+
+def _get_all_public_numeric_dtypes_for_docs():
+    return [dtype for dtype in _DTypePromotionImpl._order if _is_public(dtype.name)]
 
 
 def _generate_rst_numeric_dtypes() -> str:
@@ -509,7 +528,7 @@ def _generate_rst_numeric_dtypes() -> str:
     import cuda.tile
     content = []
 
-    for dtype in numeric_dtypes:
+    for dtype in _get_all_public_numeric_dtypes_for_docs():
         # Skip dtypes not exposed in cuda.tile yet
         if not hasattr(cuda.tile, dtype.name):
             continue
@@ -520,21 +539,17 @@ def _generate_rst_numeric_dtypes() -> str:
     return '\n'.join(content)
 
 
-def _generate_rst_table(common_dtype_table) -> str:
-    # Get table dimensions
-    rows = len(common_dtype_table)
-    if rows == 0:
-        return "Empty promotion table"
-    cols = len(common_dtype_table[0])
+def _generate_rst_table() -> str:
+    short_names = {dtype: short_name.lower()
+                   for short_name, dtype in _DTypePromotionImpl.__dict__.items()
+                   if isinstance(dtype, DType)}
 
     # Get data type names based on table order
-    dtype_names = []
-    for i, enum_val in enumerate(DTypeEnum):
-        if i < rows:
-            dtype_names.append(enum_val.name.lower())
+    public_dtypes = _get_all_public_numeric_dtypes_for_docs()
+    size = len(public_dtypes)
 
     # Determine maximum width for all columns based on dtype names
-    max_name_width = max(len(name) for name in dtype_names) if dtype_names else 1
+    max_name_width = max(len(short_names[dtype]) for dtype in public_dtypes)
     max_name_width = max(max_name_width, len("ERR"))  # Account for "ERR" cells
 
     # Build all column widths with padding
@@ -544,32 +559,31 @@ def _generate_rst_table(common_dtype_table) -> str:
     lines = []
 
     # Generate separator line with same width for all columns
-    sep_line = "+" + "+".join(["-" * col_width] * (cols + 1)) + "+"
-    header_sep_line = "+" + "+".join(["=" * col_width] * (cols + 1)) + "+"
+    sep_line = "+" + "+".join(["-" * col_width] * (size + 1)) + "+"
+    header_sep_line = "+" + "+".join(["=" * col_width] * (size + 1)) + "+"
 
     # Table header
     lines.append(sep_line)
     header_cells = [f" {'':<{col_width-2}} "]
-    for i in range(cols):
-        col_name = dtype_names[i] if i < len(dtype_names) else "?"
+    for dtype in public_dtypes:
+        col_name = short_names[dtype]
         header_cells.append(f" {col_name:<{col_width-2}} ")
     lines.append("|" + "|".join(header_cells) + "|")
     lines.append(header_sep_line)
 
     # Table rows
-    for i, row in enumerate(common_dtype_table):
-        row_name = dtype_names[i] if i < len(dtype_names) else "?"
+    public_indices = [_DTypePromotionImpl._order.index(dtype) for dtype in public_dtypes]
+    for row_dtype, row_index in zip(public_dtypes, public_indices, strict=True):
+        row_name = short_names[row_dtype]
         row_cells = [f" {row_name:<{col_width-2}} "]
 
-        for j, cell in enumerate(row):
-            if j < cols:
-                if cell is None:
-                    cell_str = "ERR"
-                elif isinstance(cell, DTypeEnum):
-                    cell_str = cell.name.lower()
-                else:
-                    cell_str = str(cell)
-                row_cells.append(f" {cell_str:<{col_width-2}} ")
+        for col_dtype, col_index in zip(public_dtypes, public_indices, strict=True):
+            cell = _DTypePromotionImpl._common_dtype_table[row_index][col_index]
+            if cell is None:
+                cell_str = "ERR"
+            else:
+                cell_str = short_names[cell]
+            row_cells.append(f" {cell_str:<{col_width-2}} ")
 
         lines.append("|" + "|".join(row_cells) + "|")
         lines.append(sep_line)
@@ -580,11 +594,8 @@ def _generate_rst_table(common_dtype_table) -> str:
     lines.append("")  # Empty line before bullet points
 
     # Create bullet points for each enum and its corresponding dtype
-    for enum_val, dtype_obj in _enum_to_dtype.items():
-        enum_name = enum_val.name.lower()
-        dtype_name = dtype_obj.name
-        if _is_public(dtype_name):
-            lines.append(f"* {enum_name}: ``{dtype_name}``")
+    for dtype in public_dtypes:
+        lines.append(f"* {short_names[dtype]}: ``{dtype.name}``")
 
     # Add an entry for the error case
     lines.append("* ERR: Implicit promotion between these types is not supported")
@@ -596,28 +607,30 @@ def _generate_rst_table(common_dtype_table) -> str:
 
 
 class PointerInfo:
-    def __new__(cls, dtype: DType) -> "PointerInfo":
-        try:
-            return _pointer_dtype_to_info[dtype]
-        except KeyError:
+    @stub(host=True)
+    def __init__(self, dtype: DType):
+        definition = _dtype_defs[dtype]
+        if not isinstance(definition, _PointerDTypeDefinition):
             raise TypeError(f"'{dtype}' is not a pointer dtype")
+        self._dtype = dtype
+        self._definition = definition
 
     @property
     @stub(host=True)
     def opaque(self) -> bool:
-        return self._pointee_dtype is None
+        return self._definition.pointee_dtype is None
 
     @property
     @stub(host=True)
     def pointee_dtype(self) -> DType:
-        if self._pointee_dtype is None:
+        if self._definition.pointee_dtype is None:
             raise ValueError("Opaque pointer has no pointee dtype")
-        return self._pointee_dtype
+        return self._definition.pointee_dtype
 
     @property
     @stub(host=True)
     def memory_space(self) -> MemorySpace:
-        return self._memory_space
+        return self._definition.memory_space
 
     def __repr__(self):
         if self.opaque:
@@ -632,10 +645,16 @@ class PointerInfo:
 
         return f"PointerInfo({type_str}{memspc_str})"
 
+    def __eq__(self, other):
+        return isinstance(other, PointerInfo) and self._dtype == other._dtype
+
+    def __hash__(self):
+        return hash(self._dtype)
+
 
 @stub(host=True)
 def is_pointer_dtype(dtype: DType) -> bool:
-    return dtype in _pointer_dtype_to_info
+    return isinstance(_dtype_defs[dtype], _PointerDTypeDefinition)
 
 
 @stub(host=True)
@@ -650,12 +669,8 @@ def opaque_pointer_dtype(memory_space: MemorySpace = MemorySpace.GENERIC) -> DTy
     return _get_pointer_dtype(None, memory_space)
 
 
+@cache
 def _get_pointer_dtype(pointee_dtype: DType | None, memory_space: MemorySpace) -> DType:
-    try:
-        return _pointer_dtypes[(pointee_dtype, memory_space)]
-    except KeyError:
-        pass
-
     match memory_space:
         case MemorySpace.SHARED | MemorySpace.TENSOR | MemorySpace.SHARED_CLUSTER:
             bitwidth = 32
@@ -676,17 +691,7 @@ def _get_pointer_dtype(pointee_dtype: DType | None, memory_space: MemorySpace) -
     if len(params) > 0:
         name += "[" + ", ".join(params) + "]"
 
-    dtype = DType(name, bitwidth, None, None)
-    _pointer_dtypes[(pointee_dtype, memory_space)] = dtype
-    info = object.__new__(PointerInfo)
-    info._pointee_dtype = pointee_dtype
-    info._memory_space = memory_space
-    _pointer_dtype_to_info[dtype] = info
-
-    from ._ir.typing_support import register_dtypes
-    register_dtypes({dtype: dtype}, usable_as_constructor=False)
-    return dtype
-
-
-_pointer_dtype_to_info: dict[DType, PointerInfo] = dict()
-_pointer_dtypes: dict[tuple[DType | None, MemorySpace], DType] = dict()
+    return _define_dtype(name,
+                         _PointerDTypeDefinition(bitwidth=bitwidth,
+                                                 pointee_dtype=pointee_dtype,
+                                                 memory_space=memory_space))

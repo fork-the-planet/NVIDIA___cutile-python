@@ -38,7 +38,7 @@ def _require_arith_type(typ: ir_type.Type):
         raise TileTypeError(f"Expected arithmetic type, got {typ=}")
     if typ.shape != () and not ir_type.is_vector_ty(typ):
         raise TileTypeError(f"Expected arithmetic type, got {typ=}")
-    if not isinstance(typ.dtype, datatype.ArithmeticDType):
+    if not datatype.is_arithmetic(typ.dtype):
         raise TileTypeError(f"Expected arithmetic type, got {typ=}")
     return typ
 
@@ -100,7 +100,7 @@ class _OpForDType:
 
 
 def _get_mlir_op_for_op_and_dtype(
-    fn: str, dtype: datatype.ArithmeticDType
+    fn: str, dtype: datatype.DType
 ) -> Callable[[mlir.Value, mlir.Value], mlir.Value] | None:
     _OPERATIONS = {
         "floordiv": _OpForDType(
@@ -206,7 +206,7 @@ def _get_mlir_unary_op_for_op_and_type(
 
 
 def _get_mlir_comparison_op(
-    fn: str, dtype: datatype.ArithmeticDType
+    fn: str, dtype: datatype.DType
 ) -> Callable[[mlir.Value, mlir.Value], mlir.Value] | None:
     if datatype.is_float(dtype):
         match fn:
@@ -597,9 +597,7 @@ class IR2MLIR:
                 "Cannot cast between arithmetic types with different shapes: "
                 f"{src_type} and {dst_type}"
             )
-        if not isinstance(src_type.dtype, datatype.ArithmeticDType) or not isinstance(
-            dst_type.dtype, datatype.ArithmeticDType
-        ):
+        if not datatype.is_arithmetic(src_type.dtype) or not datatype.is_arithmetic(dst_type.dtype):
             raise NotImplementedError(
                 f"Expected arithmetic types, got {src_type=} {dst_type=}"
             )

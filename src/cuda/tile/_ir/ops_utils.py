@@ -19,8 +19,7 @@ import cuda.tile._bytecode as bc
 from .ir import Operation, Builder
 from .type import TileTy, LooselyTypedScalar
 from .typing_support import typeof_pyval
-from .._datatype import DType, _DTypePromotionImpl, NumericDTypeCategory, NumericDTypeCategories, \
-    get_int_min_max
+from .._datatype import DType, _DTypePromotionImpl, NumericDTypeCategory
 
 
 class ComparisonPredicates(Enum):
@@ -246,11 +245,11 @@ def _promote_dtype_and_loosely_typed_constant(dtype: DType,
     assert isinstance(loose_ty, TileTy) and loose_ty.ndim == 0
     loose_dtype = loose_ty.dtype
 
-    cat = NumericDTypeCategories.get_category(dtype)
+    cat = datatype.numeric_dtype_category(dtype)
     if cat == NumericDTypeCategory.RestrictedFloat:
         # Treat restricted floats as regular floats.
         cat = NumericDTypeCategory.Float
-    loose_cat = NumericDTypeCategories.get_category(loose_dtype)
+    loose_cat = datatype.numeric_dtype_category(loose_dtype)
 
     if loose_cat == cat:
         # Both values are of the same dtype category. Use the concrete dtype in this case.
@@ -258,8 +257,8 @@ def _promote_dtype_and_loosely_typed_constant(dtype: DType,
 
         # For integers, verify that the loosely typed constant is within the range of dtype.
         if cat == NumericDTypeCategory.Integral and not force_float:
-            min, max = get_int_min_max(dtype)
-            if not (min <= loose_const <= max):
+            info = datatype.IntegerInfo(dtype)
+            if not (info.min <= loose_const <= info.max):
                 raise TileValueError(f"Integer constant {loose_const} is out of range of {dtype}")
     else:
         # Strongest category always wins
@@ -307,8 +306,8 @@ def _is_implicit_cast_ok(src_dtype: DType, target_dtype: DType) -> bool:
 def check_implicit_cast(src_ty: TileTy | LooselyTypedScalar, target_dtype: DType):
     if isinstance(src_ty, LooselyTypedScalar):
         cocnrete_ty = typeof_pyval(src_ty.value)
-        src_cat = NumericDTypeCategories.get_category(cocnrete_ty.dtype)
-        dst_cat = NumericDTypeCategories.get_category(target_dtype)
+        src_cat = datatype.numeric_dtype_category(cocnrete_ty.dtype)
+        dst_cat = datatype.numeric_dtype_category(target_dtype)
         if dst_cat == NumericDTypeCategory.Boolean:
             if src_cat not in (NumericDTypeCategory.Boolean, NumericDTypeCategory.Integral) \
                     or src_ty.value not in (0, 1):
@@ -316,8 +315,8 @@ def check_implicit_cast(src_ty: TileTy | LooselyTypedScalar, target_dtype: DType
         elif src_cat > dst_cat:
             raise TileTypeError(f"cannot implicitly cast {src_ty.value} to {target_dtype}")
         elif src_cat == dst_cat == NumericDTypeCategory.Integral:
-            min, max = datatype.get_int_min_max(target_dtype)
-            if not (min <= src_ty.value <= max):
+            info = datatype.IntegerInfo(target_dtype)
+            if not (info.min <= src_ty.value <= info.max):
                 raise TileValueError(f"{src_ty.value} is out of range of {target_dtype}")
     else:
         assert isinstance(src_ty, TileTy)

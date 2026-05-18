@@ -58,12 +58,12 @@ from .ops_utils import (
 )
 from .scope import Scope, JumpInfo, ControlFlowInfo
 from .typing_support import (
-    typeof_pyval, dtype_registry, loose_type_of_pyval, get_constant_value, get_dataclass_info,
+    typeof_pyval, loose_type_of_pyval, get_constant_value, get_dataclass_info,
 )
 from .type import (
     PartitionViewTy, StridedViewTy, GatherScatterViewTy, TupleTy, TileTy, NoneType,
     BoundMethodTy, ArrayTy,
-    ListTy, SliceType, DTypeConstructor, RangeIterType, Type,
+    ListTy, SliceType, RangeIterType, Type,
     NONE, ModuleTy, TypeTy, LooselyTypedScalar, DTypeSpec, StringTy, InvalidType,
     ClosureTy, LiveCapturedScope, TokenTy, TiledViewTy, FormattedStringTy,
     StringFormat, FormattedPiece, RawArrayMemoryTy, DataclassTy, IndexSliceTy,
@@ -2018,21 +2018,11 @@ def range_(args: Tuple[Var, ...]) -> Var:
     return make_aggregate(agg_value, ty)
 
 
-def _register_dtype_constructors(f):
-    """
-    Helper decorator to register all DType constructors automatically.
-    """
-    for obj, ty in dtype_registry.items():
-        if isinstance(ty, DTypeConstructor):
-            f = impl(obj, fixed_args=[ty.dtype])(f)
-    return f
-
-
-@_register_dtype_constructors
-def dtype_constructor_impl(new_dtype: DType, x: Var) -> Var:
+def dtype_constructor(new_dtype: DType, x: Var) -> Var:
     if x.is_constant():
+        pytype = datatype.numeric_dtype_category(new_dtype).pytype
         try:
-            const_value = new_dtype._py_type(x.get_constant())
+            const_value = pytype(x.get_constant())
         except (ValueError, TypeError):
             raise TileTypeError(f"Invalid argument type for {new_dtype}")
         return strictly_typed_const(const_value, ty=TileTy(new_dtype))
@@ -3675,7 +3665,7 @@ class TileReduce(Operation, opcode="tile_reduce"):
             x_dtype = get_dtype(x.get_type())
             x_dtype_id = dtype_typeid(ctx.type_table, x_dtype)
             if datatype.is_float(x_dtype):
-                x_dtype_bc = x_dtype._bytecode_type
+                x_dtype_bc = datatype.dtype_simple_bytecode_type(x_dtype)
                 attr = bc.Float(float(id_val), x_dtype_bc, ctx.type_table)
             elif datatype.is_boolean(x_dtype):
                 attr = bc.Bool(bool(id_val))
@@ -4066,7 +4056,7 @@ class TileScan(Operation, opcode="tile_scan"):
             x_dtype = get_dtype(x.get_type())
             x_dtype_id = dtype_typeid(ctx.type_table, x_dtype)
             if datatype.is_float(x_dtype):
-                x_dtype_bc = x_dtype._bytecode_type
+                x_dtype_bc = datatype.dtype_simple_bytecode_type(x_dtype)
                 attr = bc.Float(float(id_val), x_dtype_bc, ctx.type_table)
             elif datatype.is_boolean(x_dtype):
                 attr = bc.Bool(bool(id_val))
@@ -4492,7 +4482,7 @@ def astype(x: Var, dtype: DType) -> Var:
         return x
 
     if x.is_constant():
-        val = dtype._py_type(x.get_constant())
+        val = datatype.numeric_dtype_category(dtype).pytype(x.get_constant())
         return strictly_typed_const(val, TileTy(dtype))
 
     result_ty = TileTy(dtype, x_ty.shape)

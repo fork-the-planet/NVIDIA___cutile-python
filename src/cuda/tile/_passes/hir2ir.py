@@ -19,7 +19,7 @@ from .._ir import hir, ir
 from .._ir.ir import Var, IRContext
 from .._ir.op_impl import ImplRegistry
 from .._ir.ops import loosely_typed_const, end_branch, return_, continue_, \
-    break_, store_var, build_dataclass_instance, build_tuple
+    break_, store_var, build_dataclass_instance, build_tuple, dtype_constructor
 from .._ir.scope import Scope, LocalScope, IntMap
 from .._ir.type import FunctionTy, BoundMethodTy, DTypeConstructor, ClosureTy, \
     ClosureDefaultPlaceholder, StringFormat, TypeTy, TupleTy, BoundMethodValue, TupleValue, \
@@ -257,8 +257,8 @@ async def call(callee_var: Var, args, kwargs) -> Var | None:
                                     builder)
     elif isinstance(callee_ty, DTypeConstructor):
         arg_list = _bind_args(_DTYPE_CONSTRUCTOR_SIGNATURE, callee_ty.dtype.name, args, kwargs)
-        # TODO: use this opportunity to simplify the @impl registration in ops.py
-        return await _call_builtin(callee_ty.dtype, arg_list, builder)
+        [x] = arg_list
+        return dtype_constructor(callee_ty.dtype, x)
     elif isinstance(callee_ty, ClosureTy):
         func_name = callee_ty.func_hir.desc.name
         if func_name is None:

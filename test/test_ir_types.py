@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) <2025> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+import copy
+import pickle
 
 import pytest
 
@@ -18,11 +20,14 @@ from cuda.tile._datatype import (
     uint64, uint32, uint16, uint8, bfloat16,
     tfloat32, float8_e4m3fn, float8_e5m2,
     is_boolean, is_integral, is_float, is_unrestricted_float, is_restricted_float, is_signed,
+    IntegerInfo, opaque_pointer_dtype, pointer_dtype, PointerInfo,
 )
 from cuda.tile._ir.ops_utils import promote_dtypes, check_implicit_cast
 from cuda.tile._ir.typing_support import to_dtype, typeof_pyval
 import torch
 import numpy as np
+
+from cuda.tile._memory_model import MemorySpace
 
 
 def test_builtin_types():
@@ -59,8 +64,11 @@ def test_builtin_types():
     assert is_restricted_float(float8_e8m0fnu)
     assert is_restricted_float(float4_e2m1fn)
 
-    # type equality
-    assert float16 == DType('float16', 16, float, None)
+    # Pickle-unpickle roundtrip
+    assert pickle.loads(pickle.dumps(float16)) is float16
+
+    # Deep copy roundtrip
+    assert copy.deepcopy(float16) is float16
 
 
 def test_tuple_type():
@@ -338,3 +346,23 @@ def test_typeof_pyval():
     assert tp(np.float64(1.0)) == TileTy(float64)
     assert tp(True) == TileTy(bool_)
     assert tp(None) == NONE
+
+
+def test_integer_info_equality():
+    assert IntegerInfo(int32) == IntegerInfo(int32)
+    assert IntegerInfo(int32) != IntegerInfo(int64)
+
+
+def test_pointer_info_equality():
+    dtypes = [
+        opaque_pointer_dtype(),
+        opaque_pointer_dtype(MemorySpace.SHARED),
+        pointer_dtype(int32),
+        pointer_dtype(int32, MemorySpace.SHARED),
+        pointer_dtype(int64),
+        pointer_dtype(int64, MemorySpace.SHARED)
+    ]
+
+    for i, a in enumerate(dtypes):
+        for j, b in enumerate(dtypes):
+            assert (PointerInfo(a) == PointerInfo(b)) == (i == j)

@@ -9,6 +9,7 @@ import traceback
 import torch
 import numpy as np
 import pytest
+
 from util import FdCaptureRunner
 import cuda.tile as ct
 from cuda.tile._bytecode.version import BytecodeVersion
@@ -17,7 +18,8 @@ from conftest import get_tileiras_version
 from cuda.tile._datatype import (bool_,
                                  float16, float32, float64, bfloat16,
                                  int64, uint8, uint16, uint32, uint64,
-                                 NumericDTypeCategories, is_float)
+                                 is_float, numeric_dtype_category,
+                                 NumericDTypeCategory, _DTypePromotionImpl)
 
 # opt_level=0 required for correct print ordering in tileiras < 13.2
 _DEFAULT_OPT_LEVEL = CompilerOptions.__dataclass_fields__['opt_level'].default
@@ -265,16 +267,22 @@ def _test_print_1d(shape, tile, kernel, dtype):
         assert expected_out in actual_outs
 
 
+all_int_and_float_dtypes = [
+    x for x in _DTypePromotionImpl._order
+    if numeric_dtype_category(x) in (NumericDTypeCategory.Integral, NumericDTypeCategory.Float)
+]
+
+
 @pytest.mark.parametrize("shape", [(8,), (16,)])
 @pytest.mark.parametrize("tile", [8])
-@pytest.mark.parametrize("dtype", [*NumericDTypeCategories.Integral, *NumericDTypeCategories.Float])
+@pytest.mark.parametrize("dtype", all_int_and_float_dtypes)
 def test_printf(shape, tile, dtype):
     _test_print_1d(shape, tile, kernel_printf, dtype)
 
 
 @pytest.mark.parametrize("shape", [(8,), (16,)])
 @pytest.mark.parametrize("tile", [8])
-@pytest.mark.parametrize("dtype", [*NumericDTypeCategories.Integral, *NumericDTypeCategories.Float])
+@pytest.mark.parametrize("dtype", all_int_and_float_dtypes)
 @pytest.mark.parametrize("kernel", [kernel_print, kernel_builtin_print],
                          ids=["ct_print", "builtin_print"])
 def test_ct_print_and_builtin_print(shape, tile, kernel, dtype):
