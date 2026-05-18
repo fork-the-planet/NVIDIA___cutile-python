@@ -68,7 +68,7 @@ def test_extract_2d(shape, dtype, tile):
 @ct.kernel
 def extract_1d_non_scalar_item(x, y, TILE: ct.Constant[int]):
     tx = ct.load(x, index=(0,), shape=(TILE,))
-    tx = ct.extract(tx, index=(TILE//2,), shape=(2,)) + 5
+    tx = ct.extract(tx, index=(0,), shape=(2,)) + 5
     tx = ct.full((TILE,), tx.item(), dtype=y.dtype)
     ct.store(y, index=(0,), tile=tx)
 
@@ -82,3 +82,19 @@ def test_extract_1d_non_scalar_item(shape, dtype, tile):
     grid = (ceil(shape[0] / tile), 1, 1)
     with pytest.raises(TileTypeError, match=re.escape("Cannot reshape (2,) to ()")):
         ct.launch(torch.cuda.current_stream(), grid, extract_1d_non_scalar_item, (x, y, tile))
+
+
+@ct.kernel
+def extract_oob_2d(x, y, TILE_X: ct.Constant[int], TILE_Y: ct.Constant[int]):
+    tx = ct.load(x, index=(0, 0), shape=(TILE_X, TILE_Y))
+    # dimension 0 has 2 tiles; index 2 is out of bounds
+    tx = ct.extract(tx, index=(2, 0), shape=(TILE_X//2, TILE_Y)) + 5
+    ct.store(y, index=(0, 0), tile=tx)
+
+
+def test_extract_oob_2d():
+    x = make_tensor((128, 128), dtype=torch.float16, device='cuda')
+    y = torch.zeros_like(x)
+    grid = (1, 1, 1)
+    with pytest.raises(TileTypeError, match="out of bounds"):
+        ct.launch(torch.cuda.current_stream(), grid, extract_oob_2d, (x, y, 128, 128))

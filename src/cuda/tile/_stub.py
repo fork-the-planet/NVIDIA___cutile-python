@@ -3954,8 +3954,13 @@ def extract(x, /, index, shape) -> Tile:
 
     Args:
         x (Tile): input tile.
-        index (Shape): An index in the sub |tile space|.
-        shape (Shape): The shape of the extracted tile.
+        index (Shape): Index into the grid of subtiles, not element index.
+            Each dimension ``i`` has ``x.shape[i] // shape[i]`` subtiles;
+            valid values are ``[0, x.shape[i] // shape[i])``.
+            For example, extracting shape ``(4,)`` from a ``(128,)`` tile
+            gives 32 subtiles, so valid indices are 0–31.
+        shape (Shape): The shape of the extracted tile. Must evenly divide
+            ``x.shape`` in every dimension.
 
     Returns:
         Tile:

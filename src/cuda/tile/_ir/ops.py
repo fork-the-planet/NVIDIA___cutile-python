@@ -4764,12 +4764,21 @@ def extract_impl(x: Var, index: Var, shape: Var) -> Var:
         raise TileTypeError(f"Index size {len(index_items)}"
                             f" does not match the tile rank {x_ty.ndim}")
 
-    for i, (s1, s2) in enumerate(zip(x_ty.shape, shape, strict=True)):
+    for i, (s1, s2, idx_var) in enumerate(zip(x_ty.shape, shape, index_items, strict=True)):
         if s2 == 0:
             raise TileTypeError(f"Zero shape at dimension #{i}: {shape}")
         if s1 % s2 != 0:
             raise TileTypeError(f"Input shape {x_ty.shape} is not divisible by"
                                 f" result shape {shape} at dimension #{i}")
+        n_tiles = s1 // s2
+        if idx_var.is_constant():
+            idx_val = idx_var.get_constant()
+            if not (0 <= idx_val < n_tiles):
+                raise TileTypeError(
+                    f"Index {idx_val} out of bounds at dimension #{i}: "
+                    f"valid range is [0, {n_tiles}) in tile space "
+                    f"(input shape {x_ty.shape}, extract shape {shape})"
+                )
     result = extract(x, index_items, shape)
     return reshape(result, orig_shape)
 
