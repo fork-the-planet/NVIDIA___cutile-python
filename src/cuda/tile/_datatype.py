@@ -657,7 +657,7 @@ def _get_pointer_dtype(pointee_dtype: DType | None, memory_space: MemorySpace) -
         pass
 
     match memory_space:
-        case MemorySpace.SHARED:
+        case MemorySpace.SHARED | MemorySpace.TENSOR | MemorySpace.SHARED_CLUSTER:
             bitwidth = 32
         case _:
             bitwidth = 64
