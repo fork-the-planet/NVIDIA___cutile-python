@@ -2,9 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cuda.lang._datatype import MemorySpace
+from typing import Literal
+
+from cuda.lang._enums import MbarrierScope
 from cuda.lang._execution import stub
 from cuda.lang._datatype import uint64, bool_
+from cuda.tile._memory_model import MemoryOrder
+
+
+ArriveOrdering = Literal[MemoryOrder.RELAXED, MemoryOrder.RELEASE]
+WaitOrdering = Literal[MemoryOrder.RELAXED, MemoryOrder.ACQUIRE]
 
 
 @stub
@@ -23,8 +30,8 @@ def mbarrier_arrive(
     count: int = 1,
     *,
     drop: bool = False,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: ArriveOrdering = MemoryOrder.RELEASE,
 ) -> "uint64 | None":
     """Arrive at ``mbar``. When the mbarrier resides in ``MemorySpace.SHARED``,
     an opaque 64-bit value capturing the phase of the mbarrier object _prior_
@@ -39,11 +46,10 @@ def mbarrier_arrive_expect_tx(
     bytes: int,
     *,
     drop: bool = False,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: ArriveOrdering = MemoryOrder.RELEASE,
 ) -> "uint64 | None":
-    """Arrive at ``mbar`` and set the expected transaction count to ``bytes``.
-    """
+    ...
 
 
 @stub
@@ -51,7 +57,7 @@ def mbarrier_expect_tx(
     mbar,
     bytes: int,
     *,
-    scope: MemorySpace = MemorySpace.SHARED,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
 ) -> None:
     ...
 
@@ -61,7 +67,7 @@ def mbarrier_complete_tx(
     mbar,
     bytes: int,
     *,
-    scope: MemorySpace = MemorySpace.SHARED,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
 ) -> None:
     ...
 
@@ -71,11 +77,10 @@ def mbarrier_test_wait(
     mbar,
     state,
     *,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: WaitOrdering = MemoryOrder.ACQUIRE,
 ) -> "bool_":
-    """Non-blocking test whether ``mbar`` has completed.
-    """
+    """Non-blocking test whether ``mbar`` has completed."""
 
 
 @stub
@@ -83,8 +88,8 @@ def mbarrier_test_wait_parity(
     mbar,
     parity: int,
     *,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: WaitOrdering = MemoryOrder.ACQUIRE,
 ) -> "bool_":
     """Phase-parity variant of ``mbarrier_test_wait``.
     ``parity`` is the 0/1 integer parity of the phase to test for.
@@ -97,11 +102,10 @@ def mbarrier_try_wait(
     state,
     *,
     time_hint: int | None = None,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: WaitOrdering = MemoryOrder.ACQUIRE,
 ) -> "bool_":
-    """Bounded-wait test whether ``mbar`` has completed.
-    """
+    """Bounded-wait test whether ``mbar`` has completed."""
 
 
 @stub
@@ -110,8 +114,8 @@ def mbarrier_try_wait_parity(
     parity: int,
     *,
     time_hint: int | None = None,
-    scope: MemorySpace = MemorySpace.SHARED,
-    relaxed: bool = False,
+    scope: MbarrierScope = MbarrierScope.BLOCK,
+    ordering: WaitOrdering = MemoryOrder.ACQUIRE,
 ) -> "bool_":
     """Phase-parity variant of ``mbarrier_try_wait``.
     ``parity`` is the 0/1 integer parity of the phase to test for.

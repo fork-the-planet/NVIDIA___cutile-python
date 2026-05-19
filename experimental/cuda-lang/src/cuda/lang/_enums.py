@@ -14,3 +14,10 @@ class TensorMapSwizzle(enum.Enum):
     SWIZZLE_128B_ATOM_32B = _cext.CU_TENSOR_MAP_SWIZZLE_128B_ATOM_32B
     SWIZZLE_128B_ATOM_32B_FLIP_8B = _cext.CU_TENSOR_MAP_SWIZZLE_128B_ATOM_32B_FLIP_8B
     SWIZZLE_128B_ATOM_64B = _cext.CU_TENSOR_MAP_SWIZZLE_128B_ATOM_64B
+
+
+class MbarrierScope(enum.Enum):
+    """Scope of the threads that observe an mbarrier operation."""
+
+    BLOCK = "cta"
+    CLUSTER = "cluster"

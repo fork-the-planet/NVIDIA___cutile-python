@@ -95,7 +95,7 @@ from .ir import (
     format_var,
     LocalArrayContextManagerValue,
 )
-from .._stub import TensorMapSwizzle
+from .._stub import TensorMapSwizzle, MbarrierScope
 from cuda.tile._ir import hir_stubs
 from cuda.tile._ir.typing_support import I32_TY, U64_TY, BOOL_TY
 
@@ -1413,23 +1413,37 @@ def mbarrier_invalidate_impl(mbar: Var) -> Var:
     )
 
 
-def _memory_space_to_mbar_suffix(memory_space: MemorySpace) -> str:
-    match memory_space:
+def _mbar_space_scope_suffix(scope: MbarrierScope, space: MemorySpace) -> str:
+    match space:
         case MemorySpace.SHARED:
-            return 'cta'
+            space_str = 'cta'
         case MemorySpace.SHARED_CLUSTER:
-            return 'cluster'
-
-    raise TileCompilerError(f"Unexpected {memory_space=}")
-
-
-def _mbar_space_scope_suffix(scope: MemorySpace, space: MemorySpace):
+            space_str = 'cluster'
+        case _:
+            raise TileCompilerError(f"Unexpected {space=}")
     return (
         ".scope."
-        + _memory_space_to_mbar_suffix(scope)
+        + scope.value
         + ".space."
-        + _memory_space_to_mbar_suffix(space)
+        + space_str
     )
+
+
+def require_mbarrier_ordering(
+    ordering_var: Var,
+    valid_orderings: tuple[MemoryOrder, ...],
+) -> MemoryOrder:
+    ordering = require_constant_enum(ordering_var, MemoryOrder)
+    if ordering not in valid_orderings:
+        formatted = ", ".join(str(o) for o in valid_orderings)
+        raise TileTypeError(
+            f"Invalid mbarrier memory order {ordering}, expected one of {formatted}"
+        )
+    return ordering
+
+
+ARRIVE_ORDERINGS = (MemoryOrder.RELEASE, MemoryOrder.RELAXED)
+WAIT_ORDERINGS = (MemoryOrder.ACQUIRE, MemoryOrder.RELAXED)
 
 
 @impl(stub.mbarrier_arrive)
@@ -1438,17 +1452,17 @@ def mbarrier_arrive_impl(
     count: Var,
     drop: Var,
     scope: Var,
-    relaxed: Var,
+    ordering: Var,
 ) -> Var | None:
     count = astype(count, datatype.int32)
     drop = require_constant_bool(drop)
-    scope = require_constant_enum(scope, MemorySpace)
-    relaxed = require_constant_bool(relaxed)
+    scope = require_constant_enum(scope, MbarrierScope)
+    ordering = require_mbarrier_ordering(ordering, ARRIVE_ORDERINGS)
     space = require_mbarrier_ptr(mbar).memory_space
     intrinsic = "llvm.nvvm.mbarrier.arrive"
     if drop:
         intrinsic += '.drop'
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += '.relaxed'
     intrinsic += _mbar_space_scope_suffix(scope, space)
 
@@ -1468,18 +1482,18 @@ def mbarrier_arrive_expect_tx_impl(
     bytes: Var,
     drop: Var,
     scope: Var,
-    relaxed: Var,
+    ordering: Var,
 ) -> Var | None:
     bytes = astype(bytes, datatype.int32)
     drop = require_constant_bool(drop)
-    scope = require_constant_enum(scope, MemorySpace)
-    relaxed = require_constant_bool(relaxed)
+    scope = require_constant_enum(scope, MbarrierScope)
+    ordering = require_mbarrier_ordering(ordering, ARRIVE_ORDERINGS)
     space = require_mbarrier_ptr(mbar).memory_space
     intrinsic = "llvm.nvvm.mbarrier.arrive"
     if drop:
         intrinsic += '.drop'
     intrinsic += '.expect.tx'
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += '.relaxed'
     intrinsic += _mbar_space_scope_suffix(scope, space)
 
@@ -1497,7 +1511,7 @@ def mbarrier_arrive_expect_tx_impl(
 def mbarrier_expect_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
     space = require_mbarrier_ptr(mbar).memory_space
     bytes = astype(bytes, datatype.int32)
-    scope = require_constant_enum(scope, MemorySpace)
+    scope = require_constant_enum(scope, MbarrierScope)
     intrinsic = "llvm.nvvm.mbarrier.expect.tx"
     intrinsic += _mbar_space_scope_suffix(scope, space)
     add_operation(
@@ -1512,7 +1526,7 @@ def mbarrier_expect_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
 def mbarrier_complete_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
     space = require_mbarrier_ptr(mbar).memory_space
     bytes = astype(bytes, datatype.int32)
-    scope = require_constant_enum(scope, MemorySpace)
+    scope = require_constant_enum(scope, MbarrierScope)
     intrinsic = "llvm.nvvm.mbarrier.complete.tx"
     intrinsic += _mbar_space_scope_suffix(scope, space)
     add_operation(
@@ -1525,14 +1539,14 @@ def mbarrier_complete_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
 
 @impl(stub.mbarrier_test_wait)
 def mbarrier_test_wait_impl(
-    mbar: Var, state: Var, scope: Var, relaxed: Var
+    mbar: Var, state: Var, scope: Var, ordering: Var
 ) -> Var:
-    scope = require_constant_enum(scope, MemorySpace)
+    scope = require_constant_enum(scope, MbarrierScope)
     state = astype(state, datatype.int64)
     require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
-    relaxed = require_constant_bool(relaxed)
+    ordering = require_mbarrier_ordering(ordering, WAIT_ORDERINGS)
     intrinsic = "llvm.nvvm.mbarrier.test.wait"
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += ".relaxed"
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     results = add_operation(
@@ -1546,14 +1560,14 @@ def mbarrier_test_wait_impl(
 
 @impl(stub.mbarrier_test_wait_parity)
 def mbarrier_test_wait_parity_impl(
-    mbar: Var, parity: Var, scope: Var, relaxed: Var
+    mbar: Var, parity: Var, scope: Var, ordering: Var
 ) -> Var:
     require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
     parity = astype(parity, datatype.int32)
-    scope = require_constant_enum(scope, MemorySpace)
-    relaxed = require_constant_bool(relaxed)
+    scope = require_constant_enum(scope, MbarrierScope)
+    ordering = require_mbarrier_ordering(ordering, WAIT_ORDERINGS)
     intrinsic = "llvm.nvvm.mbarrier.test.wait.parity"
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += ".relaxed"
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     results = add_operation(
@@ -1575,19 +1589,19 @@ def mbarrier_try_wait_impl(
     state: Var,
     time_hint: Var,
     scope: Var,
-    relaxed: Var,
+    ordering: Var,
 ) -> Var:
     require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
     state = astype(state, datatype.int64)
-    scope = require_constant_enum(scope, MemorySpace)
-    relaxed = require_constant_bool(relaxed)
+    scope = require_constant_enum(scope, MbarrierScope)
+    ordering = require_mbarrier_ordering(ordering, WAIT_ORDERINGS)
     intrinsic = "llvm.nvvm.mbarrier.try.wait"
     args = (mbar, state)
     if not _is_none(time_hint):
         intrinsic += ".tl"
         time_hint = astype(time_hint, datatype.int32)
         args = (*args, time_hint)
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += ".relaxed"
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     results = add_operation(
@@ -1605,19 +1619,19 @@ def mbarrier_try_wait_parity_impl(
     parity: Var,
     time_hint: Var,
     scope: Var,
-    relaxed: Var,
+    ordering: Var,
 ) -> Var:
     require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
     parity = astype(parity, datatype.int32)
-    scope = require_constant_enum(scope, MemorySpace)
-    relaxed = require_constant_bool(relaxed)
+    scope = require_constant_enum(scope, MbarrierScope)
+    ordering = require_mbarrier_ordering(ordering, WAIT_ORDERINGS)
     intrinsic = "llvm.nvvm.mbarrier.try.wait.parity"
     args = (mbar, parity)
     if not _is_none(time_hint):
         time_hint = astype(time_hint, datatype.int32)
         args = (*args, time_hint)
         intrinsic += ".tl"
-    if relaxed:
+    if ordering is MemoryOrder.RELAXED:
         intrinsic += ".relaxed"
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     results = add_operation(

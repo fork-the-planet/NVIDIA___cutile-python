@@ -66,6 +66,8 @@ from .tensor_map import (
     tensor_map_tiled,
 )
 
+from cuda.lang._enums import MbarrierScope
+
 from .mbarrier import (
     mbarrier_init,
     mbarrier_invalidate,
@@ -138,6 +140,7 @@ __all__ = (
     "TensorMap",
     "tensor_map_tiled",
     "nanosleep",
+    "MbarrierScope",
     "mbarrier_init",
     "mbarrier_invalidate",
     "mbarrier_arrive",
