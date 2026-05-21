@@ -12,7 +12,10 @@ import tempfile
 from functools import cache
 
 from cuda.tile._bytecode.version import BytecodeVersion
-from cuda.tile._compile import _get_max_supported_bytecode_version, _SUPPORTED_VERSIONS
+from cuda.tile._compile import (
+        _get_max_supported_bytecode_version,
+        _SUPPORTED_VERSIONS,
+        _find_compiler_bin)
 from cuda.tile._cext import dev_features_enabled
 from util import require_blackwell_or_newer, require_hopper_or_newer
 
@@ -37,6 +40,16 @@ def pytest_configure(config):
                 pytest.fail(f"Required import skipped: {e}")
 
         pytest.importorskip = strict_importorskip
+
+
+def pytest_sessionstart(session):
+    """
+    Called after the Session object has been created and
+    before performing collection and entering the run test loop.
+    """
+    print("Tile compiler path:", _find_compiler_bin().path)
+    print("Dev features enabled:", dev_features_enabled())
+    print("Bytecode version:", get_tileiras_version().as_string())
 
 
 @cache

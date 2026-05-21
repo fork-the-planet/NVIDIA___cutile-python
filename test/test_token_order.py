@@ -1402,6 +1402,7 @@ class TestTiledViewAtomicTokenOrderMLIR(MLIRTestBase):
         Y = torch.arange(tile_size, device="cuda", dtype=torch.int32)
         return get_bytecode(kernel, (X, Y, tile_size))
 
+    @requires_tileiras(BytecodeVersion.V_13_3)
     @pytest.mark.parametrize("kernel, check_directive", make_cases(
         (tv_atomic, TVAtomicCheckDirective),
     ))
