@@ -31,16 +31,10 @@ from cuda.tile._ir.ir import Var, AggregateValue
 from cuda.lang._exception import TileTypeError
 
 
-def _is_power_of_2(value: int) -> bool:
-    assert isinstance(value, int)
-    return value > 0 and value & (value - 1) == 0
-
-
 def is_vector_ty(ty: Type) -> bool:
     return (
         isinstance(ty, TileTy)
         and len(ty.shape) == 1
-        and _is_power_of_2(ty.shape[0])
     )
 
 
@@ -48,10 +42,6 @@ def make_vector_ty(dtype: DType, length: int) -> TileTy:
     if not isinstance(length, int):
         raise TileTypeError(
             f"Expected vector length to be an int, got {type(length).__name__}"
-        )
-    if not _is_power_of_2(length):
-        raise TileTypeError(
-            f"Expected vector length to be a positive power of two, got {length}"
         )
     return TileTy(dtype, (length,))
 

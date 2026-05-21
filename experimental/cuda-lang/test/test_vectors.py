@@ -9,7 +9,6 @@ import torch
 
 import cuda.lang as cl
 from cuda.lang._datatype import to_torch_dtype
-from cuda.lang._exception import TileTypeError
 from cuda.tile import static_iter
 
 
@@ -295,11 +294,10 @@ def test_pointer_vector_arithmetic_unary(operation, dtype, values):
     torch.testing.assert_close(out.cpu(), expected)
 
 
-def test_pointer_vector_count_must_be_power_of_two():
+def test_pointer_vector_count_can_be_non_power_of_two():
     @cl.kernel
     def kernel(out):
         out.get_base_pointer().load(count=3, alignment=4)
 
     out = torch.zeros(3, dtype=torch.int32).cuda()
-    with pytest.raises(TileTypeError, match="positive power of two"):
-        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
