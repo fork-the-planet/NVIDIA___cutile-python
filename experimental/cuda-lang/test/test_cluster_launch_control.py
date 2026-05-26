@@ -13,28 +13,24 @@ cc = get_compute_capability()
 if cc < (10, 0):
     pytest.skip(allow_module_level=True)
 
-# Use non-portable target
-arch = cc.arch + "a"
-gpu_name = cc.gpu_name + "a"
-target = dict(arch=arch, gpu_name=gpu_name)
 clc_bytes = cl.clusterlaunchcontrol_token.bitwidth // 8
 
 
-@cl.kernel(**target)
+@cl.kernel
 def bad_clc_memspace_1():
     smem = cl.shared_array(1, cl.mbarrier).get_base_pointer()
     with cl.local_array(1, cl.clusterlaunchcontrol_token) as larr:
         cl.clusterlaunchcontrol_try_cancel(larr.get_base_pointer(), smem)
 
 
-@cl.kernel(**target)
+@cl.kernel
 def bad_clc_memspace_2():
     smem = cl.shared_array(1, cl.clusterlaunchcontrol_token).get_base_pointer()
     with cl.local_array(1, cl.mbarrier) as larr:
         cl.clusterlaunchcontrol_try_cancel(smem, larr.get_base_pointer())
 
 
-@cl.kernel(**target)
+@cl.kernel
 def bad_clc_type():
     smem = cl.shared_array(2, cl.int64).get_base_pointer()
     cl.clusterlaunchcontrol_is_canceled(smem)
@@ -69,7 +65,7 @@ def compute():
     return 5.0
 
 
-@cl.kernel(**target)
+@cl.kernel
 def worksteal(data, n: cl.Constant[int], stolen):
     clc_resp = cl.shared_array(1, cl.clusterlaunchcontrol_token, alignment=16).get_base_pointer()
     mbar = cl.shared_array(1, cl.mbarrier, alignment=8).get_base_pointer()
@@ -113,7 +109,7 @@ def worksteal(data, n: cl.Constant[int], stolen):
         cl.nvvm.fence_proxy_async_generic_release_sync_restrict_space_cta_scope_cluster()
 
 
-@cl.kernel(**target)
+@cl.kernel
 def worksteal_cluster(data, n: cl.Constant[int], stolen):
     clc_resp = cl.shared_array(1, cl.clusterlaunchcontrol_token, alignment=16).get_base_pointer()
     mbar = cl.shared_array(1, cl.mbarrier, alignment=8).get_base_pointer()

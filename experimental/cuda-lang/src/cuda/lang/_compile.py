@@ -211,9 +211,10 @@ def compile_simt(
         print(logging_template.format(header='MLIR', body=mlir_module), file=sys.stderr)
 
     if gpu_name is None or arch is None:
-        major, minor = get_compute_capability()
-        gpu_name = gpu_name or f"sm_{major}{minor}"
-        arch = arch or f"compute_{major}{minor}"
+        cc = get_compute_capability()
+        suffix = 'a' if cc >= (9, 0) else ''
+        gpu_name = gpu_name or cc.gpu_name + suffix
+        arch = arch or cc.arch + suffix
 
     cubin = mlir2cubin(str(mlir_module), gpu_name=gpu_name, arch=arch)
 
