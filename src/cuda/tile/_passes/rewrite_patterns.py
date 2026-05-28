@@ -9,7 +9,8 @@ from typing import Callable, Any, Dict, Sequence, List, Mapping, Set
 from cuda.tile import _datatype as datatype
 from cuda.tile._exception import Loc
 from cuda.tile._ir.ir import Operation, Var, Block, IRContext
-from cuda.tile._ir.ops import RawBinaryArithmeticOperation, FusedMulAddOperation, Unary
+from cuda.tile._ir.arithmetic_ops import RawBinaryArithmeticOperation
+from cuda.tile._ir.ops import FusedMulAddOperation, Unary
 from cuda.tile._ir.ops_utils import get_dtype, get_default_rounding_mode
 from cuda.tile._ir.type import Type
 

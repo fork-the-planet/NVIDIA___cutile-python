@@ -6,8 +6,9 @@ from collections import defaultdict
 from typing import Optional, Set, Dict, DefaultDict, Mapping, NamedTuple
 
 from cuda.tile._ir.ir import Block, Var, Mapper, IRContext
-from cuda.tile._ir.ops import (Loop, IfElse, RawBinaryArithmeticOperation, RawComparisonOperation,
-                               Assign, EndBranch, Continue, TypedConst)
+from cuda.tile._ir.ops import Loop, IfElse, Assign, EndBranch, Continue
+from cuda.tile._ir.core_ops import TypedConst
+from cuda.tile._ir.arithmetic_ops import RawBinaryArithmeticOperation, RawComparisonOperation
 
 
 class _Condition(NamedTuple):

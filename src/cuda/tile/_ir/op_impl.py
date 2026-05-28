@@ -6,6 +6,7 @@ import functools
 import inspect
 import threading
 import re
+from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import EnumMeta
@@ -57,7 +58,7 @@ class OverloadNotFoundError(Exception):
 class ImplRegistry:
     def __init__(self):
         self.op_implementations = dict()
-        self._overloaded_implementations = dict()
+        self._overloaded_implementations = defaultdict(dict)
 
     @staticmethod
     def get_current() -> "ImplRegistry":
@@ -76,10 +77,13 @@ class ImplRegistry:
 
     def clone(self) -> "ImplRegistry":
         ret = ImplRegistry()
-        ret.op_implementations.update(self.op_implementations)
-        for stub, overloads in self._overloaded_implementations.items():
-            ret._overloaded_implementations[stub] = dict(overloads)
+        ret.update(self)
         return ret
+
+    def update(self, source: "ImplRegistry"):
+        self.op_implementations.update(source.op_implementations)
+        for stub, overloads in source._overloaded_implementations.items():
+            self._overloaded_implementations[stub].update(overloads)
 
     def overload_dispatcher(self, stub, *, fixed_args: Sequence[Any] = ()):
         """
@@ -100,10 +104,11 @@ class ImplRegistry:
             async def implementation(*args):
                 generator = key_func(*args)
                 key = next(generator)
-                overload_impl = ImplRegistry.get_current()._find_overload(stub, key)
+                cur_registry = ImplRegistry.get_current()
+                overload_impl = cur_registry._find_overload(stub, key)
                 if overload_impl is None:
                     generator.throw(OverloadNotFoundError(
-                            self._have_overload_matching_first_param(stub, key[0])))
+                            cur_registry._have_overload_matching_first_param(stub, key[0])))
                     raise RuntimeError("Expected the overload key provider to re-throw a TileError")
 
                 try:
@@ -119,8 +124,6 @@ class ImplRegistry:
 
                 return result
 
-            assert stub not in self._overloaded_implementations
-            self._overloaded_implementations[stub] = dict()
             self.impl(stub)(implementation)
             return orig_func
 

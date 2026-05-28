@@ -25,9 +25,20 @@ from cuda.tile._ir.op_impl import (
     require_scalar_pointer_type,
 )
 from cuda.tile._ir.type import TensorLikeTy
-from cuda.tile._ir.ops import (
+from cuda.tile._ir.core_ops import (
+    TypedConst,
+)
+from cuda.tile._ir.arithmetic_ops import (
     binary_arithmetic_tensorlike,
     binary_arithmetic_tensorlike_raw,
+    RawBinaryArithmeticOperation,
+    RawComparisonOperation,
+    RawBinaryBitwiseOperation,
+    RawBitwiseShiftOperation,
+    TileAsType,
+    RawWhereOperation,
+)
+from cuda.tile._ir.ops import (
     loosely_typed_const,
     tile_impl_registry,
     bind_method,
@@ -41,14 +52,7 @@ from cuda.tile._ir.ops import (
     AssumeDivBy,
     MakeTensorView,
     MakeDummy,
-    RawBinaryArithmeticOperation,
-    RawComparisonOperation,
-    RawBinaryBitwiseOperation,
-    RawBitwiseShiftOperation,
-    TileAsType,
-    TypedConst,
     IfElse,
-    RawWhereOperation,
     EndBranch,
     Loop,
     Continue,

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import itertools
 import math
+from contextlib import contextmanager
 
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Any, Sequence, Literal
@@ -75,6 +76,16 @@ BINOP_REGISTRY = {
 for name in ['add', 'sub', 'mul', 'truediv', 'floordiv', 'mod', 'pow',
              'and_', 'or_', 'xor']:
     BINOP_REGISTRY["i" + name] = BINOP_REGISTRY[name]
+
+
+@contextmanager
+def reraise_tile_exception():
+    try:
+        yield
+    except (ZeroDivisionError, ValueError) as e:
+        raise TileValueError(str(e))
+    except TypeError as e:
+        raise TileTypeError(str(e))
 
 
 def _invert(x: int | bool, bool_action: Literal['raise'] | Literal['not']):

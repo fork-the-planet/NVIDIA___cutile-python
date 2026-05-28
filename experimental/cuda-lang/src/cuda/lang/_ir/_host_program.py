@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from cuda.lang._ir import ir
+from cuda.tile._ir.arithmetic_ops import binary_arithmetic_tensorlike_raw
+from cuda.tile._ir.core_ops import TypedConst
 from cuda.tile._ir.ops import (
-    loosely_typed_const, binary_arithmetic_tensorlike_raw,
-    strictly_typed_const, unary, _UNARY_BOOL_INT, TypedConst, AssumeBounded, AssumeDivBy, Assign,
-    binary_bitwise_tensorlike_raw
+    loosely_typed_const, strictly_typed_const, unary, _UNARY_BOOL_INT, AssumeBounded, AssumeDivBy,
+    Assign, binary_bitwise_tensorlike_raw
 )
 from cuda.tile._ir.typing_support import I32_TY, I64_TY
 

@@ -11,10 +11,13 @@ from cuda.tile._ir.ops_utils import get_dtype
 from cuda.tile._ir.type import ListValue, TileTy
 from cuda.tile._datatype import is_integral, PointerInfo
 from cuda.tile._ir.ir import Var, Block
+from cuda.tile._ir.arithmetic_ops import (
+    TileBroadcast, TileAsType, RawBinaryArithmeticOperation
+)
+from cuda.tile._ir.core_ops import TypedConst
 from cuda.tile._ir.ops import Assign, GetArrayListItem, \
     Loop, IfElse, Continue, Break, EndBranch, PointerOffset, \
-    TileBroadcast, TileReshape, AssumeDivBy, TileReduce, TileScan, \
-    AssumeBounded, TileAsType, TypedConst, RawBinaryArithmeticOperation, Unary
+    TileReshape, AssumeDivBy, TileReduce, TileScan, AssumeBounded, Unary
 from cuda.tile.compilation._signature import ParameterConstraint, \
     ArrayConstraint, ListConstraint, ScalarConstraint
 
