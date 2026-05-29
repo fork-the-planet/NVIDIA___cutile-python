@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import Callable, Any, Annotated, NamedTuple
 
 from cuda.lang._execution import stub
-from cuda.lang._ir.type import TileTy
+from cuda.lang._ir.type_checking_helpers import require_pointer_type, require_vector_type
 from cuda.tile import DType, TileValueError, TileTypeError
-from cuda.tile._ir.op_impl import require_integer_0d_tile_type, require_scalar_pointer_type, \
-    require_scalar_type, require_vector_type, require_any_vector_type, \
+from cuda.tile._datatype import is_pointer_dtype
+from cuda.tile._ir.op_impl import require_integer_0d_tile_type, \
+    require_scalar_type, require_any_vector_type, \
     require_any_scalar_or_vector_type
 from cuda.tile._ir.ir import Var, add_operation_variadic
 from cuda.tile._ir.ops import build_tuple
@@ -57,6 +58,7 @@ class PreparedCall(NamedTuple):
 
 
 def _prepare_common(stub, args: tuple[Var, ...]):
+    from cuda.lang._ir.type import PointerTy, ScalarTy, VectorTy
     stub_sig = inspect.signature(stub)
 
     prepared_operands = []
@@ -89,8 +91,11 @@ def _prepare_common(stub, args: tuple[Var, ...]):
     for h in ret_type_hints:
         ann = _get_annotation(h)
         assert isinstance(ann, _IntrinsicDTypeAnnotation)
-        shape = () if ann.vector_length is None else (ann.vector_length,)
-        result_types.append(TileTy(ann.dtype, shape))
+        if ann.vector_length is None:
+            ty = PointerTy(ann.dtype) if is_pointer_dtype(ann.dtype) else ScalarTy(ann.dtype)
+        else:
+            ty = VectorTy(ann.dtype, ann.vector_length)
+        result_types.append(ty)
 
     return PreparedCall(tuple(prepared_operands), tuple(result_types), make_retval)
 
@@ -163,6 +168,6 @@ P5 = Annotated[Any, _IntrinsicDTypeAnnotation(datatype.opaque_pointer_dtype(Memo
 P6 = Annotated[Any, _IntrinsicDTypeAnnotation(datatype.opaque_pointer_dtype(MemorySpace.TENSOR))]
 P7 = Annotated[Any, _IntrinsicDTypeAnnotation(
     datatype.opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER))]
-PX = Annotated[Any, _IntrinsicPredicateAnnotation(require_scalar_pointer_type)]
+PX = Annotated[Any, _IntrinsicPredicateAnnotation(require_pointer_type)]
 VX = Annotated[Any, _IntrinsicPredicateAnnotation(require_any_vector_type)]
 X = Annotated[Any, _IntrinsicPredicateAnnotation(require_any_scalar_or_vector_type)]

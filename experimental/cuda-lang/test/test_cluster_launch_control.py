@@ -51,7 +51,7 @@ def bad_clc_type():
         ),
         pytest.param(
             bad_clc_type,
-            "Expected type to be one of.+clusterlaunchcontrol_token.+but got.+int",
+            "Expected a clusterlaunchcontrol_token",
             id="bad clc token type",
         ),
     ),

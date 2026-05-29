@@ -17,9 +17,8 @@ import cuda.lang._mlir.extras.types as T
 import cuda.lang._ir.type as ir_type
 from cuda.lang.compilation import KernelSignature
 import cuda.lang._datatype as datatype
-from cuda.tile._datatype import PointerInfo, is_pointer_dtype
+from cuda.tile._datatype import PointerInfo
 from cuda.lang._exception import TileTypeError
-from cuda.tile._ir.type import TileTy
 from .type_conversion import (
     ir_type_to_mlir_type,
     mlir_constant_of_type,
@@ -27,20 +26,20 @@ from .type_conversion import (
 )
 
 
-def _require_scalar_type(typ: ir_type.Type):
-    if not isinstance(typ, ir_type.TileTy) or typ.shape != ():
-        raise TileTypeError(f"Expected scalar type, got {typ=}")
-    return typ
+def _expect_scalar_type(ty: ir_type.Type) -> ir_type.ScalarTy:
+    assert isinstance(ty, ir_type.ScalarTy)
+    return ty
 
 
-def _require_arith_type(typ: ir_type.Type):
-    if not isinstance(typ, ir_type.TileTy):
-        raise TileTypeError(f"Expected arithmetic type, got {typ=}")
-    if typ.shape != () and not ir_type.is_vector_ty(typ):
-        raise TileTypeError(f"Expected arithmetic type, got {typ=}")
-    if not datatype.is_arithmetic(typ.dtype):
-        raise TileTypeError(f"Expected arithmetic type, got {typ=}")
-    return typ
+def _expect_arith_type(ty: ir_type.Type) -> ir_type.TensorLikeTy:
+    assert isinstance(ty, ir_type.TensorLikeTy)
+    assert datatype.is_arithmetic(ty.tensor_dtype())
+    return ty
+
+
+def _expect_pointer_type(ty: ir_type.Type) -> ir_type.PointerTy:
+    assert isinstance(ty, ir_type.PointerTy)
+    return ty
 
 
 def _get_llvm_memory_ordering(mo: None | MemoryOrder):
@@ -179,9 +178,9 @@ def _get_mlir_op_for_op_and_dtype(
 
 def _get_mlir_unary_op_for_op_and_type(
     fn: str,
-    typ: ir_type.TileTy,
+    typ: ir_type.TensorLikeTy,
 ) -> Callable[[mlir.Value], mlir.Value] | None:
-    dtype = typ.dtype
+    dtype = typ.tensor_dtype()
     match fn:
         case 'pos':
             return lambda operand: operand
@@ -491,24 +490,17 @@ class IR2MLIR:
     def lower_comparison(
         self, operation: ops.RawComparisonOperation
     ) -> Sequence[mlir.Value]:
-        lhs_type = _require_arith_type(operation.lhs.get_type())
-        rhs_type = _require_arith_type(operation.rhs.get_type())
-        res_type = _require_arith_type(operation.result_var.get_type())
-        if lhs_type != rhs_type:
-            raise TileTypeError(
-                "Comparison operations require matching types: "
-                f"{lhs_type} and {rhs_type}"
-            )
-        if lhs_type.dtype != rhs_type.dtype:
-            raise TileTypeError(
-                "Comparison operations can not promote types: "
-                f"{lhs_type.dtype} and {rhs_type.dtype}"
-            )
+        lhs_type = operation.lhs.get_type()
+        rhs_type = operation.lhs.get_type()
+        assert lhs_type == rhs_type
 
-        mlir_op = _get_mlir_comparison_op(operation.fn, lhs_type.dtype)
+        dtype = _expect_arith_type(lhs_type).tensor_dtype()
+        res_type = _expect_arith_type(operation.result_var.get_type())
+
+        mlir_op = _get_mlir_comparison_op(operation.fn, dtype)
         if mlir_op is None:
             raise NotImplementedError(
-                f"Comparison operation {operation.fn} not supported for {lhs_type.dtype}"
+                f"Comparison operation {operation.fn} not supported for {dtype}"
             )
 
         lhs = self.get_var(operation.lhs)
@@ -533,15 +525,14 @@ class IR2MLIR:
 
     @lower_operation.register
     def lower_raw_unary_arith(self, operation: ops.Unary) -> Sequence[mlir.Value]:
-        res_type = _require_arith_type(operation.result_var.get_type())
-        res_dtype = res_type.dtype
+        res_type = _expect_arith_type(operation.result_var.get_type())
         mlir_op = _get_mlir_unary_op_for_op_and_type(
             operation.fn,
             res_type,
         )
         if mlir_op is None:
             raise NotImplementedError(
-                f"Arithmetic operation '{operation.fn}' not supported for {res_dtype=}"
+                f"Arithmetic operation '{operation.fn}' not supported for {res_type=}"
             )
 
         operand = self.get_var(operation.operand)
@@ -552,22 +543,12 @@ class IR2MLIR:
     def lower_raw_binary_arith(
         self, operation: ops.RawBinaryArithmeticOperation
     ) -> Sequence[mlir.Value]:
-        lhs_type = _require_arith_type(operation.lhs.get_type())
-        rhs_type = _require_arith_type(operation.rhs.get_type())
-        res_type = _require_arith_type(operation.result_var.get_type())
-        types_match = (
-            lhs_type == rhs_type
-            and lhs_type == res_type
-            and lhs_type.dtype == rhs_type.dtype
-        )
+        lhs_type = _expect_arith_type(operation.lhs.get_type())
+        rhs_type = _expect_arith_type(operation.rhs.get_type())
+        res_type = _expect_arith_type(operation.result_var.get_type())
+        assert lhs_type == rhs_type == res_type
 
-        if not types_match:
-            raise TileTypeError(
-                "Arithmetic operations require matching types: "
-                f"{lhs_type}, {rhs_type}, and {res_type}"
-            )
-
-        res_dtype = res_type.dtype
+        res_dtype = res_type.tensor_dtype()
         lhs = self.get_var(operation.lhs)
         rhs = self.get_var(operation.rhs)
 
@@ -589,17 +570,11 @@ class IR2MLIR:
     @lower_operation.register
     def lower_astype(self, operation: ops.TileAsType) -> Sequence[mlir.Value]:
         src = self.get_var(operation.x)
-        src_type = _require_arith_type(operation.x.get_type())
-        dst_type = _require_arith_type(operation.result_var.get_type())
-        if src_type.shape != dst_type.shape:
-            raise TileTypeError(
-                "Cannot cast between arithmetic types with different shapes: "
-                f"{src_type} and {dst_type}"
-            )
-        if not datatype.is_arithmetic(src_type.dtype) or not datatype.is_arithmetic(dst_type.dtype):
-            raise NotImplementedError(
-                f"Expected arithmetic types, got {src_type=} {dst_type=}"
-            )
+        src_type = _expect_arith_type(operation.x.get_type())
+        dst_type = _expect_arith_type(operation.result_var.get_type())
+        assert src_type.tensor_shape() == dst_type.tensor_shape()
+        assert datatype.is_arithmetic(src_type.tensor_dtype())
+        assert datatype.is_arithmetic(dst_type.tensor_dtype())
         result = convert_dtype(src_type, dst_type, src)
         return [result]
 
@@ -618,8 +593,7 @@ class IR2MLIR:
                 | ir_type.EnumTy()
             ):
                 return [value]
-            case ir_type.TileTy():
-                assert target_type.shape == (), "Tile types must be scalar"
+            case ir_type.ScalarTy():
                 mlir_type = ir_type_to_mlir_type(target_type)
                 cst = mlir_constant_of_type(mlir_type, value)
                 return [cst]
@@ -632,7 +606,7 @@ class IR2MLIR:
     def lower_atomic_rmw(self, operation: ops.AtomicRMW) -> Sequence[mlir.Value]:
         pointer = self.get_var(operation.pointer)
         value = self.get_var(operation.value)
-        value_dtype = _require_scalar_type(operation.value.get_type()).dtype
+        value_dtype = operation.value.get_type().dtype
         bin_op = _get_llvm_atomic_binop(operation.kind, value_dtype)
 
         result = mlir.llvm.add_AtomicRMWOp(
@@ -731,9 +705,8 @@ class IR2MLIR:
     def lower_pointer_offset(
         self, operation: ops.PointerOffset
     ) -> Sequence[mlir.Value]:
-        ptr_dtype = _require_scalar_type(operation.pointer.get_type()).dtype
-        info = PointerInfo(ptr_dtype)
-        element_type = dtype_to_mlir_type(info.pointee_dtype)
+        ptr_ty = _expect_pointer_type(operation.pointer.get_type())
+        element_type = dtype_to_mlir_type(ptr_ty.pointee_dtype)
 
         pointer = self.get_var(operation.pointer)
         offset = self.get_var(operation.offset)
@@ -756,7 +729,7 @@ class IR2MLIR:
 
     @lower_operation.register
     def lower_load_pointer(self, operation: ops.LoadPointer) -> Sequence[mlir.Value]:
-        ptr_dtype = _require_scalar_type(operation.pointer.get_type()).dtype
+        ptr_dtype = operation.pointer.get_type().pointer_dtype
         ordering = _get_llvm_memory_ordering(operation.ordering)
         info = PointerInfo(ptr_dtype)
         assert not info.opaque, f"Expected a typed pointer, got {ptr_dtype}"
@@ -790,13 +763,9 @@ class IR2MLIR:
         self, operation: ops.AllocLocalMemory
     ) -> Sequence[mlir.Value]:
         result_ty = operation.result_var.get_type()
-        assert isinstance(result_ty, TileTy)
-        assert result_ty.shape == ()
-        assert is_pointer_dtype(result_ty.dtype)
-
-        info = PointerInfo(result_ty.dtype)
+        assert isinstance(result_ty, ir_type.PointerTy)
         result_ty_mlir = ir_type_to_mlir_type(result_ty)
-        elem_type_mlir = dtype_to_mlir_type(info.pointee_dtype)
+        elem_type_mlir = dtype_to_mlir_type(result_ty.pointee_dtype)
 
         with self.func_region.blocks[0].prepend_here():
             array_size = mlir_constant_of_type(T.i64(), operation.count)
@@ -823,11 +792,8 @@ class IR2MLIR:
         self, operation: ops.AllocStaticSharedMemory
     ) -> Sequence[mlir.Value]:
         result_ty = operation.result_var.get_type()
-        assert isinstance(result_ty, TileTy)
-        assert result_ty.shape == ()
-
-        info = PointerInfo(result_ty.dtype)
-        elem_type = dtype_to_mlir_type(info.pointee_dtype)
+        assert isinstance(result_ty, ir_type.PointerTy)
+        elem_type = dtype_to_mlir_type(result_ty.pointee_dtype)
         global_type = mlir.llvm.LLVMArrayType(
             elementType=elem_type,
             numElements=operation.count,
@@ -899,7 +865,7 @@ class IR2MLIR:
         operand_type = operand.get_type()
         if ir_type.is_vector_ty(operand_type):
             return operand_value
-        if datatype.is_boolean(operand_type.dtype):
+        if operand_type == ir_type.ScalarTy(datatype.bool_):
             return mlir.arith.add_TruncIOp(out_type=T.i1(), in_=operand_value)
         else:
             return operand_value
@@ -917,7 +883,7 @@ class IR2MLIR:
         self, result_types: Sequence[ir_type.Type]
     ) -> Sequence[mlir.Type]:
         for result_type in result_types:
-            if result_type == ir_type.TileTy(datatype.bool_):
+            if result_type == ir_type.ScalarTy(datatype.bool_):
                 yield T.i1()
             else:
                 yield ir_type_to_mlir_type(result_type)
@@ -994,14 +960,14 @@ class IR2MLIR:
     @lower_operation.register
     def lower_raw_where(self, operation: ops.RawWhereOperation) -> Sequence[mlir.Value]:
         cond_i8 = self.get_var(operation.cond)
-        cond_type = _require_arith_type(operation.cond.get_type())
-        if cond_type.shape == ():
+        cond_type = _expect_arith_type(operation.cond.get_type())
+        if cond_type.tensor_shape() == ():
             result_type = T.i1()
         else:
             result_type = mlir.VectorType(
-                shape=cond_type.shape,
+                shape=cond_type.tensor_shape(),
                 elementType=T.i1(),
-                scalableDims=(False,) * len(cond_type.shape),
+                scalableDims=(False,) * len(cond_type.tensor_shape()),
             )
 
         cond = mlir.arith.add_TruncIOp(
@@ -1030,8 +996,8 @@ class IR2MLIR:
         self, operation: ops.AddrSpaceCast
     ) -> Sequence[mlir.Value]:
         value = self.get_var(operation.pointer)
-        ir_result_type = operation.result_var.get_type()
-        if PointerInfo(ir_result_type.dtype).memory_space.value == value.type.addressSpace:
+        ir_result_type: ir_type.PointerTy = operation.result_var.get_type()
+        if ir_result_type.memory_space.value == value.type.addressSpace:
             return [value]
         mlir_result_type = ir_type_to_mlir_type(ir_result_type)
         result = mlir.llvm.add_AddrSpaceCastOp(
@@ -1044,32 +1010,12 @@ class IR2MLIR:
     def lower_bitshift(
         self, operation: ops.RawBitwiseShiftOperation
     ) -> Sequence[mlir.Value]:
-        lhs_type = _require_arith_type(operation.lhs.get_type())
-        rhs_type = _require_arith_type(operation.rhs.get_type())
-        res_type = _require_arith_type(operation.result_var.get_type())
+        lhs_type = _expect_arith_type(operation.lhs.get_type())
+        rhs_type = _expect_arith_type(operation.rhs.get_type())
+        res_type = _expect_arith_type(operation.result_var.get_type())
 
-        if lhs_type.shape != rhs_type.shape or lhs_type.shape != res_type.shape:
-            raise TileTypeError(
-                "Bitwise shift operations require matching arithmetic shapes: "
-                f"{lhs_type}, {rhs_type}, and {res_type}"
-            )
-
-        for typ, name in (
-            (lhs_type, "lhs"),
-            (rhs_type, "rhs"),
-            (res_type, "result"),
-        ):
-            if not datatype.is_integral(typ.dtype):
-                raise TileTypeError(
-                    "Bitwise shift operations require integral arithmetic "
-                    f"types, got {name}={typ.dtype}"
-                )
-
-        if lhs_type.dtype != res_type.dtype:
-            raise TileTypeError(
-                "Bitwise shift operations require the lhs and result dtypes to match: "
-                f"{lhs_type.dtype} and {res_type.dtype}"
-            )
+        assert lhs_type == rhs_type == res_type
+        assert datatype.is_integral(res_type.tensor_dtype())
 
         lhs = self.get_var(operation.lhs)
         rhs = self.get_var(operation.rhs)
@@ -1080,7 +1026,7 @@ class IR2MLIR:
             case "rshift":
                 shift_op = (
                     mlir.arith.add_ShRSIOp
-                    if datatype.is_signed(res_type.dtype)
+                    if datatype.is_signed(res_type.tensor_dtype())
                     else mlir.arith.add_ShRUIOp
                 )
                 result = shift_op(lhs=lhs, rhs=rhs)

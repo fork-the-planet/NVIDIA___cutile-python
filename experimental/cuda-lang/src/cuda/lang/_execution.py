@@ -33,7 +33,7 @@ class kernel(_cext.TileDispatcher):
 
             @cl.kernel
             def kernel():
-                cl.printf("Hello!\\n")
+                print("Hello!")
 
             cl.launch(stream, (1,), (3,), kernel, ())
 

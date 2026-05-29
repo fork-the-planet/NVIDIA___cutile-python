@@ -18,11 +18,11 @@ from cuda.tile._ir.op_impl import (
     require_constant_int,
     require_constant_enum,
     require_optional_constant_enum,
-    require_index_or_index_tuple_type,
     require_array_type,
     WILDCARD,
-    require_tile_type, require_constant_bool, require_constant_pointer_info,
-    require_scalar_pointer_type, ImplRegistry,
+    require_constant_bool,
+    require_constant_pointer_info,
+    ImplRegistry,
 )
 from cuda.tile._ir.type import TensorLikeTy
 from cuda.tile._ir.core_ops import (
@@ -42,13 +42,11 @@ from cuda.tile._ir.arithmetic_ops import (
 )
 from cuda.tile._ir.static_eval_ops import static_eval_impl_registry
 from cuda.tile._ir.ops import (
-    tile_impl_registry,
     AssumeBounded,
     AssumeDivBy,
     MakeTensorView,
     PointerOffset,
     TilePrintf,
-    printf_impl,
     array_impl_registry,
 )
 from cuda.tile._ir.arithmetic_ops import (
@@ -82,23 +80,23 @@ from cuda.tile._datatype import (
     is_pointer_dtype,
     pointer_dtype,
     PointerInfo,
-    opaque_pointer_dtype,
+    opaque_pointer_dtype, int32, bool_, uint64,
 )
 from cuda.tile._exception import TileValueError
 import cuda.lang._mlir as mlir
-
-from .. import _stub as stub
-from .._stub import CTAGroup, Tcgen05LdStShape
+from .type_checking_helpers import require_array_indices, require_scalar_type, \
+    require_pointer_type, require_signed_int_scalar_or_tuple, \
+    require_clusterlaunchcontrol_token_type
 
 from .type import (
     LocalArrayContextManagerTy, ContextManagerState, TensorMapTy,
     dtype_to_tensor_map_type, ArrayValue, PointerInfoTy,
     MemorySpace,
     Type,
-    make_vector_ty,
-    is_vector_ty,
     ArrayTy,
-    TileTy,
+    ScalarTy,
+    PointerTy,
+    VectorTy,
     TupleTy,
     TupleValue
 )
@@ -113,9 +111,16 @@ from .ir import (
     format_var,
     LocalArrayContextManagerValue,
 )
-from .._stub import TensorMapSwizzle, MbarrierScope, foreign_function
+from .._stub.cluster_launch_control import clusterlaunchcontrol_try_cancel, \
+    clusterlaunchcontrol_is_canceled, clusterlaunchcontrol_get_first_block_idx
+from .._stub.tensor_map import TensorMapSwizzle
+from .._stub.mbarrier import MbarrierScope
+from .._stub import foreign_function, core_api, mbarrier as mbarrier_stub, tensor_map
+from .._stub.types import Pointer
+from .._stub.tcgen05 import CTAGroup, Tcgen05LdStShape
+from .._stub import tcgen05 as tcgen05_stub
+from .._stub.core_api import Array
 from cuda.tile._ir import hir_stubs
-from cuda.tile._ir.typing_support import I32_TY, U64_TY, BOOL_TY
 
 cuda_lang_impl_registry = ImplRegistry()
 cuda_lang_impl_registry.update(core_impl_registry())
@@ -124,7 +129,18 @@ cuda_lang_impl_registry.update(arithmetic_impl_registry())
 cuda_lang_impl_registry.update(control_flow_impl_registry())
 cuda_lang_impl_registry.update(array_impl_registry)
 impl = cuda_lang_impl_registry.impl
-overload_dispatcher = cuda_lang_impl_registry.overload_dispatcher
+
+
+@impl(core_api.dtype_of)
+def dtype_of_impl(value: Var):
+    ty = value.get_type()
+    if isinstance(ty, ScalarTy):
+        dtype = ty.dtype
+    elif isinstance(ty, PointerTy):
+        dtype = ty.pointer_dtype
+    else:
+        raise TileTypeError(f"dtype_of() expects a scalar or a pointer as the argument, got {ty}")
+    return loosely_typed_const(dtype)
 
 
 # -------------------------------------------------------------------------------------
@@ -231,18 +247,15 @@ class ReinterpretPointerAsArray(Operation, opcode="reinterpret_ptr_as_array"):
     pointer: Var = operand()
 
 
-def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]):
-    ptr_type = require_tile_type(ptr_value)
-    if not is_pointer_dtype(ptr_type.dtype):
-        raise TileTypeError(f"Expected pointer dtype, got {ptr_type.dtype}")
-    info = PointerInfo(ptr_type.dtype)
-    if info.memory_space not in spaces:
+def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]) -> PointerTy:
+    ptr_type = require_pointer_type(ptr_value)
+    if ptr_type.memory_space not in spaces:
         expected = ' or '.join(map(str, spaces))
         raise TileTypeError(
             f"Expected pointer memory space to be {expected} "
-            f"but got {info.memory_space}"
+            f"but got {ptr_type.memory_space}"
         )
-    return info
+    return ptr_type
 
 
 def require_pointer_memory_order(
@@ -263,30 +276,8 @@ def require_pointer_memory_order(
     )
 
 
-def require_array_indices(array: Var, indices: Var) -> tuple[Var, ...]:
-    array_ty = require_array_type(array)
-    key_ty = require_index_or_index_tuple_type(indices)
-    if isinstance(key_ty, TileTy):
-        if key_ty.ndim == 0:
-            return (indices,)
-        raise TileTypeError(
-            "Cannot index an array with a tile, use a tuple of indices or a scalar instead"
-        )
-    if isinstance(key_ty, TupleTy):
-        if len(key_ty.value_types) != array_ty.ndim:
-            raise TileTypeError(
-                f"Expected {array_ty.ndim} indices but got {len(key_ty.value_types)}"
-            )
-        tuple_value = indices.get_aggregate()
-        assert isinstance(tuple_value, TupleValue)
-        return tuple_value.items
-    raise TileTypeError(
-        f"Expected a tuple of indices or a single index, but got {indices.get_type()}"
-    )
-
-
-def _array_base_pointer_type(array_ty: ArrayTy) -> TileTy:
-    return TileTy(pointer_dtype(array_ty.dtype, array_ty.memory_space))
+def _array_base_pointer_type(array_ty: ArrayTy) -> PointerTy:
+    return PointerTy(pointer_dtype(array_ty.dtype, array_ty.memory_space))
 
 
 def _get_array_base_pointer(array: Var) -> Var:
@@ -305,7 +296,7 @@ def _get_array_base_pointer(array: Var) -> Var:
 
 def _array_linear_offset(array: Var, indices: tuple[Var, ...]) -> Var:
     array_val = array.get_aggregate()
-    zero = strictly_typed_const(0, U64_TY)
+    zero = strictly_typed_const(0, ScalarTy(uint64))
     offset = zero
     if len(indices) != len(array_val.strides):
         raise TileTypeError(
@@ -334,36 +325,32 @@ def _array_get_element_pointer(array: Var, indices: tuple[Var, ...]) -> Var:
 @impl(getattr, overload=(ArrayTy, "get_element_pointer"))
 def getattr_array_method(object: Var, name: Var):
     name = require_constant_str(name)
-    unbound_func = getattr(stub.Array, name)
+    unbound_func = getattr(Array, name)
     return bind_method(object, unbound_func)
 
 
-@impl(stub.Array.get_base_pointer)
+@impl(Array.get_base_pointer)
 def _m_array_get_base_pointer_impl(self: Var) -> Var:
     return _get_array_base_pointer(self)
 
 
-@impl(stub.Array.get_element_pointer)
+@impl(Array.get_element_pointer)
 def _m_array_get_element_pointer_impl(self: Var, indices: Var) -> Var:
     return _array_get_element_pointer(self, require_array_indices(self, indices))
 
 
-@impl(operator.setitem, overload=(TileTy, WILDCARD, WILDCARD))
-def vector_setitem(object: Var, key: Var, value: Var):
-    tile_type = object.get_type()
-    if tile_type.shape == ():
-        raise TileTypeError("Cannot index into a scalar")
-
+@impl(operator.setitem, overload=(VectorTy, WILDCARD, WILDCARD))
+def vector_setitem(object: Var[VectorTy], key: Var, value: Var):
     raise TileTypeError("Vectors are immutable: item assignment is not supported")
 
 
-@impl(operator.getitem, overload=(TileTy, WILDCARD))
-def vector_getitem(object: Var, key: Var) -> Var:
-    result_type = require_tile_type(object).dtype
+@impl(operator.getitem, overload=(VectorTy, WILDCARD))
+def vector_getitem(object: Var[VectorTy], key: Var) -> Var:
+    result_dtype = object.get_type().element_dtype
     index = implicit_cast(key, datatype.int32, "vector getitem index")
     return add_operation(
         VectorGetItem,
-        TileTy(result_type),
+        ScalarTy(result_dtype),
         x=object,
         index=index,
     )
@@ -376,7 +363,7 @@ def array_getitem(object: Var, key: Var) -> Var:
     pointer = _array_get_element_pointer(object, indices)
     return add_operation(
         LoadPointer,
-        TileTy(array_ty.dtype),
+        PointerTy(array_ty.dtype) if is_pointer_dtype(array_ty.dtype) else ScalarTy(array_ty.dtype),
         pointer=pointer,
         alignment=None,
         volatile=False,
@@ -386,7 +373,7 @@ def array_getitem(object: Var, key: Var) -> Var:
 @impl(operator.setitem, overload=(ArrayTy, WILDCARD, WILDCARD))
 def array_setitem(object: Var, key: Var, value: Var):
     array_ty = require_array_type(object)
-    require_scalar_tile_type(value)
+    require_scalar_type(value)
     value = astype(value, array_ty.dtype)
     indices = require_array_indices(object, key)
     pointer = _array_get_element_pointer(object, indices)
@@ -437,22 +424,22 @@ class AtomicCAS(Operation, opcode="atomic_cas", memory_effect=MemoryEffect.STORE
     failure_memory_order: int = attribute()
 
 
-@impl(stub.atomic_add, fixed_args=[AtomicRMWKind.ADD])
-@impl(stub.atomic_sub, fixed_args=[AtomicRMWKind.SUB])
-@impl(stub.atomic_and, fixed_args=[AtomicRMWKind.AND])
-@impl(stub.atomic_or, fixed_args=[AtomicRMWKind.OR])
-@impl(stub.atomic_xor, fixed_args=[AtomicRMWKind.XOR])
-@impl(stub.atomic_min, fixed_args=[AtomicRMWKind.MIN])
-@impl(stub.atomic_max, fixed_args=[AtomicRMWKind.MAX])
-@impl(stub.atomic_inc, fixed_args=[AtomicRMWKind.INC])
-@impl(stub.atomic_dec, fixed_args=[AtomicRMWKind.DEC])
+@impl(core_api.atomic_add, fixed_args=[AtomicRMWKind.ADD])
+@impl(core_api.atomic_sub, fixed_args=[AtomicRMWKind.SUB])
+@impl(core_api.atomic_and, fixed_args=[AtomicRMWKind.AND])
+@impl(core_api.atomic_or, fixed_args=[AtomicRMWKind.OR])
+@impl(core_api.atomic_xor, fixed_args=[AtomicRMWKind.XOR])
+@impl(core_api.atomic_min, fixed_args=[AtomicRMWKind.MIN])
+@impl(core_api.atomic_max, fixed_args=[AtomicRMWKind.MAX])
+@impl(core_api.atomic_inc, fixed_args=[AtomicRMWKind.INC])
+@impl(core_api.atomic_dec, fixed_args=[AtomicRMWKind.DEC])
 def atomic_rmw_dispatch_impl(kind: AtomicRMWKind, A: Var, idx: Var, val: Var) -> Var:
     array_ty = require_array_type(A)
-    require_scalar_tile_type(val)
+    require_scalar_type(val)
     val = astype(val, array_ty.dtype)
     indices = require_array_indices(A, idx)
     pointer = _array_get_element_pointer(A, indices)
-    result_ty = TileTy(array_ty.dtype)
+    result_ty = ScalarTy(array_ty.dtype)
     memory_order = mlir.llvm.AtomicOrdering.acq_rel
     return add_operation(
         AtomicRMW,
@@ -464,14 +451,14 @@ def atomic_rmw_dispatch_impl(kind: AtomicRMWKind, A: Var, idx: Var, val: Var) ->
     )
 
 
-@impl(stub.atomic_exch)
+@impl(core_api.atomic_exch)
 def atomic_exch_impl(A: Var, idx: Var, val: Var) -> Var:
     array_ty = require_array_type(A)
-    require_scalar_tile_type(val)
+    require_scalar_type(val)
     val = astype(val, array_ty.dtype)
     indices = require_array_indices(A, idx)
     pointer = _array_get_element_pointer(A, indices)
-    result_ty = TileTy(array_ty.dtype)
+    result_ty = ScalarTy(array_ty.dtype)
     memory_order = mlir.llvm.AtomicOrdering.acq_rel
     return add_operation(
         AtomicExchange,
@@ -482,19 +469,19 @@ def atomic_exch_impl(A: Var, idx: Var, val: Var) -> Var:
     )
 
 
-@impl(stub.atomic_cas)
+@impl(core_api.atomic_cas)
 def atomic_cas_impl(A: Var, idx: Var, old: Var, val: Var) -> Var:
     array_ty = require_array_type(A)
-    require_scalar_tile_type(val)
+    require_scalar_type(val)
     val = astype(val, array_ty.dtype)
-    compare_ty = require_tile_type(old)
+    compare_ty = require_scalar_type(old)
     if array_ty.dtype != compare_ty.dtype:
         raise TileTypeError(
             f"Expected atomic compare value of type {array_ty.dtype}, got {compare_ty.dtype}"
         )
     indices = require_array_indices(A, idx)
     pointer = _array_get_element_pointer(A, indices)
-    result_ty = TileTy(array_ty.dtype)
+    result_ty = ScalarTy(array_ty.dtype)
     success_memory_order = mlir.llvm.AtomicOrdering.acq_rel
     failure_memory_order = mlir.llvm.AtomicOrdering.monotonic
     return add_operation(
@@ -508,13 +495,6 @@ def atomic_cas_impl(A: Var, idx: Var, old: Var, val: Var) -> Var:
     )
 
 
-def require_vector_var(var: Var) -> TileTy:
-    ty = var.get_type()
-    if not is_vector_ty(ty):
-        raise TileTypeError(f"Expected a vector, got {ty}")
-    return ty
-
-
 def _pointer_load(
     pointer: Var,
     count: Var,
@@ -522,8 +502,7 @@ def _pointer_load(
     volatile: Var,
     ordering: Var,
 ) -> Var:
-    pointer_tile_ty = require_scalar_pointer_type(pointer)
-    pointee_dtype = PointerInfo(pointer_tile_ty.dtype).pointee_dtype
+    pointee_dtype = require_pointer_type(pointer).pointee_dtype
     count = require_optional_constant_int(count)
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
@@ -531,9 +510,9 @@ def _pointer_load(
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
         raise TileTypeError("Expected explicit alignment on atomic load")
     if count is None or count == 1:
-        result_ty = TileTy(pointee_dtype)
+        result_ty = ScalarTy(pointee_dtype)
     else:
-        result_ty = make_vector_ty(pointee_dtype, count)
+        result_ty = VectorTy(pointee_dtype, count)
     return add_operation(
         LoadPointer,
         result_ty,
@@ -551,14 +530,14 @@ def _pointer_store(
     volatile: Var,
     ordering: Var,
 ) -> None:
-    pointer_tile_ty = require_scalar_pointer_type(pointer)
+    pointer_ty = require_pointer_type(pointer)
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(StorePointer, ordering)
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
         raise TileTypeError("Expected explicit alignment on atomic store")
 
-    pointee_dtype = PointerInfo(pointer_tile_ty.dtype).pointee_dtype
+    pointee_dtype = pointer_ty.pointee_dtype
     value = implicit_cast(value, pointee_dtype,
                           "Stored value type is incompatible with pointer type")
 
@@ -574,7 +553,7 @@ def _pointer_store(
 
 
 def _pointer_with_offset(pointer: Var, offset: Var) -> Var:
-    require_scalar_pointer_type(pointer)
+    require_pointer_type(pointer)
     offset = astype(offset, datatype.int64)
     return add_operation(
         PointerOffset,
@@ -584,72 +563,63 @@ def _pointer_with_offset(pointer: Var, offset: Var) -> Var:
     )
 
 
-def _is_pointer_type(ty):
-    return isinstance(ty, TileTy) and is_pointer_dtype(ty.dtype)
-
-
 @impl(operator.add, overload=(TensorLikeTy, TensorLikeTy))
 async def add_impl(x: Var, y: Var) -> Var:
     xty, yty = x.get_type(), y.get_type()
-    if _is_pointer_type(yty):
+    if isinstance(yty, PointerTy):
         xty, yty = yty, xty
-    if _is_pointer_type(xty):
-        offset_dtype = require_scalar_tile_type(y).dtype
+    if isinstance(xty, PointerTy):
+        offset_dtype = require_scalar_type(y).dtype
         if not datatype.is_integral(offset_dtype):
             raise TileTypeError(f"Expected integer pointer offset, got {offset_dtype}")
         return _pointer_with_offset(x, y)
-    # HACK HACK HACK
-    with tile_impl_registry.as_current():
-        from cuda.tile._passes.hir2ir import call_function
-        return await call_function(operator.add, x, y)
+    return binary_arithmetic_tensorlike("add", x, y)
 
 
 @impl(operator.sub, overload=(TensorLikeTy, TensorLikeTy))
 async def sub_impl(x: Var, y: Var) -> Var:
     xty, yty = x.get_type(), y.get_type()
-    if _is_pointer_type(xty):
-        offset_dtype = require_scalar_tile_type(y).dtype
+    if isinstance(xty, PointerTy):
+        offset_dtype = require_scalar_type(y).dtype
         if not datatype.is_integral(offset_dtype):
             raise TileTypeError(f"Expected integer pointer offset, got {offset_dtype}")
         y = astype(y, datatype.int64)
         c0 = loosely_typed_const(0)
         offset = binary_arithmetic_tensorlike('sub', c0, y)
         return _pointer_with_offset(x, offset)
-    if _is_pointer_type(yty):
+    if isinstance(yty, PointerTy):
         raise TileTypeError('It is invalid to subtract a pointer from an integer')
-    # HACK HACK HACK
-    with tile_impl_registry.as_current():
-        from cuda.tile._passes.hir2ir import call_function
-        return await call_function(operator.sub, x, y)
+    return binary_arithmetic_tensorlike("sub", x, y)
 
 
-@impl(stub.address_space_cast)
+@impl(core_api.address_space_cast)
 def address_space_cast_impl(value: Var, memory_space: Var) -> Var:
     memory_space = require_constant_enum(memory_space, MemorySpace)
     return address_space_cast(value, memory_space)
 
 
-@impl(stub.reinterpret_pointer_as_array)
+@impl(core_api.reinterpret_pointer_as_array)
 def reinterpret_pointer_as_array_impl(pointer: Var, dtype: Var, shape: Var, strides: Var) -> Var:
     if not strides.is_constant() or strides.get_constant() is not None:
         raise TileTypeError(
             "Reinterpreting a pointer as an array with "
             "non-default strides is not yet implemented."
         )
-    pointer_tile_ty = require_scalar_pointer_type(pointer)
+    pointer_ty = require_pointer_type(pointer)
     shape = require_constant_int_tuple(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
     strides = _contiguous_strides(shape)
-    memory_space = PointerInfo(pointer_tile_ty.dtype).memory_space
+    memory_space = pointer_ty.memory_space
 
-    typed_pointer_ty = TileTy(pointer_dtype(dtype, memory_space))
+    typed_pointer_ty = PointerTy(pointer_dtype(dtype, memory_space))
     if pointer.get_type() != typed_pointer_ty:
-        pointer = reinterpret_pointer(pointer, typed_pointer_ty.dtype)
+        pointer = reinterpret_pointer(pointer, typed_pointer_ty.pointer_dtype)
     index_dtype = datatype.int32
     array_ty = ArrayTy(
         dtype,
         shape=shape,
         strides=strides,
+        typing_hooks=pointer.ctx.typing_hooks,
         index_dtype=index_dtype,
         memory_space=memory_space,
     )
@@ -659,34 +629,50 @@ def reinterpret_pointer_as_array_impl(pointer: Var, dtype: Var, shape: Var, stri
         pointer=pointer,
     )
     # FIXME: it seems that the index dtype should be derived from the dtype of shape/strides instead
-    size_ty = TileTy(index_dtype)
+    size_ty = ScalarTy(index_dtype)
     shape_vars = tuple(strictly_typed_const(extent, size_ty) for extent in shape)
     stride_vars = tuple(strictly_typed_const(extent, size_ty) for extent in strides)
     result.set_aggregate(ArrayValue(pointer, shape_vars, stride_vars))
     return result
 
 
-@impl(getattr, overload=(TileTy, "element_count"))
-def vector_element_count_impl(object: Var, name: Var):
-    ty = require_vector_var(object)
-    return loosely_typed_const(ty.shape[0])
+@impl(getattr, overload=(VectorTy, "element_count"))
+def vector_element_count_impl(object: Var[VectorTy], name: Var):
+    return loosely_typed_const(object.get_type().length)
 
 
-@impl(getattr, overload=(TileTy, "dtype"))
-def tile_dtype_impl(object: Var, name: Var):
-    dtype = require_tile_type(object).dtype
-    return loosely_typed_const(dtype)
+@impl(getattr, overload=(VectorTy, "dtype"))
+def vector_dtype_impl(object: Var[VectorTy], name: Var):
+    return loosely_typed_const(object.get_type().element_dtype)
 
 
-@impl(getattr, overload=(TileTy, "load"))
-@impl(getattr, overload=(TileTy, "store"))
+@impl(getattr, overload=(PointerTy, "opaque"))
+def pointer_opaque_impl(object: Var[PointerTy], name: Var):
+    return loosely_typed_const(object.get_type().opaque)
+
+
+@impl(getattr, overload=(PointerTy, "pointee_dtype"))
+def pointer_pointee_dtype_impl(object: Var[PointerTy], name: Var):
+    ty = object.get_type()
+    if ty.opaque:
+        raise TileTypeError("Opaque pointers have no pointee_dtype")
+    return loosely_typed_const(ty.pointee_dtype)
+
+
+@impl(getattr, overload=(PointerTy, "memory_space"))
+def pointer_memory_space_impl(object: Var[PointerTy], name: Var):
+    return loosely_typed_const(object.get_type().memory_space)
+
+
+@impl(getattr, overload=(PointerTy, "load"))
+@impl(getattr, overload=(PointerTy, "store"))
 def getattr_pointer_method(object: Var, name: Var):
     name = require_constant_str(name)
-    unbound_func = getattr(stub.Pointer, name)
+    unbound_func = getattr(Pointer, name)
     return bind_method(object, unbound_func)
 
 
-@impl(stub.Pointer.load)
+@impl(Pointer.load)
 def pointer_load_impl(
     self: Var,
     count: Var,
@@ -697,7 +683,7 @@ def pointer_load_impl(
     return _pointer_load(self, count, alignment, volatile, ordering)
 
 
-@impl(stub.Pointer.store)
+@impl(Pointer.store)
 def pointer_store_impl(
     self: Var,
     value: Var,
@@ -798,7 +784,7 @@ def require_optional_alignment(alignment: Var) -> int | None:
     return alignment
 
 
-@impl(stub.local_array)
+@impl(core_api.local_array)
 def local_array_impl(shape: Var, dtype: Var, alignment: Var) -> Var:
     shape = require_constant_int_tuple(shape, allow_single_int=True)
     dtype = require_dtype_spec(dtype)
@@ -828,10 +814,11 @@ def enter_context_local_array_impl(manager: Var):
         mgr_ty.dtype,
         shape=mgr_ty.shape,
         strides=strides,
+        typing_hooks=manager.ctx.typing_hooks,
         index_dtype=index_dtype,
         memory_space=MemorySpace.GENERIC,
     )
-    size_ty = TileTy(index_dtype, ())
+    size_ty = ScalarTy(index_dtype)
     shape_vars = tuple(strictly_typed_const(extent, size_ty) for extent in mgr_ty.shape)
     stride_vars = tuple(strictly_typed_const(extent, size_ty) for extent in strides)
 
@@ -857,7 +844,7 @@ class GetDynSharedMemoryBasePtr(Operation, opcode="get_dyn_shared_memory_base_pt
 
 
 def get_dyn_shared_memory_base_ptr():
-    result_ty = TileTy(pointer_dtype(datatype.uint8, MemorySpace.SHARED))
+    result_ty = PointerTy(pointer_dtype(datatype.uint8, MemorySpace.SHARED))
     return add_operation(GetDynSharedMemoryBasePtr, result_ty)
 
 
@@ -875,17 +862,11 @@ class AllocDynSharedMemory(Operation, opcode="alloc_dyn_shared_memory",
     alignment: int | None = attribute()
 
 
-@impl(stub.shared_array)
+@impl(core_api.shared_array)
 def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> Operation:
     dynamic = require_constant_bool(dynamic)
 
-    shape_ty = require_index_or_index_tuple_type(shape)
-    if isinstance(shape_ty, TileTy):
-        sizes = (shape,)
-    else:
-        tuple_val = shape.get_aggregate()
-        assert isinstance(tuple_val, TupleValue)
-        sizes = tuple_val.items
+    sizes = require_signed_int_scalar_or_tuple(shape)
 
     dtype = require_dtype_spec(dtype)
     alignment = require_optional_alignment(alignment)
@@ -893,7 +874,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
     if alignment is not None and alignment < dtype_byte_width:
         raise TileTypeError(f"Requested {alignment=} is less than {dtype_byte_width=}")
     index_dtype = datatype.int32
-    size_ty = TileTy(index_dtype, ())
+    size_ty = ScalarTy(index_dtype)
 
     ty_strides = []
     ty_shape = []
@@ -932,6 +913,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
         dtype,
         shape=tuple(ty_shape),
         strides=tuple(ty_strides),
+        typing_hooks=shape.ctx.typing_hooks,
         index_dtype=index_dtype,
         memory_space=MemorySpace.SHARED,
     )
@@ -959,24 +941,21 @@ class SyncThreads(Operation, opcode="syncthreads", memory_effect=MemoryEffect.ST
     pass
 
 
-@impl(stub.syncthreads)
+@impl(core_api.syncthreads)
 def syncthreads_impl() -> None:
     add_operation_variadic(SyncThreads, (),)
 
 
-@impl(stub.elect_sync)
+@impl(core_api.elect_sync)
 def elect_sync_impl(membermask) -> Var:
     mask = require_constant_int(membermask)
-    mask = strictly_typed_const(mask & 0xffffffff, I32_TY)
+    mask = strictly_typed_const(mask & 0xffffffff, ScalarTy(int32))
 
     _, is_elected = add_operation_variadic(RawNVVMIntrinsic,
-                                           (I32_TY, BOOL_TY),
+                                           (ScalarTy(int32), ScalarTy(bool_)),
                                            intrinsic="llvm.nvvm.elect.sync",
                                            operands_=(mask,))
     return is_elected
-
-
-impl(stub.printf)(printf_impl)
 
 
 @dataclass(eq=False)
@@ -1080,16 +1059,10 @@ def validate_inline_ptx_operand(
         return InlinePTXOperand(mode=mode, type_code=type_char, value=actual_dtype)
 
     if type_char == "C":
-        require_scalar_pointer_type(value)
+        require_pointer_type(value)
         return InlinePTXOperand(mode=mode, type_code=type_char, value=value)
 
-    value_ty = require_tile_type(value)
-    if value_ty.shape != ():
-        raise TileTypeError(
-            f"Expected a scalar value for constraint {constraint_str!r}, but got {value_ty}"
-        )
-
-    actual_dtype = value_ty.dtype
+    actual_dtype = require_scalar_type(value).dtype
     expected_dtype = _INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE[type_char]
     if actual_dtype != expected_dtype:
         raise TileTypeError(
@@ -1157,12 +1130,13 @@ def require_inline_ptx_constraint_pairs(ptx_code: str, constraint_pairs: tuple) 
     )
 
 
-@impl(stub.inline_ptx)
+@impl(core_api.inline_ptx)
 def inline_ptx_impl(ptx_code: Var, constraint_pairs: tuple) -> Var[TupleTy]:
     ptx_code = require_constant_str(ptx_code)
     mlir_ptx_code, ro_args, rw_args, wo_args = require_inline_ptx_constraint_pairs(
         ptx_code, constraint_pairs)
-    result_types = tuple(TileTy(dtype) for dtype in wo_args)
+    result_types = tuple(PointerTy(dtype) if is_pointer_dtype(dtype) else ScalarTy(dtype)
+                         for dtype in wo_args)
     results = add_operation_variadic(
         InlinePTX,
         result_types,
@@ -1210,7 +1184,7 @@ _TCGEN05_LD_REGISTERS_PER_COUNT = {
 }
 
 
-@impl(stub.tcgen05_alloc)
+@impl(tcgen05_stub.tcgen05_alloc)
 def tcgen05_alloc_impl(
     addr: Var,
     ncols: Var,
@@ -1230,7 +1204,7 @@ def tcgen05_alloc_impl(
     )
 
 
-@impl(stub.tcgen05_dealloc)
+@impl(tcgen05_stub.tcgen05_dealloc)
 def tcgen05_dealloc_impl(
     addr: Var,
     ncols: Var,
@@ -1248,7 +1222,7 @@ def tcgen05_dealloc_impl(
     )
 
 
-@impl(stub.tcgen05_commit)
+@impl(tcgen05_stub.tcgen05_commit)
 def tcgen05_commit_impl(
     mbar: Var,
     multicast_mask: Var,
@@ -1271,7 +1245,7 @@ def tcgen05_commit_impl(
     )
 
 
-@impl(stub.tcgen05_ld)
+@impl(tcgen05_stub.tcgen05_ld)
 def tcgen05_ld_impl(
     shape: Var,
     tmem_addr: Var,
@@ -1298,19 +1272,19 @@ def tcgen05_ld_impl(
 
     operands = [tmem_addr]
     if has_offset:
-        require_scalar_tile_type(offset)
+        require_scalar_type(offset)
         operands.append(astype(offset, datatype.int64))
 
     if _is_none(pack):
-        operands.append(strictly_typed_const(False, BOOL_TY))
+        operands.append(strictly_typed_const(False, ScalarTy(datatype.bool_)))
     else:
-        require_scalar_tile_type(pack, (datatype.bool_,))
+        require_scalar_type(pack, (datatype.bool_,))
         operands.append(pack)
 
     intrinsic = f"llvm.nvvm.tcgen05.ld.{shape.value}.x{count}"
     total_registers = count * _TCGEN05_LD_REGISTERS_PER_COUNT[shape]
-    shape = () if total_registers == 1 else (total_registers,)
-    result_type = TileTy(datatype.int32, shape)
+    result_type = (ScalarTy(datatype.int32)
+                   if total_registers == 1 else VectorTy(datatype.int32, total_registers))
 
     [result] = add_operation_variadic(
         RawNVVMIntrinsic,
@@ -1321,15 +1295,6 @@ def tcgen05_ld_impl(
     return result
 
 
-def require_scalar_tile_type(value: Var, valid_dtypes: tuple[datatype.DType, ...] = ()) -> TileTy:
-    value_ty = require_tile_type(value)
-    if value_ty.ndim != 0:
-        raise TileTypeError(f"Expected scalar value, got {value_ty}")
-    if valid_dtypes and value_ty.dtype not in valid_dtypes:
-        raise TileTypeError(f"Expected type to be one of {valid_dtypes}, but got {value_ty.dtype}")
-    return value_ty
-
-
 def shfl_sync_impl(mode: str, mask: Var, value: Var, lane_mask: Var, width: Var) -> Var:
     """
     Implements the instructions as the psuedocode in the NVVM IR spec.
@@ -1337,12 +1302,9 @@ def shfl_sync_impl(mode: str, mask: Var, value: Var, lane_mask: Var, width: Var)
 
     See also Clang's lowering in __clang_cuda_intrinsics.h.
     """
-    value_ty = require_scalar_tile_type(
-        value,
-        (datatype.int32, datatype.float32),
-    )
-    require_scalar_tile_type(mask, (datatype.int32,))
-    require_scalar_tile_type(lane_mask, (datatype.int32,))
+    value_ty = require_scalar_type(value, (datatype.int32, datatype.uint32, datatype.float32))
+    require_scalar_type(mask, (datatype.int32, datatype.uint32))
+    require_scalar_type(lane_mask, (datatype.int32, datatype.uint32))
     width = require_constant_int(width)
     if width not in (1, 2, 4, 8, 16, 32):
         raise TileTypeError(f"Expected shuffle width to be a power of two in [1, 32], got {width}")
@@ -1351,7 +1313,7 @@ def shfl_sync_impl(mode: str, mask: Var, value: Var, lane_mask: Var, width: Var)
     clamp = 0 if mode == 'up' else 0x1F
     mask_and_clamp = strictly_typed_const(
         ((WARP_SIZE - width) << 8) | clamp,
-        I32_TY,
+        ScalarTy(int32),
     )
 
     suffix = "i32" if datatype.is_integral(value_ty.dtype) else "f32"
@@ -1364,22 +1326,22 @@ def shfl_sync_impl(mode: str, mask: Var, value: Var, lane_mask: Var, width: Var)
     )
 
 
-@impl(stub.shfl_sync)
+@impl(core_api.shfl_sync)
 def shfl_sync_idx_impl(mask: Var, value: Var, src_lane: Var, width: Var) -> Var:
     return shfl_sync_impl("idx", mask, value, src_lane, width)
 
 
-@impl(stub.shfl_up_sync)
+@impl(core_api.shfl_up_sync)
 def shfl_sync_up_impl(mask: Var, value: Var, delta: Var, width: Var) -> Var:
     return shfl_sync_impl("up", mask, value, delta, width)
 
 
-@impl(stub.shfl_down_sync)
+@impl(core_api.shfl_down_sync)
 def shfl_sync_down_impl(mask: Var, value: Var, delta: Var, width: Var) -> Var:
     return shfl_sync_impl("down", mask, value, delta, width)
 
 
-@impl(stub.shfl_xor_sync)
+@impl(core_api.shfl_xor_sync)
 def shfl_sync_xor_impl(mask: Var, value: Var, lane_mask: Var, width: Var) -> Var:
     return shfl_sync_impl("bfly", mask, value, lane_mask, width)
 
@@ -1387,7 +1349,7 @@ def shfl_sync_xor_impl(mask: Var, value: Var, lane_mask: Var, width: Var) -> Var
 @impl(getattr, overload=(TensorMapTy, "as_opaque_ptr"))
 def getattr_tensor_map_method(object: Var, name: Var):
     name = require_constant_str(name)
-    unbound_func = getattr(stub.TensorMap, name)
+    unbound_func = getattr(tensor_map.TensorMap, name)
     return bind_method(object, unbound_func)
 
 
@@ -1398,7 +1360,7 @@ class CreateTensorMap(Operation, opcode="create_tensor_map"):
     array_strides: tuple[Var, ...] = operand()
 
 
-@impl(stub.tensor_map_tiled)
+@impl(tensor_map.tensor_map_tiled)
 def tensor_map_tiled_impl(array: Var, tile_shape: Var, swizzle: Var) -> Var:
     array_ty = require_array_type(array)
     array_val = array.get_aggregate()
@@ -1428,10 +1390,10 @@ def require_tensor_map_ty(var: Var) -> TensorMapTy:
     return ty
 
 
-@impl(stub.TensorMap.as_opaque_ptr)
+@impl(tensor_map.TensorMap.as_opaque_ptr)
 def tensor_map_as_opaque_ptr_impl(self: Var):
     require_tensor_map_ty(self)
-    result_ty = TileTy(opaque_pointer_dtype())
+    result_ty = PointerTy(opaque_pointer_dtype())
     return add_operation(TensorMapAsOpaquePtr, result_ty, tensor_map=self)
 
 
@@ -1444,11 +1406,9 @@ def require_constant_result_dtype(dtype: Var) -> Type:
         if const_dtype == datatype.any_opaque_ptr:
             raise TileTypeError("Result type cannot have no memory space")
         memory_space = datatype.MemorySpace(const_dtype.value)
-        return TileTy(opaque_pointer_dtype(memory_space=memory_space))
-    elif is_vector_ty(const_dtype):
-        return const_dtype
+        return PointerTy(opaque_pointer_dtype(memory_space=memory_space))
     elif isinstance(const_dtype, datatype.DType):
-        return TileTy(const_dtype)
+        return PointerTy(const_dtype) if is_pointer_dtype(const_dtype) else ScalarTy(const_dtype)
     else:
         raise TileTypeError(f"Expected a type spec but got {dtype}")
 
@@ -1459,10 +1419,10 @@ def require_constant_result_dtypes(result_dtypes: Var) -> tuple[Type, ...]:
     return tuple(require_constant_result_dtype(dtype) for dtype in result_dtypes)
 
 
-@impl(stub.clusterlaunchcontrol_try_cancel)
+@impl(clusterlaunchcontrol_try_cancel)
 def clusterlaunchcontrol_try_cancel_impl(addr: Var, mbar: Var, multicast: Var) -> None:
-    addr_info = PointerInfo(require_scalar_pointer_type(addr).dtype)
-    mbar_info = PointerInfo(require_scalar_pointer_type(mbar).dtype)
+    addr_info = PointerInfo(require_pointer_type(addr).pointer_dtype)
+    mbar_info = PointerInfo(require_pointer_type(mbar).pointer_dtype)
     multicast = require_constant_bool(multicast)
 
     if (
@@ -1497,20 +1457,20 @@ def clusterlaunchcontrol_try_cancel_impl(addr: Var, mbar: Var, multicast: Var) -
     )
 
 
-@impl(stub.clusterlaunchcontrol_is_canceled)
+@impl(clusterlaunchcontrol_is_canceled)
 def clusterlaunchcontrol_is_canceled_impl(token: Var) -> Var:
-    require_scalar_tile_type(token, (datatype.clusterlaunchcontrol_token,))
+    require_clusterlaunchcontrol_token_type(token)
     return add_operation(
         RawNVVMIntrinsic,
-        TileTy(datatype.bool_),
+        ScalarTy(datatype.bool_),
         intrinsic="llvm.nvvm.clusterlaunchcontrol.query_cancel.is_canceled",
         operands_=(token,),
     )
 
 
-@impl(stub.clusterlaunchcontrol_get_first_block_idx)
+@impl(clusterlaunchcontrol_get_first_block_idx)
 def clusterlaunchcontrol_get_first_block_idx_impl(token: Var, axis: Var) -> Var:
-    require_scalar_tile_type(token, (datatype.clusterlaunchcontrol_token,))
+    require_clusterlaunchcontrol_token_type(token)
     if not axis.is_constant():
         raise TileTypeError(
             f"Expected axis to be constant int or None, but got {axis=}"
@@ -1523,7 +1483,7 @@ def clusterlaunchcontrol_get_first_block_idx_impl(token: Var, axis: Var) -> Var:
     cta_ids = tuple(
         add_operation(
             RawNVVMIntrinsic,
-            TileTy(datatype.int32),
+            ScalarTy(datatype.int32),
             intrinsic=f"llvm.nvvm.clusterlaunchcontrol.query_cancel.get_first_ctaid.{dim}",
             operands_=(token,),
         )
@@ -1567,15 +1527,14 @@ def require_mbarrier_ptr(
         MemorySpace.SHARED,
         MemorySpace.SHARED_CLUSTER,
     ),
-) -> PointerInfo:
-    require_pointer_in_memory_space(mbar, spaces)
-    info = PointerInfo(require_scalar_pointer_type(mbar).dtype)
-    if info.opaque or info.pointee_dtype is not datatype.mbarrier:
+) -> PointerTy:
+    mbar_ptr_type = require_pointer_in_memory_space(mbar, spaces)
+    if mbar_ptr_type.opaque or mbar_ptr_type.pointee_dtype is not datatype.mbarrier:
         raise TileTypeError(f"Expected a pointer to an mbarrier, got {mbar}")
-    return info
+    return mbar_ptr_type
 
 
-@impl(stub.mbarrier_init)
+@impl(mbarrier_stub.mbarrier_init)
 def mbarrier_init_impl(mbar: Var, participants: Var) -> Var:
     require_mbarrier_ptr(mbar)
     participants = astype(participants, datatype.int32)
@@ -1587,7 +1546,7 @@ def mbarrier_init_impl(mbar: Var, participants: Var) -> Var:
     )
 
 
-@impl(stub.mbarrier_invalidate)
+@impl(mbarrier_stub.mbarrier_invalidate)
 def mbarrier_invalidate_impl(mbar: Var) -> Var:
     require_mbarrier_ptr(mbar)
     add_operation_variadic(
@@ -1631,7 +1590,7 @@ ARRIVE_ORDERINGS = (MemoryOrder.RELEASE, MemoryOrder.RELAXED)
 WAIT_ORDERINGS = (MemoryOrder.ACQUIRE, MemoryOrder.RELAXED)
 
 
-@impl(stub.mbarrier_arrive)
+@impl(mbarrier_stub.mbarrier_arrive)
 def mbarrier_arrive_impl(
     mbar: Var,
     count: Var,
@@ -1651,7 +1610,7 @@ def mbarrier_arrive_impl(
         intrinsic += '.relaxed'
     intrinsic += _mbar_space_scope_suffix(scope, space)
 
-    return_type = (TileTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
+    return_type = (ScalarTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
     results = add_operation_variadic(
         RawNVVMIntrinsic,
         return_type,
@@ -1661,7 +1620,7 @@ def mbarrier_arrive_impl(
     return results[0] if return_type else None
 
 
-@impl(stub.mbarrier_arrive_expect_tx)
+@impl(mbarrier_stub.mbarrier_arrive_expect_tx)
 def mbarrier_arrive_expect_tx_impl(
     mbar: Var,
     bytes: Var,
@@ -1682,7 +1641,7 @@ def mbarrier_arrive_expect_tx_impl(
         intrinsic += '.relaxed'
     intrinsic += _mbar_space_scope_suffix(scope, space)
 
-    return_type = (TileTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
+    return_type = (ScalarTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
     results = add_operation_variadic(
         RawNVVMIntrinsic,
         return_type,
@@ -1692,7 +1651,7 @@ def mbarrier_arrive_expect_tx_impl(
     return results[0] if return_type else None
 
 
-@impl(stub.mbarrier_expect_tx)
+@impl(mbarrier_stub.mbarrier_expect_tx)
 def mbarrier_expect_tx_impl(mbar: Var, bytes: Var, scope: Var):
     space = require_mbarrier_ptr(mbar).memory_space
     bytes = astype(bytes, datatype.int32)
@@ -1707,7 +1666,7 @@ def mbarrier_expect_tx_impl(mbar: Var, bytes: Var, scope: Var):
     )
 
 
-@impl(stub.mbarrier_complete_tx)
+@impl(mbarrier_stub.mbarrier_complete_tx)
 def mbarrier_complete_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
     space = require_mbarrier_ptr(mbar).memory_space
     bytes = astype(bytes, datatype.int32)
@@ -1722,7 +1681,7 @@ def mbarrier_complete_tx_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
     )
 
 
-@impl(stub.mbarrier_test_wait)
+@impl(mbarrier_stub.mbarrier_test_wait)
 def mbarrier_test_wait_impl(
     mbar: Var, state: Var, scope: Var, ordering: Var
 ) -> Var:
@@ -1736,13 +1695,13 @@ def mbarrier_test_wait_impl(
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     return add_operation(
         RawNVVMIntrinsic,
-        TileTy(datatype.bool_),
+        ScalarTy(datatype.bool_),
         intrinsic=intrinsic,
         operands_=(mbar, state),
     )
 
 
-@impl(stub.mbarrier_test_wait_parity)
+@impl(mbarrier_stub.mbarrier_test_wait_parity)
 def mbarrier_test_wait_parity_impl(
     mbar: Var, parity: Var, scope: Var, ordering: Var
 ) -> Var:
@@ -1756,13 +1715,13 @@ def mbarrier_test_wait_parity_impl(
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     return add_operation(
         RawNVVMIntrinsic,
-        TileTy(datatype.bool_),
+        ScalarTy(datatype.bool_),
         intrinsic=intrinsic,
         operands_=(mbar, parity),
     )
 
 
-@impl(stub.mbarrier_try_wait)
+@impl(mbarrier_stub.mbarrier_try_wait)
 def mbarrier_try_wait_impl(
     mbar: Var,
     state: Var,
@@ -1785,13 +1744,13 @@ def mbarrier_try_wait_impl(
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     return add_operation(
         RawNVVMIntrinsic,
-        TileTy(datatype.bool_),
+        ScalarTy(datatype.bool_),
         intrinsic=intrinsic,
         operands_=args,
     )
 
 
-@impl(stub.mbarrier_try_wait_parity)
+@impl(mbarrier_stub.mbarrier_try_wait_parity)
 def mbarrier_try_wait_parity_impl(
     mbar: Var,
     parity: Var,
@@ -1814,23 +1773,22 @@ def mbarrier_try_wait_parity_impl(
     intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
     return add_operation(
         RawNVVMIntrinsic,
-        TileTy(datatype.bool_),
+        ScalarTy(datatype.bool_),
         intrinsic=intrinsic,
         operands_=args,
     )
 
 
-@impl(stub.map_shared_to_cluster)
+@impl(core_api.map_shared_to_cluster)
 def map_shared_to_cluster_impl(ptr: Var, rank: Var):
-    ptr_ty = require_scalar_pointer_type(ptr).dtype
+    ptr_ty = require_pointer_type(ptr)
     rank = astype(rank, datatype.int32)
-    info = PointerInfo(ptr_ty)
     require_pointer_in_memory_space(ptr, (MemorySpace.SHARED,))
-    if info.opaque:
-        result_scalar_ty = opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER)
+    if ptr_ty.opaque:
+        result_dtype = opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER)
     else:
-        result_scalar_ty = pointer_dtype(info.pointee_dtype, MemorySpace.SHARED_CLUSTER)
-    result_ty = TileTy(result_scalar_ty)
+        result_dtype = pointer_dtype(ptr_ty.pointee_dtype, MemorySpace.SHARED_CLUSTER)
+    result_ty = PointerTy(result_dtype)
     return add_operation(
         RawNVVMIntrinsic,
         result_ty,

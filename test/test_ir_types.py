@@ -10,7 +10,7 @@ import pytest
 from cuda.tile import TileValueError
 from cuda.tile._exception import TileTypeError
 from cuda.tile._ir.type import (
-    TupleTy, TileTy, ArrayTy, NONE, LooselyTypedScalar
+    TupleTy, TileTy, NONE, LooselyTypedScalar
 )
 from cuda.tile._datatype import (
     DType,
@@ -91,16 +91,6 @@ def test_tile_type():
     # tile type equality
     tile2 = TileTy(float16, shape)
     assert tile == tile2
-
-
-def test_array_type():
-    # array with dynamic shape
-    arr = ArrayTy(bfloat16, shape=(None, None), strides=(None, None))
-    assert arr.dtype == bfloat16
-    assert len(arr.shape) == 2
-    assert len(arr.strides) == 2
-    assert arr.shape[0] is None
-    assert arr.strides[0] is None
 
 
 def test_promote_dtypes():

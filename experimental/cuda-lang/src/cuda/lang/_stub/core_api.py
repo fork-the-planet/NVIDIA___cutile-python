@@ -2,20 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, TypeVar, Generic
+from typing import TypeVar, Generic
 
 from cuda.lang._execution import stub, function
 from cuda.tile._stub import (
-    Constant,
     Array as TileArray,
     static_eval,
-    static_assert,
-    static_iter,
 )
-from cuda.tile._memory_model import MemoryOrder, MemoryScope
-from cuda.lang._datatype import DType, MemorySpace, int32
-from . import nvvm
-from . import nvvm_mlir_interfaces
+from cuda.tile._memory_model import MemoryScope, MemorySpace
+from cuda.lang._datatype import DType, int32
+from .types import Pointer, Scalar
+from cuda.tile._exception import TileTypeError
 
 T = TypeVar("T")
 
@@ -46,89 +43,23 @@ class Array(TileArray, Generic[T]):
     def __getitem__(self, indices: int | tuple[int, ...]) -> T: ...
 
 
-class Vector(Generic[T]):
-    @property
-    @stub
-    def dtype(self) -> "DType": ...
-
-    @property
-    @stub
-    def element_count(self) -> int: ...
-
-    @stub
-    def __getitem__(self, item): ...
-
-    @stub
-    def __setitem__(self, key, value): ...
-
-
-class Pointer(Generic[T]):
-    @property
-    @stub
-    def dtype(self) -> "DType": ...
-
-    @stub
-    def load(
-        self,
-        *,
-        count: int | None = None,
-        alignment: int | None = None,
-        volatile: bool = False,
-        ordering: MemoryOrder | None = None,
-    ) -> T | Vector[T]:
-        """
-        Low-level API to read from memory.
-
-        Args:
-            count: If count is provided, a vector will be returned.
-                For best performance, vector loads should be aligned to the
-                number of bytes in the vector.
-            alignment: Inform the compiler that the address being loaded from
-                is aligned to at least this many bytes.
-                The user is responsible for ensuring aligned loads occur only
-                on appropriately aligned pointers.
-                If alignment is None, do not give the compiler any alignment
-                hints.
-            volatile: If True, the compiler will not modify the number of times
-                this load is performed nor the order of execution with respect
-                to other volatile operations.
-            ordering: When ordering is specified, the load is atomic.
-                Alignment must be explicitly specified on atomic loads.
-                Atomic loads require a pointee type with a bit width that
-                is a power of two greater than or equal to one byte.
-        """
-
-    @stub
-    def store(
-        self,
-        value: T | Vector[T],
-        *,
-        alignment: int | None = None,
-        volatile: bool = False,
-        ordering: Literal[MemoryOrder.RELAXED, MemoryOrder.RELEASE, MemoryOrder.WEAK]
-        | None = None,
-    ) -> None:
-        """
-        Low-level API to store to memory.
-
-        Args:
-            value: Scalar or vector to be stored to the given address.
-            alignment: Inform the compiler that the address being stored to
-                is aligned to at least this many bytes.
-                The user is responsible for ensuring aligned loads occur only
-                on appropriately aligned pointers.
-                If alignment is None, do not give the compiler any alignment
-                hints.
-            volatile: If True, the compiler will not modify the number of times
-                this store is performed nor the order of execution with respect
-                to other volatile operations.
-            ordering: When ordering is specified, the store is atomic.
-                Alignment must be explicitly specified on atomic stores.
-                Atomic loads require a pointee type with a bit width that
-                is a power of two greater than or equal to one byte.
-                Only relaxed, release, and weak are valid memory orders on
-                stores.
-        """
+@stub(host=True)
+def dtype_of(value, /) -> DType:
+    """
+    Returns the data type of a scalar or pointer value.
+    """
+    if isinstance(value, Scalar):
+        # We expect SymbolicScalar here
+        return value._var.get_type().dtype
+    elif isinstance(value, Pointer):
+        # Similarly, we expect SymbolicPointer here
+        return value._var.get_type().pointer_dtype
+    elif isinstance(value, bool | int | float):
+        from cuda.tile._ir.typing_support import dtype_of_constant_scalar
+        return dtype_of_constant_scalar(value)
+    else:
+        raise TileTypeError(f"dtype_of() expects a scalar or a pointer as the argument,"
+                            f" got {type(value)}")
 
 
 @function
@@ -282,7 +213,7 @@ def shared_array(
             cl.syncthreads()
 
             if tx == 1:
-                cl.printf("thread id %d sees shmem[0] = %d\\n", tx, shmem[0])
+                print(f"thread id {tx} sees shmem[0] = {shmem[0]}")
 
         cl.launch(stream, (1,), (2,), kernel, ())
 
@@ -305,7 +236,7 @@ def shared_array(
             cl.syncthreads()
 
             if tx == 1:
-                cl.printf("thread id %d sees shmem[0] = %d\\n", tx, shmem[0])
+                print(f"thread id {tx} sees shmem[0] = {shmem[0]}")
 
         cl.launch(stream, (1,), (2,), kernel, (32,))
 
@@ -353,7 +284,7 @@ def syncthreads() -> None:
 
                 # Write to shared memory now reflected in all threads
                 if tx != 0:
-                    cl.printf("shmem[0] = %d\\n", shmem[0])
+                    print(f"shmem[0] = {shmem[0]}")
 
             cl.launch(stream, (1,), (2,), kernel, ())
 
@@ -378,36 +309,6 @@ def setmaxregister_decrease(value: int32):
 @stub
 def elect_sync(membermask: int = FULL_MASK, /) -> bool:
     pass
-
-
-@stub
-def printf(format, *args) -> None:
-    """Print the values at runtime from the device
-
-    Args:
-        format (str): a c-printf style format string
-            in the form of ``%[flags][width][.precision][length]specifier``,
-            where specifier is limited to integer and float for now, i.e.
-            ``[diuoxXeEfFgGaA]``
-
-        *args (tuple[int | float, ...]):
-            Only arithmetic types are supported.
-
-    Examples:
-
-        .. testcode::
-            :template: kernel_wrapper.py
-
-            cl.printf("value: %d\\n", 42)
-
-        .. testoutput::
-
-            value: 42
-
-    Notes:
-        This operation has significant overhead, and should only be used
-        for debugging purpose.
-    """
 
 
 @stub
@@ -460,7 +361,7 @@ def inline_ptx(ptx_code: str, *constraint_pairs: tuple) -> tuple:
                 ("r", i),
                 ("r", j),
             )
-            cl.printf("result: %d\\n", result)
+            print(f"result: {result}")
 
         .. testoutput::
 
@@ -497,9 +398,9 @@ def atomic_add(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
         .. testcode::
             :template: kernel_2d_array_wrapper.py
 
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_add(array, (2, 3), 1)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -521,9 +422,9 @@ def atomic_sub(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
         .. testcode::
             :template: kernel_2d_array_wrapper.py
 
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_sub(array, (2, 3), 1)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -546,9 +447,9 @@ def atomic_and(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 14  # 0b1110
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_and(array, (2, 3), 11)  # 0b1011
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -571,9 +472,9 @@ def atomic_or(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 12  # 0b1100
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_or(array, (2, 3), 3)  # 0b0011
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -596,9 +497,9 @@ def atomic_xor(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 12  # 0b1100
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_xor(array, (2, 3), 10)  # 0b1010
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -621,9 +522,9 @@ def atomic_min(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 7
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_min(array, (2, 3), 3)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -646,9 +547,9 @@ def atomic_max(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 7
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_max(array, (2, 3), 11)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -674,9 +575,9 @@ def atomic_inc(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 7
-            cl.printf("before: %u\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_inc(array, (2, 3), 7)
-            cl.printf("after: %u, prev_val: %u\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -702,9 +603,9 @@ def atomic_dec(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 0
-            cl.printf("before: %u\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_dec(array, (2, 3), 7)
-            cl.printf("after: %u, prev_val: %u\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -727,9 +628,9 @@ def atomic_exch(A: Array[T], idx: int | tuple[int, ...], val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 7
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_exch(array, (2, 3), 4)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -753,9 +654,9 @@ def atomic_cas(A: Array[T], idx: int | tuple[int, ...], old: T, val: T) -> T:
             :template: kernel_2d_array_wrapper.py
 
             array[2, 3] = 7
-            cl.printf("before: %d\\n", array[2, 3])
+            print(f"before: {array[2, 3]}")
             prev_val = cl.atomic_cas(array, (2, 3), 7, 4)
-            cl.printf("after: %d, prev_val: %d\\n", array[2, 3], prev_val)
+            print(f"after: {array[2, 3]}, prev_val: {prev_val}")
 
         .. testoutput::
 
@@ -871,7 +772,7 @@ def reinterpret_pointer_as_array(
         # Assignment through the reconstructed array is equivalent
         # to assignment through the original.
         smem_array_2[0] = 7
-        cl.printf("%d\\n", smem_array[0])
+        print(smem_array[0])
 
     .. testoutput::
 
@@ -903,54 +804,6 @@ def griddepcontrol_launch_dependents() -> None:
     )
 
 
-__all__ = (
-    "warp_size",
-    "full_mask",
-    "block_idx",
-    "block_dim",
-    "grid_dim",
-    "thread_idx",
-    "lane_idx",
-    "warp_idx",
-    "cluster_idx",
-    "cluster_dim",
-    "block_in_cluster_idx",
-    "block_in_cluster_dim",
-    "atomic_add",
-    "atomic_sub",
-    "atomic_and",
-    "atomic_or",
-    "atomic_xor",
-    "atomic_min",
-    "atomic_max",
-    "atomic_inc",
-    "atomic_dec",
-    "atomic_exch",
-    "atomic_cas",
-    "shfl_sync",
-    "shfl_up_sync",
-    "shfl_down_sync",
-    "shfl_xor_sync",
-    "Constant",
-    "setmaxregister_increase",
-    "setmaxregister_decrease",
-    "elect_sync",
-    "printf",
-    "Array",
-    "Pointer",
-    "Vector",
-    "shared_array",
-    "local_array",
-    "syncwarp",
-    "ptx_comment",
-    "static_eval",
-    "static_assert",
-    "static_iter",
-    "address_space_cast",
-    "map_shared_to_cluster",
-    "reinterpret_pointer_as_array",
-    "nanosleep",
-    "memory_barrier",
-    "griddepcontrol_wait",
-    "griddepcontrol_launch_dependents",
-)
+# Need these imports at the end in order to overcome the circular import problem
+from . import nvvm  # noqa: E402
+from . import nvvm_mlir_interfaces  # noqa: E402

@@ -36,7 +36,7 @@ def _call_foreign_function(
             cl.int32,
             (-5,),
         )
-        cl.printf("%d\\n", abs_value)
+        print(abs_value)
 
     .. testoutput::
         5

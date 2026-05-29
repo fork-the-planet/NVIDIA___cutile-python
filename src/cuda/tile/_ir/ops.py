@@ -38,7 +38,7 @@ from .type import (
     IndexSliceValue
 )
 from .op_impl import (
-    ImplRegistry, is_0d_tile, require_constant_int, require_constant_int_tuple,
+    ImplRegistry, is_scalar, require_constant_int, require_constant_int_tuple,
     require_signed_integer_0d_tile_type,
     require_tile_type, normalize_axis, require_dtype_spec,
     require_constant_bool, require_optional_constant_enum,
@@ -629,7 +629,7 @@ def assume_div_by(x: Var, divisor: int | None) -> Var:
 @impl(ct.assume_divisible_by)
 def assume_divisible_by_impl(x: Var, divisor: Var) -> Var:
     ty = x.get_type()
-    if not is_0d_tile(ty, is_integral):
+    if not is_scalar(ty, is_integral):
         raise TileTypeError(
             f"`assume_divisible_by` requires an integer scalar, got {ty}")
     divisor_val = require_constant_int(divisor)
@@ -734,6 +734,7 @@ def array_slice_impl(self: Var, axis: Var, start: Var, stop: Var) -> Var:
         array_ty.dtype,
         shape=new_shape_ty,
         strides=array_ty.strides,
+        typing_hooks=array_ty.typing_hooks,
         index_dtype=array_ty.index_dtype,
         memory_space=array_ty.memory_space,
     )
@@ -1767,7 +1768,7 @@ def _tuple_shape(ty: Type, path: tuple[int, ...]) -> tuple[int, ...]:
                 f"Expected scalar elements at {path_str}; "
                 f"got a tile of shape {ty.shape}")
 
-        assert is_0d_tile(ty)
+        assert is_scalar(ty)
         return ()
 
     n = len(ty)
@@ -1807,7 +1808,7 @@ def _cat_tuple(tiles: tuple[Var, ...]) -> Var:
 def astile_impl(value: Var, dtype: Var) -> Var:
     dtype = require_dtype_spec(dtype)
     value_ty = value.get_type()
-    if is_0d_tile(value_ty):
+    if is_scalar(value_ty):
         return astype(value, dtype)
 
     if not isinstance(value_ty, TupleTy):

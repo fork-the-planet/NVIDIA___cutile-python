@@ -9,10 +9,9 @@ from cuda.lang._ir.ops import AllocDynSharedMemory, GetDynSharedMemoryBasePtr, \
     get_dyn_shared_memory_base_ptr, _pointer_with_offset, reinterpret_pointer
 from cuda.lang._datatype import int32
 from cuda.lang._exception import TileTypeError
-from cuda.tile._datatype import PointerInfo
+from cuda.lang._ir.type import PointerTy, ScalarTy
 from cuda.tile._ir.ops import _is_power_of_2
 from cuda.tile._ir.core_ops import assign
-from cuda.tile._ir.type import TileTy
 
 
 def handle_dynamic_shared_memory(kernel_body: ir.Block,
@@ -46,7 +45,7 @@ def handle_dynamic_shared_memory(kernel_body: ir.Block,
             array_pointers.append(ptr)
 
         for op, ptr in zip(alloc_ops, array_pointers, strict=True):
-            ptr = reinterpret_pointer(ptr, op.result_var.get_type().dtype)
+            ptr = reinterpret_pointer(ptr, op.result_var.get_type().pointer_dtype)
             assign(ptr, op.result_var)
 
     # Remove AllocDynSharedMemory operations
@@ -73,10 +72,9 @@ def _get_alignment(alloc_op: AllocDynSharedMemory) -> int:
 
 
 def _get_item_size(alloc_op: AllocDynSharedMemory) -> int:
-    pointer_tile_ty = alloc_op.result_var.get_type()
-    assert isinstance(pointer_tile_ty, TileTy)
-    info = PointerInfo(pointer_tile_ty.dtype)
-    pointee_dtype = info.pointee_dtype
+    pointer_ty = alloc_op.result_var.get_type()
+    assert isinstance(pointer_ty, PointerTy)
+    pointee_dtype = pointer_ty.pointee_dtype
     assert pointee_dtype.bitwidth % 8 == 0
     return pointee_dtype.bitwidth // 8
 
@@ -100,7 +98,7 @@ def _build_host_program(alloc_op: AllocDynSharedMemory,
                                 " or a kernel parameter", loc=size_var.loc)
         const_val = var_prog.as_const()
         if const_val is None:
-            if size_var.get_type() != TileTy(int32, ()):
+            if size_var.get_type() != ScalarTy(int32):
                 raise TileTypeError(f"Kernel parameter used as shared array size must be int32,"
                                     f" got {size_var.get_type()}",
                                     loc=size_var.loc)

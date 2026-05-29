@@ -15,14 +15,7 @@ from .ir import TypingHooks
 from .type import DataclassInfo, PointerInfoTy
 
 from .type import Type, DTypeConstructor, DTypeSpec, NONE, StringTy, \
-    ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar, \
-    TileTy
-
-
-BOOL_TY = TileTy(datatype.bool_)
-I32_TY = TileTy(datatype.int32)
-I64_TY = TileTy(datatype.int64)
-U64_TY = TileTy(datatype.uint64)
+    ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar
 
 
 # Store mapping from 3rd party dtype objects

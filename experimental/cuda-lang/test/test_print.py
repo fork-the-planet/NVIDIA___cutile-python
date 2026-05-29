@@ -8,19 +8,14 @@ import torch
 
 
 @pytest.mark.parametrize(
-    "dtype,format_string",
-    [
-        (torch.int32, "%d"),
-        (torch.int64, "%ld"),
-        (torch.float32, "%f"),
-        (torch.float64, "%lf"),
-    ],
+    "dtype",
+    [torch.int32, torch.int64, torch.float32, torch.float64],
 )
-def test_print(dtype, format_string):
+def test_print(dtype):
 
     @cl.kernel
     def kernel(A):
-        cl.printf(format_string, A[0])
+        print(A[0])
 
     A = torch.tensor([5], dtype=dtype).cuda()
     cl.launch(

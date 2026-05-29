@@ -2,13 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TypeAlias, Union
+from typing import TypeAlias
 
-from cuda.lang._ir.type import (
-    MemorySpace,
-    TileTy,
-)
-from cuda.tile._stub import Tile
 from cuda.tile._datatype import (
     DType,
     bfloat16,
@@ -52,11 +47,11 @@ clusterlaunchcontrol_token = _define_dtype(
 )
 
 
-def to_torch_dtype(dtype: DType | TileTy):
-    import torch
+def to_torch_dtype(dtype: DType, /):
+    if not isinstance(dtype, DType):
+        raise TypeError("Expected a DType object")
 
-    if isinstance(dtype, TileTy):
-        dtype = dtype.dtype
+    import torch
 
     dtype_map = {
         bool_: torch.bool,
@@ -87,11 +82,7 @@ def to_torch_dtype(dtype: DType | TileTy):
     raise NotImplementedError(f"No torch dtype mapping for {dtype}")
 
 
-TypeSpec: TypeAlias = Union[DType | TileTy]
-
-
-def is_any_pointer(value):
-    return isinstance(value, Tile) and value.ndim == 0 and is_pointer_dtype(value.dtype)
+TypeSpec: TypeAlias = DType
 
 
 __all__ = [
@@ -102,7 +93,6 @@ __all__ = [
     "is_boolean",
     "is_integral",
     "is_signed",
-    "is_any_pointer",
     "is_pointer_dtype",
     "pointer_dtype",
     "opaque_pointer_dtype",
@@ -131,5 +121,4 @@ __all__ = [
     "DType",
     "to_torch_dtype",
     "default_int_type",
-    "MemorySpace",
 ]

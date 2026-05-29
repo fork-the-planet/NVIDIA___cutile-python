@@ -24,7 +24,6 @@ from cuda.lang._passes.ast2hir import get_function_hir
 from cuda.lang._passes.ir2mlir import ir2mlir
 from cuda.lang._passes.flatten_cfg import flatten_cfg
 from cuda.lang._passes.simt_semantics import simt_semantic_analysis
-from cuda.lang._passes.canonicalize_parameters import canonicalize_parameters
 from cuda.lang._passes.handle_dyn_shared_mem import handle_dynamic_shared_memory
 from cuda.lang._passes.hoist_tensor_map import hoist_tensor_maps, HoistedTensorMap
 from cuda.lang.compilation import (
@@ -137,7 +136,6 @@ def get_function_ir(
             function.param_locs,
             ctx
         )
-        canonicalize_parameters(params, builder)
         hir2ir(function, params.aggregate_vars, ctx)
     func_body = ctx.make_block("entry", function.body.loc)
     func_body.params = sum((vars for vars, _ in params.nonconstant_flat_vars), ())

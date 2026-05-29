@@ -2,14 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 from dataclasses import dataclass
+from typing import Sequence
+
+from typing_extensions import override
 
 from cuda.lang._ir.ir import LocalArrayContextManagerValue
 from cuda.lang._enums import TensorMapSwizzle
+from cuda.lang._stub.types import Scalar, Pointer, Vector
+from cuda.tile import TileValueError
 from cuda.tile._ir.type import (
     Type,
     TupleTy,
     ArrayTy,
-    TileTy,
     StringTy,
     FunctionTy,
     DTypeConstructor,
@@ -23,27 +27,149 @@ from cuda.tile._ir.type import (
     MemorySpace,
     ArrayValue,
     TupleValue,
-    PointerInfoTy
+    PointerInfoTy, TensorLikeTy, Symbol
 )
 import cuda.tile._datatype as datatype
-from cuda.tile._datatype import DType
-from cuda.tile._ir.ir import Var, AggregateValue
+from cuda.tile._datatype import DType, PointerInfo
+from cuda.tile._ir.ir import Var, AggregateValue, TypingHooks
 from cuda.lang._exception import TileTypeError
 
 
+@dataclass(frozen=True)
+class ScalarTy(TensorLikeTy):
+    dtype: DType
+
+    def __post_init__(self):
+        assert isinstance(self.dtype, DType)
+        assert not datatype.is_pointer_dtype(self.dtype)
+
+    @override
+    def tensor_dtype(self) -> "DType":
+        return self.dtype
+
+    @override
+    def tensor_shape(self) -> tuple[int, ...]:
+        return ()
+
+    def __str__(self):
+        return str(self.dtype)
+
+    @override
+    def make_symbol(self, var: "Var") -> Symbol:
+        return SymbolicScalar(var)
+
+
+class SymbolicScalar(Symbol, Scalar):
+    def __init__(self, var: "Var[ScalarTy]"):
+        Symbol.__init__(self, var)
+
+    def __bool__(self):
+        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
+                             " to boolean")
+
+    def __int__(self):
+        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
+                             " to an integer")
+
+    def __float__(self):
+        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
+                             " to a float")
+
+    def __index__(self):
+        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
+                             " to an integer")
+
+    def __repr__(self):
+        return f"<Scalar[{self._var.get_type().dtype}]>"
+
+
+@dataclass(frozen=True)
+class PointerTy(TensorLikeTy):
+    # NOTE: this is the *pointer*, not *pointee* dtype.
+    pointer_dtype: DType
+
+    def __post_init__(self):
+        assert datatype.is_pointer_dtype(self.pointer_dtype)
+
+    @property
+    def opaque(self) -> bool:
+        return PointerInfo(self.pointer_dtype).opaque
+
+    @property
+    def pointee_dtype(self) -> DType:
+        return PointerInfo(self.pointer_dtype).pointee_dtype
+
+    @property
+    def memory_space(self) -> MemorySpace:
+        return PointerInfo(self.pointer_dtype).memory_space
+
+    @override
+    def tensor_dtype(self) -> "DType":
+        return self.pointer_dtype
+
+    @override
+    def tensor_shape(self) -> tuple[int, ...]:
+        return ()
+
+    def __str__(self):
+        return str(self.pointer_dtype)
+
+    @override
+    def make_symbol(self, var: "Var") -> Symbol:
+        return SymbolicPointer(var)
+
+
+class SymbolicPointer(Symbol, Pointer):
+    def __init__(self, var: "Var[PointerTy]"):
+        Symbol.__init__(self, var)
+
+
+@dataclass(frozen=True)
+class VectorTy(TensorLikeTy):
+    element_dtype: DType
+    length: int
+
+    def __post_init__(self):
+        if not isinstance(self.length, int):
+            raise TileTypeError(
+                f"Expected vector length to be an int, got {type(self.length).__name__}"
+            )
+
+    @override
+    def tensor_dtype(self) -> "DType":
+        return self.element_dtype
+
+    @override
+    def tensor_shape(self) -> tuple[int, ...]:
+        return (self.length,)
+
+    def __str__(self):
+        return f"Vector[{self.element_dtype}, {self.length}]"
+
+    @override
+    def make_symbol(self, var: "Var") -> Symbol:
+        return SymbolicVector(var)
+
+
+class SymbolicVector(Symbol, Vector):
+    def __init__(self, var: "Var[VectorTy]"):
+        Symbol.__init__(self, var)
+
+    @property
+    def dtype(self) -> "DType":
+        return self._var.get_type().dtype
+
+    @property
+    def element_count(self) -> int:
+        return self._var.get_type().length
+
+
 def is_vector_ty(ty: Type) -> bool:
-    return (
-        isinstance(ty, TileTy)
-        and len(ty.shape) == 1
-    )
+    return isinstance(ty, VectorTy)
 
 
-def make_vector_ty(dtype: DType, length: int) -> TileTy:
-    if not isinstance(length, int):
-        raise TileTypeError(
-            f"Expected vector length to be an int, got {type(length).__name__}"
-        )
-    return TileTy(dtype, (length,))
+def make_vector_ty(dtype: DType, length: int) -> VectorTy:
+    return VectorTy(dtype, length)
 
 
 @dataclass(frozen=True)
@@ -90,11 +216,23 @@ class TensorMapTy(Type):
     swizzle: TensorMapSwizzle
 
 
+class LangTypingHooks(TypingHooks):
+    @override
+    def get_tensor_like_type(self, dtype: DType, shape: Sequence[int]) -> TensorLikeTy:
+        match tuple(shape):
+            case () if datatype.is_pointer_dtype(dtype): return PointerTy(dtype)
+            case (): return ScalarTy(dtype)
+            case (length,): return VectorTy(dtype, length)
+            case _: assert False, "cuda.lang does not support N-dimensional tensors"
+
+
 __all__ = (
     "Type",
     "TupleTy",
     "ArrayTy",
-    "TileTy",
+    "ScalarTy",
+    "PointerTy",
+    "VectorTy",
     "StringTy",
     "FunctionTy",
     "DTypeConstructor",
@@ -109,4 +247,5 @@ __all__ = (
     "ArrayValue",
     "TupleValue",
     "PointerInfoTy",
+    "LangTypingHooks"
 )

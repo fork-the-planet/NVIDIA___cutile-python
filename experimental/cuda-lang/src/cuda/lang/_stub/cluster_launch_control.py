@@ -8,8 +8,8 @@ from cuda.lang._datatype import (
     clusterlaunchcontrol_token,
     mbarrier,
     int32,
-    MemorySpace,
 )
+from cuda.tile._memory_model import MemorySpace
 from cuda.lang._execution import stub
 
 

@@ -23,16 +23,21 @@ def tensor_map_type_to_mlir_type(src_type: ir_type.TensorMapTy) -> mlir.Type:
 
 
 @ir_type_to_mlir_type.register
-def tile_type_to_mlir_type(src_type: ir_type.TileTy) -> mlir.Type:
-    element_type = dtype_to_mlir_type(src_type.dtype)
-    if src_type.shape == ():
-        return element_type
-    if not ir_type.is_vector_ty(src_type):
-        raise NotImplementedError(f"Unable to convert {src_type=} to MLIR type")
+def scalar_type_to_mlir_type(src_type: ir_type.ScalarTy) -> mlir.Type:
+    return dtype_to_mlir_type(src_type.dtype)
+
+
+@ir_type_to_mlir_type.register
+def pointer_type_to_mlir_type(src_type: ir_type.PointerTy) -> mlir.Type:
+    return dtype_to_mlir_type(src_type.pointer_dtype)
+
+
+@ir_type_to_mlir_type.register
+def vector_type_to_mlir_type(src_type: ir_type.VectorTy) -> mlir.Type:
     return mlir.VectorType(
-        shape=src_type.shape,
-        elementType=element_type,
-        scalableDims=(False,) * len(src_type.shape),
+        shape=(src_type.length,),
+        elementType=dtype_to_mlir_type(src_type.element_dtype),
+        scalableDims=(False,)
     )
 
 
@@ -127,13 +132,13 @@ def int_to_mlir_index(mlir_type: mlir.IndexType, value) -> mlir.Value:
 
 
 def _get_type_conversion_encoder(
-    from_type: ir_type.TileTy,
-    to_type: ir_type.TileTy,
+    from_type: ir_type.TensorLikeTy,
+    to_type: ir_type.TensorLikeTy,
 ):
-    from_dtype = from_type.dtype
-    to_dtype = to_type.dtype
+    from_dtype = from_type.tensor_dtype()
+    to_dtype = to_type.tensor_dtype()
 
-    if from_type.shape != to_type.shape:
+    if from_type.tensor_shape() != to_type.tensor_shape():
         raise TileInternalError(
             f"Cannot convert between different shapes: {from_type} and {to_type}"
         )
@@ -186,8 +191,8 @@ def _get_type_conversion_encoder(
 
 
 def convert_dtype(
-    src_type: ir_type.TileTy,
-    dst_type: ir_type.TileTy,
+    src_type: ir_type.TensorLikeTy,
+    dst_type: ir_type.TensorLikeTy,
     value: mlir.Value,
 ) -> mlir.Value:
     encoder = _get_type_conversion_encoder(src_type, dst_type)

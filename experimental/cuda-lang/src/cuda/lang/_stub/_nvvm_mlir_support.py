@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Literal, TypeVar
 
+from cuda.tile._datatype import is_pointer_dtype
 from cuda.tile._memory_model import MemoryOrder, MemoryScope, MemorySpace
 import cuda.lang._datatype as datatype
 from cuda.lang._execution import stub
@@ -15,7 +16,6 @@ from cuda.lang._stub._nvvm_support import (
     _IntrinsicDTypeAnnotation,
     _IntrinsicPredicateAnnotation,
 )
-from cuda.lang._ir.type import TileTy
 from cuda.tile import TileTypeError, TileValueError
 from cuda.tile._ir.op_impl import (
     require_constant_bool,
@@ -207,9 +207,12 @@ def get_raw_mlir_parts(
 
 
 def _raw_nvvm_mlir_operation_impl(stub_func, *args: Var):
+    from cuda.lang._ir.type import ScalarTy, PointerTy
     from cuda.lang._ir.ops import RawMLIROperation
 
-    result_types = tuple(TileTy(ty.type.dtype) for ty in stub_func._results)
+    result_types = tuple(PointerTy(ty.type.dtype) if is_pointer_dtype(ty.type.dtype)
+                         else ScalarTy(ty.type.dtype)
+                         for ty in stub_func._results)
     operands, attrs = get_raw_mlir_parts(
         stub_func._args, stub_func._attr_sized_operand_segments, args
     )

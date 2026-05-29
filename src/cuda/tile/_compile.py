@@ -140,12 +140,12 @@ def _create_kernel_parameters(parameter_constraints: Sequence[ParameterConstrain
             var = loosely_typed_const(constraint.value, name=name)
         else:
             if isinstance(constraint, ScalarConstraint):
-                ty = TileTy(constraint.dtype, ())
+                ty = ir_ctx.typing_hooks.get_tensor_like_type(constraint.dtype, ())
             elif isinstance(constraint, ArrayConstraint):
-                ty = _get_array_ty(constraint)
+                ty = _get_array_ty(constraint, ir_ctx.typing_hooks)
             elif isinstance(constraint, ListConstraint):
                 assert isinstance(constraint.element, ArrayConstraint)
-                array_ty = _get_array_ty(constraint.element)
+                array_ty = _get_array_ty(constraint.element, ir_ctx.typing_hooks)
                 ty = ListTy(array_ty)
             else:
                 raise TypeError(f"Unexpected parameter descriptor type"
@@ -159,7 +159,7 @@ def _create_kernel_parameters(parameter_constraints: Sequence[ParameterConstrain
     return _KernelParameters(aggregate_vars, nonconstant_flat_vars)
 
 
-def _get_array_ty(param: ArrayConstraint):
+def _get_array_ty(param: ArrayConstraint, typing_hooks: TypingHooks):
     for static_stride, bound in zip(param.stride_constant, param.stride_lower_bound_incl,
                                     strict=True):
         if static_stride is not None:
@@ -171,7 +171,8 @@ def _get_array_ty(param: ArrayConstraint):
     return ArrayTy(param.dtype,
                    shape=(None,) * param.ndim,
                    strides=param.stride_constant,
-                   index_dtype=param.index_dtype)
+                   index_dtype=param.index_dtype,
+                   typing_hooks=typing_hooks)
 
 
 def _log_mlir(bytecode_buf):

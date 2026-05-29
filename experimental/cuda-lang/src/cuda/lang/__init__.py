@@ -5,6 +5,7 @@
 from cuda.tile._memory_model import (
     MemoryScope,
     MemoryOrder,
+    MemorySpace
 )
 
 from ._execution import (
@@ -15,11 +16,19 @@ from ._execution import (
 
 from ._compile import compile_simt
 
-from ._stub import (
+from cuda.tile._datatype import (
     pointer_dtype,
     opaque_pointer_dtype,
     is_pointer_dtype,
     PointerInfo,
+)
+from ._stub.types import (
+    Scalar,
+    Vector,
+    Pointer,
+)
+from ._stub.core_api import (
+    dtype_of,
     warp_size,
     full_mask,
     block_idx,
@@ -46,11 +55,7 @@ from ._stub import (
     setmaxregister_increase,
     setmaxregister_decrease,
     elect_sync,
-    Constant,
     Array,
-    Pointer,
-    Vector,
-    printf,
     shared_array,
     local_array,
     address_space_cast,
@@ -65,17 +70,33 @@ from ._stub import (
     syncthreads,
     syncwarp,
     nvvm,
-    libdevice,
+    nanosleep,
+    griddepcontrol_wait,
+    griddepcontrol_launch_dependents,
+    memory_barrier,
+)
+from cuda.tile._stub import (
+    Constant
+)
+
+from cuda.lang._stub import libdevice
+
+from cuda.lang._stub.tensor_map import (
     TensorMapSwizzle,
     TensorMap,
     tensor_map_tiled,
+)
+
+from cuda.lang._stub.tcgen05 import (
     CTAGroup,
     Tcgen05LdStShape,
     tcgen05_alloc,
     tcgen05_dealloc,
     tcgen05_commit,
     tcgen05_ld,
-    nanosleep,
+)
+
+from cuda.lang._stub.mbarrier import (
     MbarrierScope,
     mbarrier_init,
     mbarrier_invalidate,
@@ -87,12 +108,12 @@ from ._stub import (
     mbarrier_test_wait_parity,
     mbarrier_try_wait,
     mbarrier_try_wait_parity,
+)
+
+from cuda.lang._stub.cluster_launch_control import (
     clusterlaunchcontrol_try_cancel,
     clusterlaunchcontrol_is_canceled,
     clusterlaunchcontrol_get_first_block_idx,
-    griddepcontrol_wait,
-    griddepcontrol_launch_dependents,
-    memory_barrier,
 )
 
 from ._datatype import (
@@ -114,10 +135,10 @@ from ._datatype import (
     uint64,
     mbarrier,
     clusterlaunchcontrol_token,
-    MemorySpace,
 )
 
 __all__ = (
+    "dtype_of",
     "pointer_dtype",
     "opaque_pointer_dtype",
     "is_pointer_dtype",
@@ -172,7 +193,6 @@ __all__ = (
     "uint32",
     "uint64",
     "Constant",
-    "printf",
     "shared_array",
     "local_array",
     "address_space_cast",
@@ -184,6 +204,7 @@ __all__ = (
     "syncwarp",
     "Array",
     "Pointer",
+    "Scalar",
     "Vector",
     "nvvm",
     "libdevice",

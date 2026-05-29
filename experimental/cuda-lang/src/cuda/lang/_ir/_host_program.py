@@ -14,10 +14,11 @@ from cuda.tile._ir.arithmetic_ops import (
     binary_bitwise_tensorlike_raw
 )
 from cuda.tile._ir.core_ops import TypedConst, Assign, loosely_typed_const, strictly_typed_const
+from cuda.lang._ir.type import ScalarTy
 from cuda.tile._ir.ops import (
     AssumeBounded, AssumeDivBy,
 )
-from cuda.tile._ir.typing_support import I32_TY, I64_TY
+from cuda.tile._datatype import int32, int64
 
 HostOpcode = Literal["Const", "KernelArgI32", "KernelArgI64", "Mul", "Add", "RoundUpToPow2"]
 
@@ -50,9 +51,9 @@ def get_host_programs_by_var(kernel_body: ir.Block) -> dict[str, HostProgram]:
     ret = dict()
     for i, p in enumerate(kernel_body.params):
         ty = p.get_type()
-        if ty == I32_TY:
+        if ty == ScalarTy(int32):
             ret[p.name] = HostProgram(opcodes=["KernelArgI32"], op_attrs=[i])
-        elif ty == I64_TY:
+        elif ty == ScalarTy(int64):
             ret[p.name] = HostProgram(opcodes=["KernelArgI64"], op_attrs=[i])
 
     for op in kernel_body:

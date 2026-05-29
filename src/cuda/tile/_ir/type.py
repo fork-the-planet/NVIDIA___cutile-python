@@ -21,10 +21,10 @@ from cuda.tile._memory_model import MemorySpace
 from cuda.tile._stub import Tile, Array
 from cuda.tile._numeric_semantics import PaddingMode
 from .aggregate_value import AggregateValue
+from cuda.tile._datatype import DType, PointerInfo
 
 if TYPE_CHECKING:
-    from cuda.tile._datatype import DType, PointerInfo
-    from cuda.tile._ir.ir import Var
+    from cuda.tile._ir.ir import Var, TypingHooks
     from cuda.tile._ir import hir
     from cuda.tile._ir.scope import LocalScope
 
@@ -392,6 +392,7 @@ class TileTy(TensorLikeTy):
         except KeyError:
             pass
 
+        assert isinstance(dtype, DType)
         ret = object.__new__(cls)
         ret.dtype = dtype
         ret.shape = shape
@@ -406,6 +407,7 @@ class TileTy(TensorLikeTy):
     def tensor_shape(self) -> tuple[int, ...]:
         return self.shape
 
+    @override
     def make_symbol(self, var: "Var") -> Symbol:
         return SymbolicTile(var)
 
@@ -485,6 +487,7 @@ class ArrayTy(Type):
                  /,
                  shape: Tuple[Optional[int], ...],
                  strides: Tuple[Optional[int], ...],
+                 typing_hooks: "TypingHooks",
                  index_dtype=None,
                  memory_space: MemorySpace = MemorySpace.GENERIC):
         from .._datatype import int32, DType
@@ -494,6 +497,7 @@ class ArrayTy(Type):
         self.strides = strides
         self.index_dtype = int32 if index_dtype is None else index_dtype
         self.memory_space = memory_space
+        self.typing_hooks = typing_hooks
 
     def make_symbol(self, var: "Var") -> Any:
         return SymbolicArray(var)
@@ -507,8 +511,8 @@ class ArrayTy(Type):
     def aggregate_item_types(self) -> tuple["Type", ...]:
         from .._datatype import pointer_dtype
         base_ptr_ty = pointer_dtype(self.dtype, self.memory_space)
-        base_ptr_tile_ty = TileTy(base_ptr_ty)
-        size_ty = TileTy(self.index_dtype)
+        base_ptr_tile_ty = self.typing_hooks.get_tensor_like_type(base_ptr_ty, ())
+        size_ty = self.typing_hooks.get_tensor_like_type(self.index_dtype, ())
         return (base_ptr_tile_ty,) + (size_ty,) * (self.ndim * 2)
 
     def make_aggregate_value(self, items: tuple["Var", ...]) -> "AggregateValue":

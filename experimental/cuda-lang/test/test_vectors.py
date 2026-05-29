@@ -65,7 +65,7 @@ def test_vector_apis():
             vec = p.load(count=4, alignment=16)
             out[0] = cl.int32(vec.dtype == larr.dtype)
             out[1] = cl.int32(larr.dtype == cl.int32)
-            out[2] = cl.int32(cl.PointerInfo(p.dtype).pointee_dtype == larr.dtype)
+            out[2] = cl.int32(p.pointee_dtype == larr.dtype)
             out[3] = vec.element_count
 
     out = torch.zeros(4, dtype=torch.int32).cuda()
