@@ -15,7 +15,8 @@ exclude =
     docs/source/stubs,
     docs/venv,
     docs/source/_templates,
-    experimental/cuda-lang/src/cuda/lang/_stub/nvvm.py
-    experimental/cuda-lang/src/cuda/lang/_stub/_libdevice.py
+    experimental/cuda-lang/src/cuda/lang/_stub/nvvm.py,
+    experimental/cuda-lang/src/cuda/lang/_stub/nvvm_mlir_interfaces.py,
+    experimental/cuda-lang/src/cuda/lang/_stub/_libdevice.py,
 per-file-ignores =
     src/cuda/tile/_stub.py: W291

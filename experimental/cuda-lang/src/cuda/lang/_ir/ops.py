@@ -1134,6 +1134,14 @@ class RawNVVMIntrinsic(Operation, opcode="nvvm.call_intrinsic",
     operands_: tuple[Var, ...] = operand()
 
 
+@dataclass(eq=False)
+class RawMLIROperation(Operation, opcode="mlir.operation",
+                       memory_effect=MemoryEffect.STORE):
+    op_name: str = attribute()
+    operands_: tuple[Var, ...] = operand()
+    mlir_attributes: tuple[tuple[str, mlir.Attribute], ...] = attribute(default=())
+
+
 def require_scalar_tile_type(value: Var, valid_dtypes: tuple[datatype.DType, ...] = ()) -> TileTy:
     value_ty = require_tile_type(value)
     if value_ty.ndim != 0:
@@ -1141,12 +1149,6 @@ def require_scalar_tile_type(value: Var, valid_dtypes: tuple[datatype.DType, ...
     if valid_dtypes and value_ty.dtype not in valid_dtypes:
         raise TileTypeError(f"Expected type to be one of {valid_dtypes}, but got {value_ty.dtype}")
     return value_ty
-
-
-def _require_nvvm_intrinsic_name(intrinsic: str) -> str:
-    if not intrinsic.startswith("llvm."):
-        raise TileTypeError(f"Expected intrinsic name to start with 'llvm.', but got {intrinsic!r}")
-    return intrinsic
 
 
 def shfl_sync_impl(mode: str, mask: Var, value: Var, lane_mask: Var, width: Var) -> Var:

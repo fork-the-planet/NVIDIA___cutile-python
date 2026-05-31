@@ -968,6 +968,24 @@ class IR2MLIR:
         return tuple(self._lower_intrinsic_result(mlir_values))
 
     @lower_operation.register
+    def lower_raw_mlir_operation(
+        self, operation: ops.RawMLIROperation
+    ) -> Sequence[mlir.Value]:
+        operands = tuple(self.get_var(operand) for operand in operation.operands_)
+        result_types = tuple(
+            ir_type_to_mlir_type(result_var.get_type())
+            for result_var in operation.result_vars
+        )
+        results = mlir.add_operation(
+            name=operation.op_name,
+            result_type=result_types,
+            operands=operands,
+            properties=(),
+            attributes=operation.mlir_attributes,
+        )
+        return tuple(results)
+
+    @lower_operation.register
     def lower_raw_where(self, operation: ops.RawWhereOperation) -> Sequence[mlir.Value]:
         cond_i8 = self.get_var(operation.cond)
         cond_type = _require_arith_type(operation.cond.get_type())

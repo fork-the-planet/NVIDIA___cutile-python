@@ -117,10 +117,15 @@ from cuda.lang._stub._nvvm_support import (
     P0,
     P1,
     P3,
+    P4,
     P5,
     P6,
     P7,
     PX,
+    U32,
+    U64,
+    VX,
+    X,
     _IntrinsicDTypeAnnotation,
 )
 
