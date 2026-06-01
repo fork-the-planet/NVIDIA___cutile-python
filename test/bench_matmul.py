@@ -2,23 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from math import ceil
-from conftest import dtype_id, shape_id
+from conftest import dtype_id, shape_id, requires_tileiras
 import torch
 import pytest
 import cuda.tile as ct
-
-from util import estimate_bench_iter, require_hopper_or_newer, torch_use_tf32_matmul
+from kernels.kernel_utils import block_quantize, swizzle_32_4_4
+from util import (
+    estimate_bench_iter, require_hopper_or_newer, torch_use_tf32_matmul, require_blackwell_or_newer)
 from kernels.matmul import (
-    matmul_kernel, matmul_split_k_kernel, batch_matmul_kernel, persistent_matmul_kernel
-)
+    matmul_kernel, matmul_split_k_kernel, batch_matmul_kernel, persistent_matmul_kernel)
+from kernels.scaled_matmul import block_scaled_matmul_kernel
 
-
-@pytest.fixture(params=[
-    torch.float16, torch.float32
-], ids=dtype_id)
-def dtype(request):
-    return request.param
+from cuda.tile._bytecode.version import BytecodeVersion
 
 
 def _run_matmul_benchmark(shape, dtype, backend, benchmark,
@@ -48,9 +43,8 @@ def _run_matmul_benchmark(shape, dtype, backend, benchmark,
     benchmark.extra_info['bytes_rw'] = bytes_rw
 
 
-def _run_batch_matmul_benchmark(
-    shape, dtype, backend, benchmark, extra_args=(), atol=1e-3, rtol=1e-3
-):
+def _run_batch_matmul_benchmark(shape, dtype, backend, benchmark,
+                                extra_args=(), atol=1e-3, rtol=1e-3):
     b, m, n, k = shape
     A = torch.rand((b, m, k), dtype=torch.float32, device="cuda").to(dtype)
     B = torch.rand((b, k, n), dtype=torch.float32, device="cuda").to(dtype)
@@ -77,6 +71,49 @@ def _run_batch_matmul_benchmark(
     benchmark.extra_info['bytes_rw'] = bytes_rw
 
 
+def _run_swizzled_scaled_matmul_benchmark(shape, dtype, backend,
+                                          benchmark, extra_args=(), atol=1e-3, rtol=1e-3):
+    m, n, k = shape
+    scaling_block_size = 32  # this must be 32 because of hardware limitations
+
+    A = torch.rand((m, k), device='cuda')
+    B = torch.rand((n, k), device='cuda')
+
+    A, A_s = block_quantize(A, scaling_block_size, dtype)
+    B, B_s = block_quantize(B, scaling_block_size, dtype)
+
+    B = B.T
+    B_s = B_s.T
+
+    k = A.shape[-1]
+
+    A_s_swizzled = swizzle_32_4_4(A_s)
+    B_s_swizzled = swizzle_32_4_4(B_s.T.contiguous())
+
+    C = torch.zeros((m, n), dtype=torch.float32, device="cuda")
+
+    args = (A, A_s_swizzled, B, B_s_swizzled, C) + extra_args
+
+    ref_A_s = torch.repeat_interleave(A_s, scaling_block_size, dim=1).to(torch.float32)
+    ref_B_s = torch.repeat_interleave(B_s, scaling_block_size, dim=0).to(torch.float32)
+    ref = (A.to(torch.float32) * ref_A_s) @ (B.to(torch.float32) * ref_B_s)
+
+    res = backend(*args)
+    torch.testing.assert_close(res, ref, atol=atol, rtol=rtol)
+
+    torch.cuda.synchronize()
+    warmup_rounds, iterations, rounds = estimate_bench_iter(backend, args, cudagraph=True)
+    benchmark.pedantic(
+        backend, args,
+        rounds=rounds, warmup_rounds=warmup_rounds, iterations=iterations, cudagraph=True
+    )
+
+    flop_count = 2 * m * n * k
+    bytes_rw = sum([t.numel() * t.dtype.itemsize for t in (A, A_s, B, B_s, C)])
+    benchmark.extra_info['flop_count'] = flop_count
+    benchmark.extra_info['bytes_rw'] = bytes_rw
+
+
 # =============================== Matmul =============================
 
 @pytest.fixture(params=[
@@ -84,19 +121,26 @@ def _run_batch_matmul_benchmark(
     (8192, 8192, 8192),
     (12288, 4096, 2560),
 ], ids=shape_id)
-def shape(request):
+def matmul_shape(request):
+    return request.param
+
+
+@pytest.fixture(params=[
+    torch.float16, torch.float32
+], ids=dtype_id)
+def matmul_dtype(request):
     return request.param
 
 
 @pytest.mark.benchmark(group='matmul')
-def bench_matmul(shape, dtype, backend, benchmark):
-    _run_matmul_benchmark(shape, dtype, backend, benchmark)
+def bench_matmul(matmul_shape, matmul_dtype, backend, benchmark):
+    _run_matmul_benchmark(matmul_shape, matmul_dtype, backend, benchmark)
 
 
 def cutile_matmul(A, B, C):
     tm, tn, tk = 256, 256, 64
     m, n, _ = A.shape[0], B.shape[1], A.shape[1]
-    grid = (ceil(m / tm) * ceil(n / tn), 1, 1)
+    grid = (ct.cdiv(m, tm) * ct.cdiv(n, tn), 1, 1)
     ct.launch(torch.cuda.current_stream(), grid, matmul_kernel, (A, B, C, tm, tn, tk))
 
 
@@ -116,15 +160,22 @@ def split_k_shape(request):
     return request.param
 
 
+@pytest.fixture(params=[
+    torch.float16, torch.float32
+], ids=dtype_id)
+def split_k_dtype(request):
+    return request.param
+
+
 @pytest.mark.benchmark(group='matmul_split_k')
-def bench_matmul_split_k(split_k_shape, dtype, backend, benchmark):
+def bench_matmul_split_k(split_k_shape, split_k_dtype, backend, benchmark):
     m, n, _ = split_k_shape
     tile_sizes = (32, 64, 256)
-    LOCKS = torch.zeros(ceil(m / tile_sizes[0]) * ceil(n / tile_sizes[1]),
+    LOCKS = torch.zeros(ct.cdiv(m, tile_sizes[0]) * ct.cdiv(n, tile_sizes[1]),
                         dtype=torch.int32, device="cuda")
     COUNTS = torch.zeros_like(LOCKS)
     extra_args = (LOCKS, COUNTS, tile_sizes)
-    _run_matmul_benchmark(split_k_shape, dtype, backend, benchmark,
+    _run_matmul_benchmark(split_k_shape, split_k_dtype, backend, benchmark,
                           extra_args, rtol=2e-3)
 
 
@@ -132,7 +183,7 @@ def cutile_matmul_split_k(A, B, C, LOCKS, COUNTS, tile_sizes):
     tm, tn, tk = tile_sizes
     split_k = 4
     m, n, _ = A.shape[0], B.shape[1], A.shape[1]
-    grid = (ceil(m / tm) * ceil(n / tn), split_k, 1)
+    grid = (ct.cdiv(m, tm) * ct.cdiv(n, tn), split_k, 1)
     ct.launch(torch.cuda.current_stream(), grid, matmul_split_k_kernel,
               (A, B, C, LOCKS, COUNTS, tm, tn, tk, split_k))
 
@@ -141,7 +192,7 @@ def torch_matmul_split_k(A, B, C, *args):
     torch_matmul(A, B, C)
 
 
-# =============================== Batch Matmul in FP8=============================
+# =============================== Batch Matmul in FP8 =============================
 
 @pytest.fixture(params=[
     (2, 1024, 1024, 1024),
@@ -155,20 +206,20 @@ def batch_matmul_shape(request):
 @pytest.fixture(params=[
     torch.float8_e4m3fn, torch.float8_e5m2
 ], ids=dtype_id)
-def fp8_dtype(request):
+def batch_matmul_dtype(request):
     return request.param
 
 
 @require_hopper_or_newer()
 @pytest.mark.benchmark(group='batch_matmul')
-def bench_batch_matmul(batch_matmul_shape, fp8_dtype, backend, benchmark):
-    _run_batch_matmul_benchmark(batch_matmul_shape, fp8_dtype, backend, benchmark)
+def bench_batch_matmul(batch_matmul_shape, batch_matmul_dtype, backend, benchmark):
+    _run_batch_matmul_benchmark(batch_matmul_shape, batch_matmul_dtype, backend, benchmark)
 
 
 def cutile_batch_matmul(bs, A, B, C):
     tm, tn, tk = 256, 256, 64
     m, n = A.shape[1], B.shape[2]
-    grid = (bs, ceil(m / tm), ceil(n / tn))
+    grid = (bs, ct.cdiv(m, tm), ct.cdiv(n, tn))
     ct.launch(torch.cuda.current_stream(), grid, batch_matmul_kernel, (A, B, C, tm, tn, tk))
 
 
@@ -196,9 +247,25 @@ def ref_batch_matmul(bs, A, B):
 
 # =============================== Persistent Matmul =============================
 
+@pytest.fixture(params=[
+    (1024, 1024, 1024),
+    (8192, 8192, 8192),
+    (12288, 4096, 2560),
+], ids=shape_id)
+def persistent_shape(request):
+    return request.param
+
+
+@pytest.fixture(params=[
+    torch.float16, torch.float32
+], ids=dtype_id)
+def persistent_dtype(request):
+    return request.param
+
+
 @pytest.mark.benchmark(group='persistent_matmul')
-def bench_persistent_matmul(shape, dtype, backend, benchmark):
-    _run_matmul_benchmark(shape, dtype, backend, benchmark)
+def bench_persistent_matmul(persistent_shape, persistent_dtype, backend, benchmark):
+    _run_matmul_benchmark(persistent_shape, persistent_dtype, backend, benchmark)
 
 
 def cutile_persistent_matmul(A, B, C):
@@ -210,7 +277,7 @@ def cutile_persistent_matmul(A, B, C):
 
     grid_size = min(
         NUM_SMS,
-        ceil(M / tm) * ceil(N / tn),
+        ct.cdiv(M, tm) * ct.cdiv(N, tn),
     )
     grid = (grid_size,)
     ct.launch(torch.cuda.current_stream(), grid, persistent_matmul_kernel, (A, B, C, tm, tn, tk))
@@ -218,3 +285,51 @@ def cutile_persistent_matmul(A, B, C):
 
 def torch_persistent_matmul(A, B, C, *args):
     torch_matmul(A, B, C)
+
+
+# =============================== Scaled Swizzled Matmul =============================
+
+@pytest.fixture(params=[
+    (1024, 1024, 1024),
+    (8192, 8192, 8192),
+    (12288, 4096, 2560),
+], ids=shape_id)
+def scaled_matmul_shape(request):
+    return request.param
+
+
+@pytest.fixture(params=[
+    torch.float8_e4m3fn
+], ids=dtype_id)
+def scaled_matmul_dtype(request):
+    return request.param
+
+
+@require_blackwell_or_newer()
+@requires_tileiras(BytecodeVersion.V_13_3)
+@pytest.mark.benchmark(group='mma_scaled_swizzled')
+def bench_swizzled_scaled_matmul(scaled_matmul_shape, scaled_matmul_dtype, backend, benchmark):
+    _run_swizzled_scaled_matmul_benchmark(scaled_matmul_shape,
+                                          scaled_matmul_dtype, backend, benchmark)
+
+
+def cutile_swizzled_scaled_matmul(A, A_s_swizzled, B, B_s_swizzled, C):
+    tm, tn, tk, scaling_block_size = 256, 256, 128, 32
+    m, n, _ = A.shape[0], B.shape[1], A.shape[1]
+    grid = (ct.cdiv(m, tm) * ct.cdiv(n, tn), 1, 1)
+
+    ct.launch(torch.cuda.current_stream(), grid, block_scaled_matmul_kernel,
+              (A, A_s_swizzled, B, B_s_swizzled, C, tm, tn, tk, scaling_block_size))
+    return C
+
+
+def torch_swizzled_scaled_matmul(A, A_s_swizzled, B, B_s_swizzled, C):
+
+    return torch.nn.functional.scaled_mm(
+                                    A, B,
+                                    scale_a=A_s_swizzled, scale_b=B_s_swizzled,
+                                    scale_recipe_a=torch.nn.functional.ScalingType.BlockWise1x32,
+                                    scale_recipe_b=torch.nn.functional.ScalingType.BlockWise1x32,
+                                    swizzle_a=torch.nn.functional.SwizzleType.SWIZZLE_32_4_4,
+                                    swizzle_b=torch.nn.functional.SwizzleType.SWIZZLE_32_4_4,
+                                    output_dtype=torch.float32)
