@@ -84,8 +84,8 @@ from ._stub import (
     clusterlaunchcontrol_try_cancel,
     clusterlaunchcontrol_is_canceled,
     clusterlaunchcontrol_get_first_block_idx,
-    griddepcontrol,
-    GridDepActionKind,
+    griddepcontrol_wait,
+    griddepcontrol_launch_dependents,
     memory_barrier,
 )
 
@@ -205,7 +205,7 @@ __all__ = (
     "clusterlaunchcontrol_try_cancel",
     "clusterlaunchcontrol_is_canceled",
     "clusterlaunchcontrol_get_first_block_idx",
-    "griddepcontrol",
-    "GridDepActionKind",
     "memory_barrier",
+    "griddepcontrol_wait",
+    "griddepcontrol_launch_dependents",
 )

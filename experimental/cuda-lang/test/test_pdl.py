@@ -15,7 +15,7 @@ def test_pdl():
         a[tx] = tx * 2.0
 
         cl.memory_barrier(scope=cl.MemoryScope.DEVICE)
-        cl.griddepcontrol(kind=cl.GridDepActionKind.launch_dependents)
+        cl.griddepcontrol_launch_dependents()
 
     @cl.kernel
     def dependent(a, b):
@@ -25,7 +25,7 @@ def test_pdl():
         val = tx * 4.0 + b[tx]
         # ---
 
-        cl.griddepcontrol(kind=cl.GridDepActionKind.wait)
+        cl.griddepcontrol_wait()
         a[tx] = val + a[tx]
 
     a = torch.zeros(32, dtype=torch.float32).cuda()

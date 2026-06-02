@@ -12,9 +12,10 @@ from cuda.tile._stub import (
     static_assert,
     static_iter,
 )
-from cuda.tile._memory_model import MemoryOrder
+from cuda.tile._memory_model import MemoryOrder, MemoryScope
 from cuda.lang._datatype import DType, MemorySpace, int32
 from . import nvvm
+from . import nvvm_mlir_interfaces
 
 T = TypeVar("T")
 
@@ -46,7 +47,6 @@ class Array(TileArray, Generic[T]):
 
 
 class Vector(Generic[T]):
-
     @property
     @stub
     def dtype(self) -> "DType": ...
@@ -63,7 +63,6 @@ class Vector(Generic[T]):
 
 
 class Pointer(Generic[T]):
-
     @property
     @stub
     def dtype(self) -> "DType": ...
@@ -77,7 +76,7 @@ class Pointer(Generic[T]):
         volatile: bool = False,
         ordering: MemoryOrder | None = None,
     ) -> T | Vector[T]:
-        '''
+        """
         Low-level API to read from memory.
 
         Args:
@@ -97,7 +96,7 @@ class Pointer(Generic[T]):
                 Alignment must be explicitly specified on atomic loads.
                 Atomic loads require a pointee type with a bit width that
                 is a power of two greater than or equal to one byte.
-        '''
+        """
 
     @stub
     def store(
@@ -109,7 +108,7 @@ class Pointer(Generic[T]):
         ordering: Literal[MemoryOrder.RELAXED, MemoryOrder.RELEASE, MemoryOrder.WEAK]
         | None = None,
     ) -> None:
-        '''
+        """
         Low-level API to store to memory.
 
         Args:
@@ -129,7 +128,7 @@ class Pointer(Generic[T]):
                 is a power of two greater than or equal to one byte.
                 Only relaxed, release, and weak are valid memory orders on
                 stores.
-        '''
+        """
 
 
 @function
@@ -483,7 +482,7 @@ def inline_ptx(ptx_code: str, *constraint_pairs: tuple) -> tuple:
 
 @function
 def ptx_comment(comment: str):
-    inline_ptx(static_eval('// ' + comment))
+    inline_ptx(static_eval("// " + comment))
 
 
 @stub
@@ -831,14 +830,14 @@ def address_space_cast(value: Pointer[T], memory_space: MemorySpace) -> Pointer[
 
 @stub
 def map_shared_to_cluster(ptr: Pointer[T], rank: int) -> Pointer[T]:
-    '''
+    """
     Map a pointer in shared memory from another CTA within the same cluster
     with rank ``rank`` to this CTA.
     The pointer is expected to have memory space
     ``MemorySpace.SHARED`` and a pointer with memory space
     ``MemorySpace.SHARED_CLUSTER`` is returned.
     Corresponds to the ptx instruction ``mapa.shared::cluster``.
-    '''
+    """
 
 
 @stub
@@ -882,10 +881,26 @@ def reinterpret_pointer_as_array(
 
 
 def nanosleep(nanoseconds: int):
-    '''
+    """
     Sleep for ``nanoseconds`` nanoseconds.
-    '''
+    """
     nvvm.nanosleep(nanoseconds)
+
+
+def memory_barrier(scope: MemoryScope) -> None:
+    return nvvm_mlir_interfaces.memory_barrier(scope=scope)
+
+
+def griddepcontrol_wait() -> None:
+    nvvm_mlir_interfaces.griddepcontrol(
+        kind=nvvm_mlir_interfaces.GridDepActionKind.wait
+    )
+
+
+def griddepcontrol_launch_dependents() -> None:
+    nvvm_mlir_interfaces.griddepcontrol(
+        kind=nvvm_mlir_interfaces.GridDepActionKind.launch_dependents
+    )
 
 
 __all__ = (
@@ -935,4 +950,7 @@ __all__ = (
     "map_shared_to_cluster",
     "reinterpret_pointer_as_array",
     "nanosleep",
+    "memory_barrier",
+    "griddepcontrol_wait",
+    "griddepcontrol_launch_dependents",
 )
