@@ -218,16 +218,9 @@ class LoadPointer(Operation, opcode="load_pointer", memory_effect=MemoryEffect.L
 
 
 @dataclass(eq=False)
-class ArrayGetItem(Operation, opcode="array_getitem", memory_effect=MemoryEffect.LOAD):
+class VectorGetItem(Operation, opcode="vector_getitem", memory_effect=MemoryEffect.LOAD):
     x: Var = operand()
-    indices: tuple[Var, ...] = operand()
-
-
-@dataclass(eq=False)
-class ArraySetItem(Operation, opcode="array_setitem", memory_effect=MemoryEffect.STORE):
-    x: Var = operand()
-    indices: tuple[Var, ...] = operand()
-    value: Var = operand()
+    index: Var = operand()
 
 
 @dataclass(eq=False)
@@ -336,6 +329,27 @@ def _m_array_get_base_pointer_impl(self: Var) -> Var:
 @impl(stub.Array.get_element_pointer)
 def _m_array_get_element_pointer_impl(self: Var, indices: Var) -> Var:
     return _array_get_element_pointer(self, require_array_indices(self, indices))
+
+
+@impl(operator.setitem, overload=(TileTy, WILDCARD, WILDCARD))
+def vector_setitem(object: Var, key: Var, value: Var):
+    tile_type = object.get_type()
+    if tile_type.shape == ():
+        raise TileTypeError("Cannot index into a scalar")
+
+    raise TileTypeError("Vectors are immutable: item assignment is not supported")
+
+
+@impl(operator.getitem, overload=(TileTy, WILDCARD))
+def vector_getitem(object: Var, key: Var) -> Var:
+    result_type = require_tile_type(object).dtype
+    index = implicit_cast(key, datatype.int32, "vector getitem index")
+    return add_operation(
+        VectorGetItem,
+        TileTy(result_type),
+        x=object,
+        index=index,
+    )
 
 
 @impl(operator.getitem, overload=(ArrayTy, WILDCARD))
@@ -1838,8 +1852,6 @@ def map_shared_to_cluster_impl(ptr: Var, rank: Var):
 
 __all__ = (
     "AddrSpaceCast",
-    "ArrayGetItem",
-    "ArraySetItem",
     "AtomicCAS",
     "AtomicExchange",
     "AtomicRMW",

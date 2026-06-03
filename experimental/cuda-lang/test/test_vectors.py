@@ -9,6 +9,8 @@ import torch
 
 import cuda.lang as cl
 from cuda.lang._datatype import to_torch_dtype
+from cuda.lang._exception import TileTypeError
+from cuda.lang.compilation import KernelSignature
 from cuda.tile import static_iter
 
 
@@ -301,3 +303,30 @@ def test_pointer_vector_count_can_be_non_power_of_two():
 
     out = torch.zeros(3, dtype=torch.int32).cuda()
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
+
+
+def test_vector_getitem():
+    @cl.kernel
+    def kernel(tensor):
+        v4 = tensor.get_base_pointer().load(count=4)
+        tensor[0] = v4[3]
+        tensor[1] = v4[2]
+        tensor[2] = v4[1]
+        tensor[3] = v4[0]
+
+    tensor = torch.tensor(list(range(4)), dtype=torch.int32).cuda()
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (tensor,))
+    assert tensor.cpu().tolist() == [3, 2, 1, 0]
+
+
+def test_vector_setitem():
+    @cl.kernel
+    def kernel():
+        with cl.local_array(4, cl.int32) as arr:
+            v = arr.get_base_pointer().load(count=4)
+            v[0] = 1
+
+    with pytest.raises(
+        TileTypeError, match="Vectors are immutable: item assignment is not supported"
+    ):
+        cl.compile_simt(kernel, [KernelSignature([])])

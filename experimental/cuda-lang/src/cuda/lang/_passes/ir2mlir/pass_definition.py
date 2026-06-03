@@ -749,6 +749,13 @@ class IR2MLIR:
         return [offset_pointer]
 
     @lower_operation.register
+    def lower_vector_getitem(self, operation: ops.VectorGetItem) -> Sequence[mlir.Value]:
+        vector = self.get_var(operation.x)
+        position = self.get_var(operation.index)
+        element = mlir.llvm.add_ExtractElementOp(vector=vector, position=position)
+        return [element]
+
+    @lower_operation.register
     def lower_load_pointer(self, operation: ops.LoadPointer) -> Sequence[mlir.Value]:
         ptr_dtype = _require_scalar_type(operation.pointer.get_type()).dtype
         ordering = _get_llvm_memory_ordering(operation.ordering)
