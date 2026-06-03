@@ -83,7 +83,11 @@ def test_dealloc_requires_tensor_pointer():
         p3 = cl.shared_array(1, cl.uint32).get_base_pointer()
         cl.tcgen05_dealloc(p3, 5)
 
-    with pytest.raises(TileTypeError, match="Expected pointer to be in tensor address space"):
+    with pytest.raises(
+        TileTypeError,
+        match="Expected pointer memory space to be MemorySpace.TENSOR "
+        "but got MemorySpace.SHARED",
+    ):
         cl.compile_simt(kernel, [KernelSignature([])])
 
 
@@ -117,7 +121,7 @@ def test_dealloc(log_ptx, cta_group, expect):
 @pytest.mark.parametrize("shape", cl.Tcgen05LdStShape._member_map_.values())
 @pytest.mark.parametrize("count", (1, 2, 4, 8, 16, 32, 64, 128))
 @pytest.mark.parametrize("pack", (True, False, None))
-@pytest.mark.parametrize("offset", (True, False, None))
+@pytest.mark.parametrize("offset", (None, 0, 1))
 def test_ld(log_ptx, shape, count, pack, offset):
     @cl.kernel
     def kernel():
@@ -131,8 +135,7 @@ def test_ld(log_ptx, shape, count, pack, offset):
     def do_compile():
         compiled = cl.compile_simt(kernel, [KernelSignature([])])
         ptx = compiled.compiler_stderr.decode()
-        shape_str = str(shape).split("_")[1].lower()
-        assert "tcgen05.ld.sync.aligned" in ptx and shape_str in ptx, ptx
+        assert "tcgen05.ld.sync.aligned" in ptx and shape.value in ptx, ptx
 
     bad_args = offset is not None and shape is not cl.Tcgen05LdStShape.SHAPE_16X32BX2
     bad_args |= shape is cl.Tcgen05LdStShape.SHAPE_16X256B and count not in (

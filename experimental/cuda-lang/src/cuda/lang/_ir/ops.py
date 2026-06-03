@@ -228,6 +228,20 @@ class ReinterpretPointerAsArray(Operation, opcode="reinterpret_ptr_as_array"):
     pointer: Var = operand()
 
 
+def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]):
+    ptr_type = require_tile_type(ptr_value)
+    if not is_pointer_dtype(ptr_type.dtype):
+        raise TileTypeError(f"Expected pointer dtype, got {ptr_type.dtype}")
+    info = PointerInfo(ptr_type.dtype)
+    if info.memory_space not in spaces:
+        expected = ' or '.join(map(str, spaces))
+        raise TileTypeError(
+            f"Expected pointer memory space to be {expected} "
+            f"but got {info.memory_space}"
+        )
+    return info
+
+
 def require_pointer_memory_order(
     operation: type[LoadPointer] | type[StorePointer],
     ordering_var: Var,
@@ -1199,12 +1213,10 @@ def tcgen05_alloc_impl(
     ncols: Var,
     cta_group: Var,
 ) -> None:
-    addr_info = PointerInfo(require_scalar_pointer_type(addr).dtype)
-    if addr_info.memory_space not in (MemorySpace.SHARED_CLUSTER, MemorySpace.SHARED):
-        raise TileTypeError(
-            "Expected pointer to be in shared or shared-cluster address space"
-        )
-    ncols = implicit_cast(ncols, datatype.int32, "cast ncols to int32")
+    require_pointer_in_memory_space(
+        addr, (MemorySpace.SHARED_CLUSTER, MemorySpace.SHARED)
+    )
+    ncols = implicit_cast(ncols, datatype.int32, "cast num columns to int32")
     cta_group = require_constant_enum(cta_group, CTAGroup)
     intrinsic = "llvm.nvvm.tcgen05.alloc.shared." + cta_group.value
     add_operation_variadic(
@@ -1221,12 +1233,8 @@ def tcgen05_dealloc_impl(
     ncols: Var,
     cta_group: Var,
 ) -> None:
-    addr_info = PointerInfo(require_scalar_pointer_type(addr).dtype)
-    if addr_info.memory_space != MemorySpace.TENSOR:
-        raise TileTypeError(
-            "Expected pointer to be in tensor address space"
-        )
-    ncols = implicit_cast(ncols, datatype.int32, "cast ncols to int32")
+    require_pointer_in_memory_space(addr, (MemorySpace.TENSOR,))
+    ncols = implicit_cast(ncols, datatype.int32, "cast num columns to int32")
     cta_group = require_constant_enum(cta_group, CTAGroup)
     intrinsic = "llvm.nvvm.tcgen05.dealloc." + cta_group.value
     add_operation_variadic(
@@ -1268,49 +1276,35 @@ def tcgen05_ld_impl(
     pack: Var,
     offset: Var,
 ) -> Var:
-    shape_value = require_constant_enum(shape, Tcgen05LdStShape)
-    count_value = require_constant_int(count)
-    valid_counts = _TCGEN05_LD_VALID_COUNTS_BY_SHAPE[shape_value]
-    if count_value not in valid_counts:
+    require_pointer_in_memory_space(tmem_addr, (MemorySpace.TENSOR,))
+    shape = require_constant_enum(shape, Tcgen05LdStShape)
+    count = require_constant_int(count)
+    valid_counts = _TCGEN05_LD_VALID_COUNTS_BY_SHAPE[shape]
+    if count not in valid_counts:
         valid = ", ".join(str(value) for value in valid_counts)
         raise TileValueError(
-            f"Expected count for {shape_value.name} to be one of {valid}, got {count_value}"
+            f"Expected count for {shape.name} to be one of {valid}, got {count}"
         )
 
     has_offset = not _is_none(offset)
-    uses_offset = shape_value is Tcgen05LdStShape.SHAPE_16X32BX2
+    uses_offset = shape is Tcgen05LdStShape.SHAPE_16X32BX2
     if uses_offset and not has_offset:
         raise TileTypeError("tcgen05_ld with SHAPE_16X32BX2 requires offset")
     if has_offset and not uses_offset:
         raise TileTypeError("tcgen05_ld offset is only valid with SHAPE_16X32BX2")
 
-    operands = [
-        implicit_cast(
-            tmem_addr,
-            opaque_pointer_dtype(MemorySpace.TENSOR),
-            "cast tcgen05_ld tmem_addr to a tensor-memory pointer",
-        ),
-    ]
+    operands = [tmem_addr]
     if has_offset:
-        operands.append(
-            implicit_cast(
-                offset,
-                datatype.int64,
-                "cast tcgen05_ld offset to int64",
-            )
-        )
+        require_scalar_tile_type(offset)
+        operands.append(astype(offset, datatype.int64))
 
     if _is_none(pack):
         operands.append(strictly_typed_const(False, BOOL_TY))
     else:
-        operands.append(
-            implicit_cast(pack, datatype.bool_, "cast tcgen05_ld pack to bool")
-        )
+        require_scalar_tile_type(pack, (datatype.bool_,))
+        operands.append(pack)
 
-    count = require_constant_int(count)
-    shape = require_constant_enum(shape, Tcgen05LdStShape)
     intrinsic = f"llvm.nvvm.tcgen05.ld.{shape.value}.x{count}"
-
     total_registers = count * _TCGEN05_LD_REGISTERS_PER_COUNT[shape]
     shape = () if total_registers == 1 else (total_registers,)
     result_type = TileTy(datatype.int32, shape)
@@ -1566,20 +1560,15 @@ def _call_foreign_function_impl(func: Var, return_type: Var, parameters: Var):
 
 def require_mbarrier_ptr(
     mbar: Var,
-    expected_memory_spaces: tuple[MemorySpace, ...] = (
+    spaces: tuple[MemorySpace, ...] = (
         MemorySpace.SHARED,
         MemorySpace.SHARED_CLUSTER,
     ),
 ) -> PointerInfo:
+    require_pointer_in_memory_space(mbar, spaces)
     info = PointerInfo(require_scalar_pointer_type(mbar).dtype)
     if info.opaque or info.pointee_dtype is not datatype.mbarrier:
         raise TileTypeError(f"Expected a pointer to an mbarrier, got {mbar}")
-    if info.memory_space not in expected_memory_spaces:
-        expected = ', '.join(x.value for x in expected_memory_spaces)
-        raise TileTypeError(
-            f"Expected mbarrier to be allocated in one of {expected} "
-            f"but got {info.memory_space}"
-        )
     return info
 
 
@@ -1833,10 +1822,7 @@ def map_shared_to_cluster_impl(ptr: Var, rank: Var):
     ptr_ty = require_scalar_pointer_type(ptr).dtype
     rank = astype(rank, datatype.int32)
     info = PointerInfo(ptr_ty)
-    if info.memory_space != MemorySpace.SHARED:
-        raise TileTypeError(
-            f"Expected pointer in shared memory, but got memory_space={info.memory_space}"
-        )
+    require_pointer_in_memory_space(ptr, (MemorySpace.SHARED,))
     if info.opaque:
         result_scalar_ty = opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER)
     else:
