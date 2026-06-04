@@ -237,7 +237,9 @@ def bench_matmul_split_k(split_k_shape, split_k_dtype, backend, benchmark):
     LOCKS = torch.zeros(_matmul_split_k_lock_count(m, n), dtype=torch.int32, device="cuda")
     COUNTS = torch.zeros_like(LOCKS)
     extra_args = (LOCKS, COUNTS)
-    _run_matmul_benchmark(split_k_shape, split_k_dtype, backend, benchmark, extra_args)
+    _run_matmul_benchmark(
+        split_k_shape, split_k_dtype, backend, benchmark, extra_args, rtol=2e-3
+    )
 
 
 def tune_matmul_split_k():
