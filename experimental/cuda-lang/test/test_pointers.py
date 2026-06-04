@@ -199,7 +199,7 @@ def test_device_alloc_memspace():
         A = cl.shared_array(shape=(3, 3), dtype=cl.int32)
         p = A.get_base_pointer()
         p = cl.address_space_cast(p, cl.MemorySpace.GENERIC)
-        if cl.thread_idx()[0] == 0:
+        if cl.thread_idx(0) == 0:
             memspace[0] = cl.int32(cl.nvvm.isspacep_local(p))
             memspace[1] = cl.int32(cl.nvvm.isspacep_global(p))
             memspace[2] = cl.int32(cl.nvvm.isspacep_shared(p))
@@ -207,7 +207,7 @@ def test_device_alloc_memspace():
         with cl.local_array(shape=(3, 3), dtype=cl.int32) as B:
             p = B.get_base_pointer()
             p = cl.address_space_cast(p, cl.MemorySpace.GENERIC)
-            if cl.thread_idx()[0] == 0:
+            if cl.thread_idx(0) == 0:
                 memspace[3] = cl.int32(cl.nvvm.isspacep_local(p))
                 memspace[4] = cl.int32(cl.nvvm.isspacep_global(p))
                 memspace[5] = cl.int32(cl.nvvm.isspacep_shared(p))

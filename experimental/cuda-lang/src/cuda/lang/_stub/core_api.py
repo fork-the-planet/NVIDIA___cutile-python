@@ -64,6 +64,7 @@ def dtype_of(value, /) -> DType:
 
 @function
 def warp_size() -> int32:
+    """Return the number of lanes in a warp."""
     return int32(32)
 
 
@@ -72,6 +73,7 @@ FULL_MASK = 0xFFFFFFFF
 
 @function
 def full_mask() -> int32:
+    """Return a warp mask with all lanes selected."""
     return int32(FULL_MASK)
 
 
@@ -81,7 +83,7 @@ def _maybe_axis(axis: int | None, *possible_values) -> tuple[int, int, int] | in
 
 @function
 def thread_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
-    """Gets the current thread indices as ``(x, y, z)``."""
+    """Gets the current thread indices."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_tid_x(),
@@ -92,7 +94,7 @@ def thread_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def block_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
-    """Gets the current block indices as ``(x, y, z)``."""
+    """Gets the current block indices."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_ctaid_x(),
@@ -103,7 +105,7 @@ def block_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def block_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
-    """Gets the current block dimensions as ``(x, y, z)``."""
+    """Gets the current block dimensions."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_ntid_x(),
@@ -114,7 +116,7 @@ def block_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def grid_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
-    """Gets the current grid dimensions as ``(x, y, z)``."""
+    """Gets the current grid dimensions."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_nctaid_x(),
@@ -125,11 +127,13 @@ def grid_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def lane_idx() -> int:
+    """Return the caller's lane index within its warp."""
     return nvvm.read_ptx_sreg_laneid()
 
 
 @function
 def warp_idx() -> int:
+    """Return the caller's warp index within its thread block."""
     tx, ty, tz = thread_idx()
     bdx, bdy, _ = block_dim()
     tid = tx + ty * bdx + tz * bdx * bdy
@@ -138,6 +142,7 @@ def warp_idx() -> int:
 
 @function
 def cluster_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
+    """Gets the current cluster indices."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_clusterid_x(),
@@ -148,6 +153,7 @@ def cluster_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def cluster_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
+    """Gets the cluster grid dimensions."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_nclusterid_x(),
@@ -158,6 +164,7 @@ def cluster_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
 
 @function
 def block_in_cluster_idx(axis: int | None = None, /) -> tuple[int, int, int] | int:
+    """Gets the current block indices within its cluster."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_cluster_ctaid_x(),
@@ -168,6 +175,7 @@ def block_in_cluster_idx(axis: int | None = None, /) -> tuple[int, int, int] | i
 
 @function
 def block_in_cluster_dim(axis: int | None = None, /) -> tuple[int, int, int] | int:
+    """Gets the current cluster dimensions in blocks."""
     return _maybe_axis(
         axis,
         nvvm.read_ptx_sreg_cluster_nctaid_x(),
@@ -206,7 +214,7 @@ def shared_array(
         @cl.kernel
         def kernel():
             shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
-            tx, _, _ = cl.thread_idx()
+            tx = cl.thread_idx(0)
             if tx == 0:
                 shmem[0] = 42
 
@@ -229,7 +237,7 @@ def shared_array(
         @cl.kernel
         def kernel(n):
             shmem = cl.shared_array(shape=(n,), dtype=cl.int32, dynamic=True)
-            tx, _, _ = cl.thread_idx()
+            tx = cl.thread_idx(0)
             if tx == 0:
                 shmem[0] = 42
 
@@ -258,6 +266,28 @@ def local_array(
     The local memory is only valid inside the with block.
     The optional alignment is specified in bytes and must be a positive power
     of two.
+
+    Examples:
+
+        .. testcode::
+            :template: setup_only.py
+
+            @cl.kernel
+            def kernel(out):
+                tx = cl.thread_idx(0)
+                with cl.local_array(shape=(2,), dtype=cl.int32) as tmp:
+                    tmp[0] = tx
+                    tmp[1] = tx + 10
+                    out[tx] = tmp[0] + tmp[1]
+
+            out = torch.empty(2, dtype=torch.int32, device="cuda")
+            cl.launch(stream, (1,), (2,), kernel, (out,))
+            torch.cuda.synchronize()
+            print(out.cpu().tolist())
+
+        .. testoutput::
+
+            [10, 12]
     """
 
 
@@ -276,7 +306,7 @@ def syncthreads() -> None:
             @cl.kernel
             def kernel():
                 shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
-                tx, _, _ = cl.thread_idx()
+                tx = cl.thread_idx(0)
                 if tx == 0:
                     shmem[0] = 42
 
@@ -308,6 +338,7 @@ def setmaxregister_decrease(value: int32):
 
 @stub
 def elect_sync(membermask: int = FULL_MASK, /) -> bool:
+    """Return whether the caller is the elected thread in ``membermask``."""
     pass
 
 
@@ -396,9 +427,18 @@ def atomic_add(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(ptr.load() + val)`.
+    Perform atomic ``ptr.store(ptr.load() + val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, ``uint64``,
     ``float16``, ``bfloat16``, ``float32``, and ``float64``.
@@ -431,9 +471,18 @@ def atomic_sub(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(ptr.load() - val)`.
+    Perform atomic ``ptr.store(ptr.load() - val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, ``uint64``,
     ``float32``, and ``float64``.
@@ -466,9 +515,18 @@ def atomic_and(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(ptr.load() & val)`.
+    Perform atomic ``ptr.store(ptr.load() & val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, and ``uint64``.
 
@@ -501,9 +559,18 @@ def atomic_or(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(ptr.load() | val)`.
+    Perform atomic ``ptr.store(ptr.load() | val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, and ``uint64``.
 
@@ -536,9 +603,18 @@ def atomic_xor(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(ptr.load() ^ val)`.
+    Perform atomic ``ptr.store(ptr.load() ^ val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, and ``uint64``.
 
@@ -571,12 +647,22 @@ def atomic_min(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(min(ptr.load(), val))`.
+    Perform atomic ``ptr.store(min(ptr.load(), val))``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, ``uint64``,
     ``float32``, and ``float64``.
+
     Examples:
 
         .. testcode::
@@ -606,12 +692,22 @@ def atomic_max(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic `ptr.store(max(ptr.load(), val))`.
+    Perform atomic ``ptr.store(max(ptr.load(), val))``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Operand for the atomic operation.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``int64``, ``uint64``,
     ``float32``, and ``float64``.
+
     Examples:
 
         .. testcode::
@@ -641,17 +737,26 @@ def atomic_inc(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic increment at `ptr` with wrap at `val`.
+    Perform atomic increment at ``ptr`` with wrap at ``val``.
 
-    This behaves as `ptr.store(0 if ptr.load() >= val else ptr.load() + 1)`.
+    This behaves as ``ptr.store(0 if ptr.load() >= val else ptr.load() + 1)``.
     Supported ``T``: ``uint32`` only.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Wrap threshold for the atomic increment.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Examples:
 
         .. testcode::
-            :template: kernel_2d_array_wrapper.py
+            :template: kernel_2d_uint32_array_wrapper.py
 
             array[2, 3] = 7
             print(f"before: {array[2, 3]}")
@@ -677,17 +782,27 @@ def atomic_dec(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic decrement at `ptr` with wrap at `val`.
+    Perform atomic decrement at ``ptr`` with wrap at ``val``.
 
-    This behaves as `ptr.store(val if (ptr.load() == 0) or (ptr.load() > val) else ptr.load() - 1)`.
+    This stores ``val`` when the current value is ``0`` or greater than
+    ``val``; otherwise, it decrements the current value by one.
     Supported ``T``: ``uint32`` only.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Wrap threshold for the atomic decrement.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Examples:
 
         .. testcode::
-            :template: kernel_2d_array_wrapper.py
+            :template: kernel_2d_uint32_array_wrapper.py
 
             array[2, 3] = 0
             print(f"before: {array[2, 3]}")
@@ -713,9 +828,18 @@ def atomic_xchg(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic exchange `ptr.store(val)`.
+    Perform atomic exchange ``ptr.store(val)``.
 
-    Returns the old value at the address as if it is loaded atomically.
+    Args:
+        ptr: Pointer to the value to update atomically.
+        val: Value to store atomically.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int32``, ``uint32``, ``float32``, ``int64``,
     ``uint64``, and ``float64``.
@@ -750,10 +874,21 @@ def atomic_cas(
     memory_scope: MemoryScope = MemoryScope.DEVICE,
 ) -> T:
     """
-    Perform atomic compare-and-swap at `ptr`.
+    Perform atomic compare-and-swap at ``ptr``.
 
-    If the current value equals `old`, store `val`. Returns the old value at the
-    address as if it is loaded atomically.
+    If the current value equals ``old``, store ``val``.
+
+    Args:
+        ptr: Pointer to the value to update atomically.
+        old: Expected value for the compare-and-swap.
+        val: Value to store when the current value equals ``old``.
+        memory_order: Memory ordering for the atomic operation. Defaults to
+            ``MemoryOrder.ACQ_REL``.
+        memory_scope: Memory scope for the atomic operation. Defaults to
+            ``MemoryScope.DEVICE``.
+
+    Returns:
+        Original value at ``ptr`` before the operation.
 
     Supported ``T``: ``int16``, ``uint16``, ``int32``, ``uint32``,
     ``int64``, and ``uint64``.
@@ -900,16 +1035,19 @@ def nanosleep(nanoseconds: int):
 
 
 def memory_barrier(scope: MemoryScope) -> None:
+    """Issue a memory fence with the given scope."""
     return nvvm_mlir_interfaces.memory_barrier(scope=scope)
 
 
 def griddepcontrol_wait() -> None:
+    """Wait for prerequisite grids in a programmatic dependent launch."""
     nvvm_mlir_interfaces.griddepcontrol(
         kind=nvvm_mlir_interfaces.GridDepActionKind.wait
     )
 
 
 def griddepcontrol_launch_dependents() -> None:
+    """Launch dependent grids in a programmatic dependent launch."""
     nvvm_mlir_interfaces.griddepcontrol(
         kind=nvvm_mlir_interfaces.GridDepActionKind.launch_dependents
     )

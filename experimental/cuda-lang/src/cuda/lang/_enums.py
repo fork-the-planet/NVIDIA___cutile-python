@@ -7,6 +7,8 @@ from cuda.tile import _cext
 
 
 class TensorMapSwizzle(enum.Enum):
+    """Swizzle modes for tiled tensor map descriptors."""
+
     SWIZZLE_NONE = _cext.CU_TENSOR_MAP_SWIZZLE_NONE
     SWIZZLE_32B = _cext.CU_TENSOR_MAP_SWIZZLE_32B
     SWIZZLE_64B = _cext.CU_TENSOR_MAP_SWIZZLE_64B

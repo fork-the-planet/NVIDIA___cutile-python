@@ -16,6 +16,8 @@ class Scalar(Generic[T]):
 
 
 class Vector(Generic[T]):
+    """Fixed-size collection returned by vectorized pointer operations."""
+
     @property
     @stub
     def dtype(self) -> "DType": ...
@@ -32,6 +34,8 @@ class Vector(Generic[T]):
 
 
 class Pointer(Generic[T]):
+    """Typed address into a CUDA memory space with low-level load and store operations."""
+
     @stub
     def load(
             self,

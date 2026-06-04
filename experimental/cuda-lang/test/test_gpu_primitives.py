@@ -226,7 +226,7 @@ def test_bid():
 def test_block_dim():
     @cl.kernel
     def kernel(out):
-        tidx, _, _ = cl.thread_idx()
+        tidx = cl.thread_idx(0)
         if tidx == 0:
             out[0], out[1], out[2] = cl.block_dim()
 
@@ -238,7 +238,7 @@ def test_block_dim():
 def test_grid_dim():
     @cl.kernel
     def kernel(out):
-        tidx, _, _ = cl.thread_idx()
+        tidx = cl.thread_idx(0)
         if tidx == 0:
             out[0], out[1], out[2] = cl.grid_dim()
 
@@ -264,7 +264,7 @@ def test_warp_size_full_mask_and_ptx_comment(capsys):
 
     @cl.kernel
     def kernel(out):
-        tidx, _, _ = cl.thread_idx()
+        tidx = cl.thread_idx(0)
         cl.ptx_comment(ptx_comment)
         value = cl.shfl_sync(cl.full_mask(), tidx, 7)
         if tidx == 0:
@@ -283,7 +283,7 @@ def test_warp_size_full_mask_and_ptx_comment(capsys):
 def test_lane_idx():
     @cl.kernel
     def kernel(out):
-        tidx, _, _ = cl.thread_idx()
+        tidx = cl.thread_idx(0)
         out[tidx] = cl.lane_idx()
 
     out = torch.zeros(64, dtype=torch.int32, device="cuda")
@@ -295,7 +295,7 @@ def test_lane_idx():
 def test_warp_idx():
     @cl.kernel
     def kernel(out):
-        tidx, _, _ = cl.thread_idx()
+        tidx = cl.thread_idx(0)
         out[tidx] = cl.warp_idx()
 
     out = torch.zeros(64, dtype=torch.int32, device="cuda")
@@ -318,9 +318,9 @@ def test_saxpy():
 
     @cl.kernel
     def kernel(N: cl.Constant[int], a: cl.Constant[float], X, Y):
-        tidx, _, _ = cl.thread_idx()
-        bidx, _, _ = cl.block_idx()
-        block_dim_x, _, _ = cl.block_dim()
+        tidx = cl.thread_idx(0)
+        bidx = cl.block_idx(0)
+        block_dim_x = cl.block_dim(0)
         idx = tidx + bidx * block_dim_x
         if idx < N:
             Y[idx] = a * X[idx] + Y[idx]
@@ -348,7 +348,7 @@ class TestSyncwarp:
         @cl.kernel
         def kernel(out):
             shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
 
             shmem[lane] = lane
             cl.syncwarp()
@@ -371,7 +371,7 @@ class TestSyncwarp:
         @cl.kernel
         def kernel(out):
             shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
 
             shmem[lane] = 1
             cl.syncwarp()
@@ -408,7 +408,7 @@ class TestSyncwarp:
         @cl.kernel
         def kernel(out):
             shmem = cl.shared_array(shape=(16,), dtype=cl.int32)
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             mask = 0x0000FFFF
 
             if lane < 16:
@@ -438,7 +438,7 @@ class TestShuffle:
     def test_shfl_up_scan_width_8(self):
         @cl.kernel
         def kernel(inp, out):
-            tid, _, _ = cl.thread_idx()
+            tid = cl.thread_idx(0)
             lane = tid % 32
             sublane = lane % 8
             value = cl.int32(inp[tid])
@@ -466,7 +466,7 @@ class TestShuffle:
     def test_shfl_sync_idx(self):
         @cl.kernel
         def kernel(out):
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             out[lane] = cl.shfl_sync(cl.int32(0xFFFFFFFF), lane, 4)
 
         out = torch.zeros(32, dtype=torch.int32, device="cuda")
@@ -477,7 +477,7 @@ class TestShuffle:
     def test_shfl_down_sync(self):
         @cl.kernel
         def kernel(out):
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             out[lane] = cl.shfl_down_sync(cl.int32(0xFFFFFFFF), lane, 4)
 
         out = torch.zeros(32, dtype=torch.int32, device="cuda")
@@ -489,7 +489,7 @@ class TestShuffle:
     def test_shfl_xor_sync(self):
         @cl.kernel
         def kernel(out):
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             out[lane] = cl.shfl_xor_sync(cl.int32(0xFFFFFFFF), lane, 16)
 
         out = torch.zeros(32, dtype=torch.int32, device="cuda")
@@ -507,7 +507,7 @@ class TestBarrierSync:
     def test_barrier_sync_shared_exchange(self):
         @cl.kernel
         def kernel(out):
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
 
             shmem[lane] = lane * 2
@@ -530,7 +530,7 @@ class TestBarrierSync:
     def test_barrier_sync_count_warp_subset(self):
         @cl.kernel
         def kernel(out):
-            lane, _, _ = cl.thread_idx()
+            lane = cl.thread_idx(0)
             shmem = cl.shared_array(shape=(32,), dtype=cl.int32)
 
             if lane < 32:
@@ -561,7 +561,7 @@ class TestVoteSync:
     def test_all_sync(self):
         @cl.kernel
         def kernel(out):
-            tid, _, _ = cl.thread_idx()
+            tid = cl.thread_idx(0)
             lane = tid % 32
             mask = cl.int32(0xFFFFFFFF)
 
@@ -583,7 +583,7 @@ class TestVoteSync:
     def test_any_sync(self):
         @cl.kernel
         def kernel(out):
-            tid, _, _ = cl.thread_idx()
+            tid = cl.thread_idx(0)
             lane = tid % 32
             mask = cl.int32(0xFFFFFFFF)
 
@@ -605,7 +605,7 @@ class TestVoteSync:
     def test_uni_sync(self):
         @cl.kernel
         def kernel(out):
-            tid, _, _ = cl.thread_idx()
+            tid = cl.thread_idx(0)
             lane = tid % 32
             mask = cl.int32(0xFFFFFFFF)
 
@@ -629,7 +629,7 @@ class TestVoteSync:
     def test_ballot_sync(self):
         @cl.kernel
         def kernel(out):
-            tid, _, _ = cl.thread_idx()
+            tid = cl.thread_idx(0)
             lane = tid % 32
             mask = cl.int32(0xFFFFFFFF)
 

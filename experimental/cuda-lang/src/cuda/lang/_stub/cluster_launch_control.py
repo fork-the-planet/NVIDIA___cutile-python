@@ -18,14 +18,20 @@ def clusterlaunchcontrol_try_cancel(
     addr: "Pointer[clusterlaunchcontrol_token, MemorySpace.SHARED]",
     mbar: "Pointer[mbarrier, MemorySpace.SHARED]",
     multicast: bool = False,
-) -> None: ...
+) -> None:
+    """Try to cancel a pending block and write the response token to ``addr``."""
+    ...
 
 
 @stub
-def clusterlaunchcontrol_is_canceled(token: clusterlaunchcontrol_token) -> "bool_": ...
+def clusterlaunchcontrol_is_canceled(token: clusterlaunchcontrol_token) -> "bool_":
+    """Return whether ``token`` represents a canceled block."""
+    ...
 
 
 @stub
 def clusterlaunchcontrol_get_first_block_idx(
     token: clusterlaunchcontrol_token, axis: int | None = None
-) -> "int32 | tuple[int32, int32, int32]": ...
+) -> "int32 | tuple[int32, int32, int32]":
+    """Return the first block index encoded in ``token``."""
+    ...

@@ -10,11 +10,15 @@ from .nvvm import P3, P6
 
 
 class CTAGroup(enum.Enum):
+    """CTA group selection for tcgen05 tensor memory operations."""
+
     CTA_1 = "cg1"
     CTA_2 = "cg2"
 
 
 class Tcgen05LdStShape(enum.Enum):
+    """Load/store shapes supported by tcgen05 tensor memory operations."""
+
     SHAPE_16X64B = "16x64b"
     SHAPE_16X128B = "16x128b"
     SHAPE_16X256B = "16x256b"
@@ -28,7 +32,9 @@ def tcgen05_alloc(
     ncols: int,
     *,
     cta_group: CTAGroup = CTAGroup.CTA_1,
-) -> None: ...
+) -> None:
+    """Allocate tensor memory columns and write the tensor-memory address to ``addr``."""
+    ...
 
 
 @stub
@@ -37,7 +43,9 @@ def tcgen05_dealloc(
     ncols: int,
     *,
     cta_group: CTAGroup = CTAGroup.CTA_1,
-) -> None: ...
+) -> None:
+    """Deallocate tensor memory columns starting at ``addr``."""
+    ...
 
 
 @stub
@@ -46,7 +54,9 @@ def tcgen05_commit(
     *,
     multicast_mask: int | None = None,
     cta_group: CTAGroup = CTAGroup.CTA_1,
-) -> None: ...
+) -> None:
+    """Commit tcgen05 tensor memory operations and arrive at ``mbar``."""
+    ...
 
 
 @stub
@@ -57,7 +67,9 @@ def tcgen05_ld(
     count: int = 1,
     pack: bool | None = None,
     offset: int | None = None,
-) -> Any: ...
+) -> Any:
+    """Load registers from tensor memory using a tcgen05 load shape."""
+    ...
 
 
 __all__ = (

@@ -621,6 +621,8 @@ def _generate_rst_table() -> str:
 
 
 class PointerInfo:
+    """Information encoded in a pointer dtype."""
+
     @stub(host=True)
     def __init__(self, dtype: DType):
         definition = _dtype_defs[dtype]
@@ -632,11 +634,13 @@ class PointerInfo:
     @property
     @stub(host=True)
     def opaque(self) -> bool:
+        """Whether the pointer dtype is opaque."""
         return self._definition.pointee_dtype is None
 
     @property
     @stub(host=True)
     def pointee_dtype(self) -> DType:
+        """Data type pointed to by this pointer dtype."""
         if self._definition.pointee_dtype is None:
             raise ValueError("Opaque pointer has no pointee dtype")
         return self._definition.pointee_dtype
@@ -644,6 +648,7 @@ class PointerInfo:
     @property
     @stub(host=True)
     def memory_space(self) -> MemorySpace:
+        """CUDA memory space encoded in this pointer dtype."""
         return self._definition.memory_space
 
     def __repr__(self):
@@ -668,18 +673,21 @@ class PointerInfo:
 
 @stub(host=True)
 def is_pointer_dtype(dtype: DType) -> bool:
+    """Return whether ``dtype`` is a pointer dtype."""
     return isinstance(_dtype_defs[dtype], _PointerDTypeDefinition)
 
 
 @stub(host=True)
 def pointer_dtype(pointee_dtype: DType,
                   memory_space: MemorySpace = MemorySpace.GENERIC) -> DType:
+    """Return the dtype for a pointer to ``pointee_dtype`` in ``memory_space``."""
     assert pointee_dtype is not None
     return _get_pointer_dtype(pointee_dtype, memory_space)
 
 
 @stub(host=True)
 def opaque_pointer_dtype(memory_space: MemorySpace = MemorySpace.GENERIC) -> DType:
+    """Return the dtype for an opaque pointer in ``memory_space``."""
     return _get_pointer_dtype(None, memory_space)
 
 

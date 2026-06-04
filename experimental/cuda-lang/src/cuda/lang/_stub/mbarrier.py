@@ -16,11 +16,13 @@ WaitOrdering = Literal[MemoryOrder.RELAXED, MemoryOrder.ACQUIRE]
 
 @stub
 def mbarrier_init(mbar, participants: int) -> None:
+    """Initialize an mbarrier with the expected participant count."""
     ...
 
 
 @stub
 def mbarrier_invalidate(mbar) -> None:
+    """Invalidate an mbarrier object before its storage is reused."""
     ...
 
 
@@ -49,6 +51,7 @@ def mbarrier_arrive_expect_tx(
     scope: MbarrierScope = MbarrierScope.BLOCK,
     ordering: ArriveOrdering = MemoryOrder.RELEASE,
 ) -> "uint64 | None":
+    """Arrive at ``mbar`` and add expected transaction bytes."""
     ...
 
 
@@ -59,6 +62,7 @@ def mbarrier_expect_tx(
     *,
     scope: MbarrierScope = MbarrierScope.BLOCK,
 ) -> None:
+    """Add expected transaction bytes to ``mbar`` without arriving."""
     ...
 
 
@@ -69,6 +73,7 @@ def mbarrier_complete_tx(
     *,
     scope: MbarrierScope = MbarrierScope.BLOCK,
 ) -> None:
+    """Mark transaction bytes as complete for ``mbar``."""
     ...
 
 

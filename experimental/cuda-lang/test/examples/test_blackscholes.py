@@ -95,9 +95,9 @@ def test_blackscholes():
         volatility,
         opt_n,
     ):
-        tx, _, _ = cl.thread_idx()
-        bx, _, _ = cl.block_idx()
-        bdx, _, _ = cl.block_dim()
+        tx = cl.thread_idx(0)
+        bx = cl.block_idx(0)
+        bdx = cl.block_dim(0)
 
         opt = bdx * bx + tx
 

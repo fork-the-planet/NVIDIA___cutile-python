@@ -7,45 +7,123 @@ from cuda.lang._execution import stub
 
 
 @stub
-def ceil(x, /): ...
+def ceil(x, /):
+    """Round ``x`` toward positive infinity."""
+    ...
+
+
 @stub
-def exp(x, /): ...
+def exp(x, /):
+    """Compute ``e`` raised to the power ``x``."""
+    ...
+
+
 @stub
-def exp2(x, /): ...
+def exp2(x, /):
+    """Compute ``2`` raised to the power ``x``."""
+    ...
+
+
 @stub
-def sin(x, /): ...
+def sin(x, /):
+    """Compute the sine of ``x``."""
+    ...
+
+
 @stub
-def cos(x, /): ...
+def cos(x, /):
+    """Compute the cosine of ``x``."""
+    ...
+
+
 @stub
-def tan(x, /): ...
+def tan(x, /):
+    """Compute the tangent of ``x``."""
+    ...
+
+
 @stub
-def sinh(x, /): ...
+def sinh(x, /):
+    """Compute the hyperbolic sine of ``x``."""
+    ...
+
+
 @stub
-def cosh(x, /): ...
+def cosh(x, /):
+    """Compute the hyperbolic cosine of ``x``."""
+    ...
+
+
 @stub
-def tanh(x, /): ...
+def tanh(x, /):
+    """Compute the hyperbolic tangent of ``x``."""
+    ...
+
+
 @stub
-def sqrt(x, /): ...
+def sqrt(x, /):
+    """Compute the square root of ``x``."""
+    ...
+
+
 @stub
-def rsqrt(x, /): ...
+def rsqrt(x, /):
+    """Compute the reciprocal square root of ``x``."""
+    ...
+
+
 @stub
-def floor(x, /): ...
+def floor(x, /):
+    """Round ``x`` toward negative infinity."""
+    ...
+
+
 @stub
-def log(x, /): ...
+def log(x, /):
+    """Compute the natural logarithm of ``x``."""
+    ...
+
+
 @stub
-def log2(x, /): ...
+def log2(x, /):
+    """Compute the base-2 logarithm of ``x``."""
+    ...
+
+
 @stub
-def abs(x, /): ...
+def abs(x, /):
+    """Compute the absolute value of ``x``."""
+    ...
+
+
 @stub
-def atan2(x, y, /): ...
+def atan2(x, y, /):
+    """Compute the angle whose tangent is ``x / y``."""
+    ...
+
+
 @stub
-def isnan(x, /): ...
+def isnan(x, /):
+    """Return whether ``x`` is NaN."""
+    ...
+
+
 @stub
-def isinf(x, /): ...
+def isinf(x, /):
+    """Return whether ``x`` is positive or negative infinity."""
+    ...
+
+
 @stub
-def isfinite(x, /): ...
+def isfinite(x, /):
+    """Return whether ``x`` is finite."""
+    ...
+
+
 @stub
-def isnormal(x, /): ...
+def isnormal(x, /):
+    """Return whether ``x`` is a normal floating-point value."""
+    ...
 
 
 __all__ = (
@@ -65,4 +143,8 @@ __all__ = (
     "log2",
     "abs",
     "atan2",
+    "isnan",
+    "isinf",
+    "isfinite",
+    "isnormal",
 )

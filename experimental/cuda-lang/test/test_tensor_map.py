@@ -65,7 +65,7 @@ def test_tensor_map_tiled():
         x_tm = cl.tensor_map_tiled(x, (W, H))
 
         if cl.thread_idx(0) == 0:
-            cl.nvvm.mbarrier_init_shared(barrier.get_base_pointer(), cl.block_dim()[0])
+            cl.nvvm.mbarrier_init_shared(barrier.get_base_pointer(), cl.block_dim(0))
 
         cl.syncthreads()
         if cl.elect_sync():

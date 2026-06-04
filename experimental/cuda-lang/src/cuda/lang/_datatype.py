@@ -4,6 +4,7 @@
 
 from typing import TypeAlias
 
+from cuda.tile._memory_model import MemorySpace
 from cuda.tile._datatype import (
     DType,
     bfloat16,
@@ -98,6 +99,7 @@ __all__ = [
     "is_pointer_dtype",
     "pointer_dtype",
     "opaque_pointer_dtype",
+    "MemorySpace",
     "get_signedness",
     "integer_dtype",
     "unsigned_integral_dtypes",

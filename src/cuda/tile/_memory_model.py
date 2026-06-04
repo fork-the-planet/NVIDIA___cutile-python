@@ -49,10 +49,27 @@ class MemoryOrder(Enum):
 
 
 class MemorySpace(Enum):
+    """
+    CUDA memory address spaces used by pointer dtypes and address-space casts.
+    """
+
     GENERIC = 0
+    """Generic address space."""
+
     GLOBAL = 1
+    """Global memory address space."""
+
     SHARED = 3
+    """CTA-local shared memory address space."""
+
     CONSTANT = 4
+    """Constant memory address space."""
+
     LOCAL = 5
+    """Thread-local memory address space."""
+
     TENSOR = 6
+    """Tensor memory address space."""
+
     SHARED_CLUSTER = 7
+    """Cluster-visible shared memory address space."""

@@ -24,7 +24,7 @@ def test_vector_saxpy(vector_length):
     @cl.kernel
     def saxpy(A, X, Y, out):
         static_assert(A.dtype == X.dtype == Y.dtype)
-        offset = cl.block_idx()[0] * vector_length
+        offset = cl.block_idx(0) * vector_length
         a = load_vector_aligned(A, offset)
         x = load_vector_aligned(X, offset)
         y = load_vector_aligned(Y, offset)

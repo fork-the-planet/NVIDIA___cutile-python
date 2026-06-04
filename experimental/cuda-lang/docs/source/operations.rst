@@ -1,0 +1,260 @@
+.. SPDX-FileCopyrightText: Copyright (c) <2025> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+..
+.. SPDX-License-Identifier: Apache-2.0
+
+.. currentmodule:: cuda.lang
+
+
+Operations
+==========
+
+
+.. _operations-array-creation:
+
+Array Creation
+--------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   local_array
+   shared_array
+
+
+.. _operations-pointer-utilities:
+
+Pointer Utilities
+-----------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   is_pointer_dtype
+   pointer_dtype
+   opaque_pointer_dtype
+   address_space_cast
+   map_shared_to_cluster
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+   PointerInfo
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+   MemorySpace
+
+
+SIMT Model
+----------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    thread_idx
+    lane_idx
+    warp_idx
+    warp_size
+    block_idx
+    block_dim
+    cluster_idx
+    cluster_dim
+    block_in_cluster_idx
+    block_in_cluster_dim
+    grid_dim
+    full_mask
+    elect_sync
+
+
+Atomics
+-------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+    MemoryOrder
+    MemoryScope
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    atomic_add
+    atomic_sub
+    atomic_and
+    atomic_or
+    atomic_xor
+    atomic_min
+    atomic_max
+    atomic_inc
+    atomic_dec
+    atomic_xchg
+    atomic_cas
+
+
+.. _operations-math:
+
+Math
+----
+.. currentmodule:: cuda.lang._stub.math
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    abs
+    ceil
+    floor
+    exp
+    exp2
+    log
+    log2
+    sqrt
+    rsqrt
+    sin
+    cos
+    tan
+    sinh
+    cosh
+    tanh
+    atan2
+    isnan
+    isinf
+    isfinite
+    isnormal
+.. currentmodule:: cuda.lang
+
+
+Warp shuffle
+------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    shfl_sync
+    shfl_up_sync
+    shfl_down_sync
+    shfl_xor_sync
+
+
+.. _operations-tensor-map:
+
+TensorMap
+---------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    tensor_map_tiled
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+    TensorMapSwizzle
+
+
+Synchronization
+---------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    syncwarp
+    syncthreads
+
+    mbarrier_init
+    mbarrier_invalidate
+    mbarrier_arrive
+    mbarrier_arrive_expect_tx
+    mbarrier_expect_tx
+    mbarrier_complete_tx
+    mbarrier_test_wait
+    mbarrier_test_wait_parity
+    mbarrier_try_wait
+    mbarrier_try_wait_parity
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+    MbarrierScope
+
+
+Memory Fence
+------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    memory_barrier
+
+
+TensorCore (Gen5)
+-----------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    tcgen05_alloc
+    tcgen05_dealloc
+    tcgen05_commit
+    tcgen05_ld
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+   :template: autosummary/class_no_init.rst
+
+    Tcgen05LdStShape
+    CTAGroup
+
+
+Cluster Launch Control
+----------------------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    clusterlaunchcontrol_try_cancel
+    clusterlaunchcontrol_is_canceled
+    clusterlaunchcontrol_get_first_block_idx
+    griddepcontrol_wait
+    griddepcontrol_launch_dependents
+
+
+Utility
+-------
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+    nanosleep
+
+
+.. _operations-classes:
+
+Classes
+-------
+.. autosummary::
+   :nosignatures:
+
+   Array
+   Pointer
+   Vector
+   TensorMap
+
+.. toctree::
+   :hidden:
+
+   data/array
+   data/pointer
+   data/vector
+   data/tensor_map
