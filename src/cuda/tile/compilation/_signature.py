@@ -66,6 +66,13 @@ class ArrayConstraint:
             the last dimension can be set to 1, which may enable certain optimizations of loads
             and stores from/to this array. Can be set to `None` if none of the dimensions
             have known strides (this is the default).
+        shape_constant (Sequence[int | None] | None):
+            For each dimension of the array, an optional constant value of its shape.
+            Can be set to `None` if none of the dimensions have known shapes.
+            Requires ``cutile_python_v2``.
+            If ``shape_constant[i]`` is set, ``shape_divisible_by[i]`` is redundant and must
+            be compatible (i.e., ``shape_constant[i]`` must be divisible by
+            ``shape_divisible_by[i]``); it is then ignored.
         stride_divisible_by (Sequence[int] | int):
             For each dimension of the array, a factor by which its stride is assumed
             to be divisible. The value is given in array elements, not bytes.
@@ -91,6 +98,7 @@ class ArrayConstraint:
     alias_groups: tuple[str, ...]
     may_alias_internally: bool
     stride_constant: tuple[int | None, ...]
+    shape_constant: tuple[int | None, ...]
     stride_divisible_by: tuple[int, ...]
     shape_divisible_by: tuple[int, ...]
     base_addr_divisible_by: int
@@ -104,6 +112,7 @@ class ArrayConstraint:
                  alias_groups: Sequence[str],
                  may_alias_internally: bool,
                  stride_constant: Sequence[int | None] | None = None,
+                 shape_constant: Sequence[int | None] | None = None,
                  stride_divisible_by: Sequence[int] | int = 1,
                  shape_divisible_by: Sequence[int] | int = 1,
                  base_addr_divisible_by: int = 1):
@@ -125,6 +134,10 @@ class ArrayConstraint:
         stride_constant = _parse_assumption_tuple(
                 stride_constant, ndim, "stride_constant", None, _check_optional_int)
 
+        # shape_constant
+        shape_constant = _parse_assumption_tuple(
+                shape_constant, ndim, "shape_constant", None, _check_optional_nonnegative_int)
+
         # stride_lower_bound
         stride_lower_bound_incl = _parse_assumption_tuple(
             stride_lower_bound_incl, ndim, "stride_lower_bound_incl", None, _check_optional_int)
@@ -140,6 +153,8 @@ class ArrayConstraint:
         # shape_divisible_by
         shape_divisible_by = _parse_assumption_tuple(
                 shape_divisible_by, ndim, "shape_divisible_by", 1, _check_divisibility)
+        shape_divisible_by = _remove_redundant_divisibility_constraints(
+                shape_constant, shape_divisible_by, "shape_constant")
 
         # base_addr_divisible_by_bytes
         if not isinstance(base_addr_divisible_by, int):
@@ -206,6 +221,33 @@ class ListConstraint:
         object.__setattr__(self, "elements_may_alias", bool(elements_may_alias))
 
 
+@dataclass(frozen=True, init=False)
+class TupleConstraint:
+    """
+    Describes a tuple kernel parameter.
+
+    Args:
+        elements: Per-element parameter constraints. Elements may be
+            :class:`ScalarConstraint`, :class:`ArrayConstraint`,
+            :class:`ConstantConstraint`, :class:`ListConstraint`, or nested
+            :class:`TupleConstraint`.
+    """
+    elements: "tuple[ParameterConstraint, ...]"
+
+    def __init__(
+            self,
+            elements: "Sequence[ParameterConstraint]",
+    ):
+        for i, e in enumerate(elements):
+            if not isinstance(e, (ScalarConstraint, ArrayConstraint, ConstantConstraint,
+                                  TupleConstraint, ListConstraint)):
+                raise TypeError(
+                    f"TupleConstraint element {i} must be a ScalarConstraint,"
+                    f" ArrayConstraint, ConstantConstraint, TupleConstraint, or ListConstraint,"
+                    f" got {type(e).__name__}")
+        object.__setattr__(self, "elements", tuple(elements))
+
+
 @dataclass(frozen=False, eq=False)
 class ConstantConstraint:
     """
@@ -238,7 +280,7 @@ class ConstantConstraint:
 
 
 ParameterConstraint: TypeAlias = (ScalarConstraint | ArrayConstraint | ListConstraint
-                                  | ConstantConstraint)
+                                  | TupleConstraint | ConstantConstraint)
 
 
 def _to_constraint(c: ParameterConstraint | bool | int | float):
@@ -402,11 +444,20 @@ def _collect_alias_groups(parameters: Sequence[ParameterConstraint]
         elif isinstance(p, ListConstraint):
             yield p, p.alias_groups
             yield from _collect_alias_groups([p.element])
+        elif isinstance(p, TupleConstraint):
+            yield from _collect_alias_groups(list(p.elements))
 
 
 def _check_optional_int(i: int, val, param_name: str):
     if val is not None and not isinstance(val, int):
         raise TypeError(f"Element #{i} of `{param_name}` must be None or int, got {val}")
+
+
+def _check_optional_nonnegative_int(i: int, val, param_name: str):
+    if val is not None and (isinstance(val, bool) or not isinstance(val, int)):
+        raise TypeError(f"Element #{i} of `{param_name}` must be None or int, got {val}")
+    if val is not None and val < 0:
+        raise ValueError(f"Element #{i} of `{param_name}` must be non-negative, got {val}")
 
 
 def _check_divisibility(i: int, val, param_name: str):

@@ -123,6 +123,7 @@ static_assert(sizeof(ArraySpecializationBits) == 8);
 
 enum class CallConvVersion {
     CutilePython_V1 = 1,
+    CutilePython_V2 = 2,
 };
 
 namespace { struct CallingConvention {
@@ -145,6 +146,11 @@ static PyObject* CallingConvention_get_code(PyObject* self, void*) {
     return PyUnicode_FromFormat("t%d", cconv.version);
 }
 
+static PyObject* CallingConvention_get_version(PyObject* self, void*) {
+    CallingConvention& cconv = py_unwrap<CallingConvention>(self);
+    return PyLong_FromLong(static_cast<long>(cconv.version));
+}
+
 static PyObject* CallingConvention_repr(PyObject* self) {
     PyPtr name = steal(PyObject_GetAttrString(self, "name"));
     if (!name) return nullptr;
@@ -156,6 +162,7 @@ static PyObject* CallingConvention_repr(PyObject* self) {
 static PyGetSetDef CallingConvention_getsetters[] = {
     {"name", CallingConvention_get_name, nullptr},
     {"code", CallingConvention_get_code, nullptr},
+    {"version", CallingConvention_get_version, nullptr},
     {}  // sentinel
 };
 
@@ -174,9 +181,17 @@ static PyObject* CallingConvention_cutile_python_v1(PyObject*, PyObject*) {
     return Py_NewRef(c);
 }
 
+static PyObject* CallingConvention_cutile_python_v2(PyObject*, PyObject*) {
+    static PyObject* c;
+    if (!c) c = get_cconv(CallConvVersion::CutilePython_V2).release();
+    return Py_NewRef(c);
+}
+
 static PyPtr parse_cutile_python_calling_convention(const char* s) {
     if (s[0] == '1' && !s[1])
         return get_cconv(CallConvVersion::CutilePython_V1);
+    if (s[0] == '2' && !s[1])
+        return get_cconv(CallConvVersion::CutilePython_V2);
     return {};
 }
 
@@ -199,6 +214,11 @@ static PyMethodDef CallingConvention_methods[] = {
        "cutile_python_v1()\n"
         "--\n\n"
         "Returns the ``cutile_python_v1`` calling convention.\n\n"
+    },
+    {"cutile_python_v2", CallingConvention_cutile_python_v2, METH_NOARGS | METH_STATIC,
+       "cutile_python_v2()\n"
+        "--\n\n"
+        "Returns the ``cutile_python_v2`` calling convention.\n\n"
     },
     {}  // sentinel
 };

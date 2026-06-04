@@ -8,19 +8,34 @@ from collections import defaultdict, OrderedDict
 from dataclasses import dataclass
 from typing import Sequence
 
-from ._signature import ArrayConstraint, ParameterConstraint, ListConstraint, ScalarConstraint, \
-    KernelSignature, _collect_alias_groups, ConstantConstraint
+from ._signature import ArrayConstraint, ParameterConstraint, ListConstraint, TupleConstraint, \
+    ScalarConstraint, KernelSignature, _collect_alias_groups, ConstantConstraint
 from cuda.tile._datatype import DType, bool_, uint8, uint16, uint32, uint64, int64, int32, int16, \
     int8, float16, float32, float64, bfloat16, float8_e4m3fn, float8_e5m2, float8_e8m0fnu, \
     tfloat32
 from .._cext import CallingConvention
 
 
+def cconv_require_tuple_constraint(cconv: CallingConvention, cursor: "_Cursor | None" = None):
+    if cconv.version < 2:
+        msg = (f"Tuple parameters ('T' constraint) are not supported by calling convention"
+               f" {cconv.name}; version >= 2 is required")
+        raise cursor.make_error(msg) if cursor is not None else ValueError(msg)
+
+
+def cconv_require_static_shape(cconv: CallingConvention, cursor: "_Cursor | None" = None):
+    if cconv.version < 2:
+        msg = (f"Static array shapes ('s' predicate) are not supported by calling convention"
+               f" {cconv.name}; version >= 2 is required")
+        raise cursor.make_error(msg) if cursor is not None else ValueError(msg)
+
+
 def mangle_kernel_name(function_name: str,
                        kernel_signature: KernelSignature) -> str:
     alias_group_map, alias_group_names = _map_alias_groups(kernel_signature.parameters)
-    ret = (function_name + f"_K{kernel_signature.calling_convention.code}"
-           + "".join("_" + _mangle_constraint(p, alias_group_map)
+    cconv = kernel_signature.calling_convention
+    ret = (function_name + f"_K{cconv.code}"
+           + "".join("_" + _mangle_constraint(p, alias_group_map, cconv)
                      for p in kernel_signature.parameters))
     parsed_function_name, parsed_sig = _demangle_kernel_name(ret, alias_group_names)
     assert function_name == parsed_function_name
@@ -47,7 +62,7 @@ def _demangle_kernel_name(symbol: str,
     parameters = []
     while len(cursor.remaining) > 0:
         cursor.expect("_", "Expected an underscore")
-        constraint = _demangle_constraint(cursor, alias_group_demangler)
+        constraint = _demangle_constraint(cursor, alias_group_demangler, cconv)
         parameters.append(constraint)
     sig = KernelSignature(parameters, cconv, symbol)
     return function_name, sig
@@ -135,12 +150,16 @@ def _demangle_calling_convention(cursor: _Cursor) -> CallingConvention:
     return CallingConvention.from_code(cconv_code)
 
 
-def _mangle_constraint(p: ParameterConstraint, alias_group_map: dict[str, int]) -> str:
+def _mangle_constraint(p: ParameterConstraint, alias_group_map: dict[str, int],
+                       cconv: CallingConvention) -> str:
     if isinstance(p, ArrayConstraint):
-        return "A" + _mangle_array_constraint(p, alias_group_map)
+        return "A" + _mangle_array_constraint(p, alias_group_map, cconv)
     elif isinstance(p, ListConstraint):
         assert isinstance(p.element, ArrayConstraint)
-        return "L" + _mangle_list_constraint(p, alias_group_map)
+        return "L" + _mangle_list_constraint(p, alias_group_map, cconv)
+    elif isinstance(p, TupleConstraint):
+        cconv_require_tuple_constraint(cconv)
+        return "T" + _mangle_tuple_constraint(p, alias_group_map, cconv)
     elif isinstance(p, ScalarConstraint):
         return "S" + _mangle_dtype(p.dtype)
     elif isinstance(p, ConstantConstraint):
@@ -159,13 +178,16 @@ def _mangle_constraint(p: ParameterConstraint, alias_group_map: dict[str, int]) 
 
 def _demangle_constraint(cursor: _Cursor,
                          alias_group_demangler: _AliasGroupDemangler,
-                         ) -> ParameterConstraint:
+                         cconv: CallingConvention) -> ParameterConstraint:
     orig_cursor = cursor.clone()
     c = cursor.expect("[A-Z]", "Expected a constraint starting with a capital letter")
     if c == "A":
-        return _demangle_array_constraint(cursor, alias_group_demangler)
+        return _demangle_array_constraint(cursor, alias_group_demangler, cconv)
     elif c == "L":
-        return _demangle_list_constraint(cursor, alias_group_demangler)
+        return _demangle_list_constraint(cursor, alias_group_demangler, cconv)
+    elif c == "T":
+        cconv_require_tuple_constraint(cconv, orig_cursor)
+        return _demangle_tuple_constraint(cursor, alias_group_demangler, cconv)
     elif c == "S":
         dtype = _demangle_dtype(cursor)
         return ScalarConstraint(dtype)
@@ -182,12 +204,16 @@ def _demangle_constraint(cursor: _Cursor,
 
 
 def _mangle_array_constraint(a: ArrayConstraint,
-                             alias_group_map: dict[str, int]) -> str:
+                             alias_group_map: dict[str, int],
+                             cconv: CallingConvention) -> str:
+    if any(v is not None for v in a.shape_constant):
+        cconv_require_static_shape(cconv)
     ret = f"{a.ndim}{_mangle_dtype(a.dtype)}"
 
     # NOTE: since we encode axis masks as hex, letters a-f can't be used for predicates
 
     axis_predicates = OrderedDict()
+    _collect_axis_predicate(a.shape_constant, "s", None, axis_predicates)
     _collect_axis_predicate(a.shape_divisible_by, "i", 1, axis_predicates)
     _collect_axis_predicate(a.stride_constant, "t", None, axis_predicates)
     _collect_axis_predicate(a.stride_divisible_by, "v", 1, axis_predicates)
@@ -222,12 +248,14 @@ def _mangle_array_constraint(a: ArrayConstraint,
 
 
 def _demangle_array_constraint(cursor: _Cursor,
-                               alias_group_demangler: _AliasGroupDemangler) -> ArrayConstraint:
+                               alias_group_demangler: _AliasGroupDemangler,
+                               cconv: CallingConvention) -> ArrayConstraint:
     orig_cursor = cursor.clone()
     ndim = int(cursor.expect("[0-9]+", "Expected ndim integer"))
     dtype = _demangle_dtype(cursor)
 
     # Read axis predicates
+    shape_constant = [None] * ndim
     shape_divisible_by = [1] * ndim
     stride_constant = [None] * ndim
     stride_divisible_by = [1] * ndim
@@ -244,6 +272,12 @@ def _demangle_array_constraint(cursor: _Cursor,
         if axis_mask.bit_length() > ndim:
             raise mask_cursor.make_error(f"Axis mask {axis_mask:x} has more bits"
                                          f" ({axis_mask.bit_length()}) than array ndim ({ndim})")
+
+        s_cursor = cursor.clone()
+        axis_shape_constant = None
+        if cursor.read("s") is not None:
+            cconv_require_static_shape(cconv, s_cursor)
+            axis_shape_constant = _demangle_signed_int(cursor)
 
         axis_shape_div_by = 1
         if cursor.read("i") is not None:
@@ -263,6 +297,12 @@ def _demangle_array_constraint(cursor: _Cursor,
 
         while axis_mask > 0:
             i = axis_mask.bit_length() - 1
+
+            if axis_shape_constant is not None:
+                if shape_constant[i] is not None:
+                    raise mask_cursor.make_error(
+                        f"Static shape specified more than once for axis #{i}")
+                shape_constant[i] = axis_shape_constant
 
             if axis_shape_div_by != 1:
                 if shape_divisible_by[i] != 1:
@@ -325,29 +365,47 @@ def _demangle_array_constraint(cursor: _Cursor,
                            alias_groups=alias_groups,
                            may_alias_internally=may_alias_internally,
                            stride_constant=stride_constant,
+                           shape_constant=shape_constant,
                            stride_divisible_by=stride_divisible_by,
                            shape_divisible_by=shape_divisible_by,
                            base_addr_divisible_by=base_addr_div_by)
 
 
-def _mangle_list_constraint(constraint: ListConstraint, alias_group_map: dict[str, int]):
+def _mangle_list_constraint(constraint: ListConstraint, alias_group_map: dict[str, int],
+                            cconv: CallingConvention) -> str:
     ret = ""
     for group_id in sorted((alias_group_map[ag] for ag in constraint.alias_groups)):
         ret += f"g{group_id:x}"
     if constraint.elements_may_alias:
         ret += "i"
-    return ret + _mangle_constraint(constraint.element, alias_group_map)
+    return ret + _mangle_constraint(constraint.element, alias_group_map, cconv)
 
 
 def _demangle_list_constraint(cursor: _Cursor,
-                              alias_group_demangler: _AliasGroupDemangler) -> ListConstraint:
+                              alias_group_demangler: _AliasGroupDemangler,
+                              cconv: CallingConvention) -> ListConstraint:
     alias_groups = alias_group_demangler.demangle_group_ids(cursor)
     elements_may_alias = cursor.read("i") is not None
     old_cursor = cursor.clone()
-    element = _demangle_constraint(cursor, alias_group_demangler)
+    element = _demangle_constraint(cursor, alias_group_demangler, cconv)
     if not isinstance(element, ArrayConstraint):
         raise old_cursor.make_error("Expected an ArrayConstraint")
     return ListConstraint(element, alias_groups=alias_groups, elements_may_alias=elements_may_alias)
+
+
+def _mangle_tuple_constraint(constraint: TupleConstraint, alias_group_map: dict[str, int],
+                             cconv: CallingConvention) -> str:
+    # Format: {count}{elem0_mangling}{elem1_mangling}...
+    return f"{len(constraint.elements)}" + "".join(
+        _mangle_constraint(e, alias_group_map, cconv) for e in constraint.elements)
+
+
+def _demangle_tuple_constraint(cursor: _Cursor,
+                               alias_group_demangler: _AliasGroupDemangler,
+                               cconv: CallingConvention) -> TupleConstraint:
+    count = int(cursor.expect("[0-9]+", "Expected element count"))
+    elements = [_demangle_constraint(cursor, alias_group_demangler, cconv) for _ in range(count)]
+    return TupleConstraint(elements)
 
 
 def _mangle_dtype(dtype: DType):
@@ -359,7 +417,7 @@ def _mangle_dtype(dtype: DType):
 
 def _demangle_dtype(cursor: _Cursor) -> DType:
     old_cursor = cursor.clone()
-    dtype_str = cursor.expect("[^_]+", "Expected dtype name")
+    dtype_str = cursor.expect("[a-z0-9]+", "Expected dtype name")
     for d, n in _mangled_dtype.items():
         if n == dtype_str:
             return d

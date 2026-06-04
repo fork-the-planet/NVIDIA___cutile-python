@@ -6,7 +6,7 @@ import pytest
 
 from cuda.tile.compilation import mangle_kernel_name, demangle_kernel_name
 from cuda.tile.compilation import (KernelSignature, ScalarConstraint, ArrayConstraint,
-                                   ListConstraint, CallingConvention)
+                                   ListConstraint, TupleConstraint, CallingConvention)
 from cuda.tile._datatype import (bool_, uint8, uint16, uint32, uint64, int8, int16, int32, int64,
                                  float16, float32, float64, bfloat16, tfloat32,
                                  float8_e4m3fn, float8_e5m2, float8_e8m0fnu)
@@ -182,3 +182,118 @@ def test_name_mangling_cutile_python_v1(parameters, expected_suffix):
     # Also verify that the public demangle_kernel_name doesn't crash.
     demangled_name, demangled_sig = demangle_kernel_name(mangled)
     assert demangled_name == func_name
+
+
+@pytest.mark.parametrize("parameters, expected_suffix", [
+    pytest.param(
+        [TupleConstraint([])],
+        "_T0",
+        id="empty_tuple",
+    ),
+    pytest.param(
+        [TupleConstraint([ScalarConstraint(int32)])],
+        "_T1Si32",
+        id="tuple_single_scalar",
+    ),
+    pytest.param(
+        [TupleConstraint([ScalarConstraint(int32), ScalarConstraint(float32)])],
+        "_T2Si32Sf32",
+        id="tuple_two_scalars",
+    ),
+    pytest.param(
+        [TupleConstraint([_SIMPLE_2D])],
+        "_T1A2f32_3l0",
+        id="tuple_single_array",
+    ),
+    pytest.param(
+        [TupleConstraint([_SIMPLE_2D, ScalarConstraint(int32)])],
+        "_T2A2f32_3l0Si32",
+        id="tuple_mixed_array_scalar",
+    ),
+    pytest.param(
+        [TupleConstraint([ScalarConstraint(int32), ScalarConstraint(float32)]), _SIMPLE_2D],
+        "_T2Si32Sf32_A2f32_3l0",
+        id="tuple_followed_by_array",
+    ),
+
+    # Nested tuple: outer tuple contains one inner empty tuple
+    pytest.param(
+        [TupleConstraint([TupleConstraint([])])],
+        "_T1T0",
+        id="tuple_nested_empty",
+    ),
+
+    # Nested tuple: outer tuple contains one inner tuple of two scalars
+    pytest.param(
+        [TupleConstraint([TupleConstraint([ScalarConstraint(int32), ScalarConstraint(float32)])])],
+        "_T1T2Si32Sf32",
+        id="tuple_nested_two_scalars",
+    ),
+
+    # Nested tuple: outer tuple mixes scalar and inner tuple
+    pytest.param(
+        [TupleConstraint([ScalarConstraint(int32), TupleConstraint([ScalarConstraint(float32)])])],
+        "_T2Si32T1Sf32",
+        id="tuple_scalar_and_nested",
+    ),
+
+    # Three levels of nesting
+    pytest.param(
+        [TupleConstraint([TupleConstraint([TupleConstraint([ScalarConstraint(int32)])])])],
+        "_T1T1T1Si32",
+        id="tuple_triple_nested",
+    ),
+
+    # Static shape is encoded as a shape-constant axis predicate and suppresses
+    # redundant shape-divisibility predicates on the same axis.
+    pytest.param(
+        [ArrayConstraint(float32, 2,
+                         index_dtype=int32,
+                         stride_lower_bound_incl=0,
+                         alias_groups=(),
+                         may_alias_internally=False,
+                         shape_constant=[16, None],
+                         shape_divisible_by=[16, 1])],
+        "_A2f32_1s16_3l0",
+        id="array_static_shape",
+    ),
+])
+def test_name_mangling_cutile_python_v2(parameters, expected_suffix):
+    func_name = "my_kernel"
+    cconv = CallingConvention.cutile_python_v2()
+    sig = KernelSignature(parameters, cconv)
+    expected = func_name + "_K" + cconv.code + expected_suffix
+    mangled = mangle_kernel_name(func_name, sig)
+    assert mangled == expected, f"Expected {expected!r}, got {mangled!r}"
+    demangled_name, demangled_sig = demangle_kernel_name(mangled)
+    assert demangled_name == func_name
+
+
+def test_mangle_tuple_with_v1_raises():
+    cconv = CallingConvention.cutile_python_v1()
+    sig = KernelSignature([TupleConstraint([ScalarConstraint(int32)])], cconv)
+    with pytest.raises(ValueError, match="version >= 2"):
+        mangle_kernel_name("my_kernel", sig)
+
+
+def test_demangle_tuple_with_v1_raises():
+    symbol = "my_kernel_Kt1_T1Si32"
+    with pytest.raises(ValueError, match="version >= 2"):
+        demangle_kernel_name(symbol)
+
+
+def test_mangle_static_shape_with_v1_raises():
+    cconv = CallingConvention.cutile_python_v1()
+    sig = KernelSignature(
+        [ArrayConstraint(float32, 1, index_dtype=int32, stride_lower_bound_incl=0,
+                         alias_groups=(), may_alias_internally=False,
+                         shape_constant=(8,))],
+        cconv)
+    with pytest.raises(ValueError, match="version >= 2"):
+        mangle_kernel_name("my_kernel", sig)
+
+
+def test_demangle_static_shape_with_v1_raises():
+    symbol = "my_kernel_Kt1_A1f32_1s8l0"
+    with pytest.raises(ValueError, match="version >= 2"):
+        demangle_kernel_name(symbol)

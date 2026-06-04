@@ -80,6 +80,10 @@ class CallingConvention:
         ...
 
     @staticmethod
+    def cutile_python_v2() -> "CallingConvention":
+        ...
+
+    @staticmethod
     def from_code(code: str, /) -> "CallingConvention":
         ...
 
@@ -89,6 +93,10 @@ class CallingConvention:
 
     @property
     def code(self) -> str:
+        ...
+
+    @property
+    def version(self) -> int:
         ...
 
 

@@ -53,6 +53,8 @@ constraint:
 
 .. autoclass:: cuda.tile.compilation.ListConstraint
 
+.. autoclass:: cuda.tile.compilation.TupleConstraint
+
 .. autoclass:: cuda.tile.compilation.ConstantConstraint
 
 
@@ -68,14 +70,19 @@ A calling convention defines three aspects of the binary interface provided by a
 *   The name mangling algorithm used to automatically derive a symbol name from the kernel's
     function name and a kernel signature.
 
-The only currently implemented calling convention is ``cutile_python_v1``.
-According to this convention, the binary kernel arguments are passed in the same order
-as the kernel parameters are declared in the Python kernel function, except that parameters
-annotated with :py:class:`ct.Constant <cuda.tile.Constant>` are omitted. The following table
-lists the supported parameter constraints, as well as the corresponding binary format
-of the kernel arguments:
+Two calling conventions are available: ``cutile_python_v1`` and ``cutile_python_v2``.
+Both pass binary kernel arguments in the same order as the kernel parameters are declared
+in the Python kernel function, except that parameters annotated with
+:py:class:`ct.Constant <cuda.tile.Constant>` are omitted.
+``cutile_python_v2`` extends ``cutile_python_v1`` with support for tuple parameters
+(:py:class:`TupleConstraint`). New code should use ``cutile_python_v2``.
 
-.. list-table:: Parameter Constraints Supported by the ``cutile_python_v1`` Calling Convention.
+The following table lists the supported parameter constraints and their binary formats.
+Constraints marked |v2only| require ``cutile_python_v2``.
+
+.. |v2only| replace:: :sup:`v2`
+
+.. list-table:: Parameter Constraints and their Binary Formats.
     :header-rows: 1
 
     * - Constraint Class
@@ -120,6 +127,17 @@ of the kernel arguments:
         store the shape of the array; the final `n` signed integers store the strides of the array.
         Even though 64-bit integers are always used for the shape and the strides,
         they are truncated to the ``index_dtype`` of the element constraint.
+
+    * - :py:class:`TupleConstraint` |v2only|
+      - The tuple's elements are passed as consecutive arguments, as if each element were
+        an individual top-level parameter. The binary format of each element follows the same
+        rules as its corresponding constraint type (:py:class:`ScalarConstraint` or
+        :py:class:`ArrayConstraint`).
+
+        When the tuple parameter is annotated with
+        :py:class:`ct.Constant[tuple] <cuda.tile.Constant>`, the entire tuple is omitted from
+        the launch arguments (same as :py:class:`ConstantConstraint`). In this case, all
+        elements of the :py:class:`TupleConstraint` must be :py:class:`ConstantConstraint`.
 
     * - :py:class:`ConstantConstraint`
       - Omitted from the launch arguments.
