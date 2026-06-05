@@ -49,6 +49,7 @@ def function(func=None, /, *, host=False, tile=True):
             def wrapped(*args, **kwargs):
                 return DispatchMode.get_current().call_tile_function_from_host(
                         wrapped, args, kwargs)
+            wrapped._cutile_function_wrapper = True
             return wrapped
 
     if func is None:
@@ -188,3 +189,7 @@ def is_stub(func) -> bool:
         func = getattr(func, "__wrapped__", None)
         if func is None:
             return False
+
+
+def is_function_wrapper(func) -> bool:
+    return getattr(func, "_cutile_function_wrapper", False)

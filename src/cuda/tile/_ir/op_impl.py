@@ -171,7 +171,7 @@ class ImplRegistry:
             if len(fixed_args) > 0:
                 func = functools.partial(orig_func, *fixed_args)
 
-            func_sig = get_signature(func)
+            func_sig = inspect.signature(func)
             _verify_params_match(stub_sig, func_sig)
             is_coroutine = inspect.iscoroutinefunction(func)
             if is_coroutine:

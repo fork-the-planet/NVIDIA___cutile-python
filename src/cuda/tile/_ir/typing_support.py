@@ -16,7 +16,7 @@ from .type import DataclassInfo, PointerInfoTy
 
 from .type import Type, DTypeConstructor, DTypeSpec, NONE, StringTy, \
     ELLIPSIS, SLICE, ModuleTy, FunctionTy, EnumTy, TypeTy, LooselyTypedScalar
-
+from .._execution import is_function_wrapper
 
 # Store mapping from 3rd party dtype objects
 # e.g. np.float32 -> float32, torch.bfloat16 -> bfloat16
@@ -131,7 +131,13 @@ def get_signature(f) -> inspect.Signature:
     elif is_dtype_constructor(f):
         # Data type constructors
         f = lambda x=0, /: None  # noqa: E731
-    return inspect.signature(f)
+
+    if isinstance(f, type):
+        return inspect.signature(f)
+
+    while is_function_wrapper(f):
+        f = f.__wrapped__
+    return inspect.signature(f, follow_wrapped=False)
 
 
 def is_supported_builtin_func(x: Any) -> bool:

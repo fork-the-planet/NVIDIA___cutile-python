@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) <2025> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+import functools
 import inspect
 
 import pytest
@@ -364,3 +365,47 @@ def test_error_message_stack_trace():
     )
     with pytest.raises(TileTypeError, match=msg_regex):
         ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+
+
+def decorate(func):
+    @functools.wraps(func)
+    def wrapper(x):
+        return func(x + 3)
+    return wrapper
+
+
+@decorate
+def decorated_helper(x):
+    return x * 10
+
+
+def test_decorated_helper_function():
+    @ct.kernel
+    def kernel(y):
+        t = decorated_helper(5)
+        ct.scatter(y, (), t)
+    y = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (y,))
+    assert y.item() == 80
+
+
+def forward(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+@forward
+def forward_helper(x):
+    return x * 10
+
+
+def test_decorated_helper_function_forward():
+    @ct.kernel
+    def kernel(y):
+        t = forward_helper(5)
+        ct.scatter(y, (), t)
+    y = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (y,))
+    assert y.item() == 50

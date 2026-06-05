@@ -13,6 +13,7 @@ from typing import List, Sequence, Optional, Any, Dict, Type, Callable, OrderedD
 
 from cuda.tile import _datatype as datatype
 from cuda.tile._exception import TileSyntaxError, Loc, FunctionDesc
+from cuda.tile._execution import is_function_wrapper
 from cuda.tile._ir.hir import make_value, ResolvedName, UNKNOWN_NAME
 from cuda.tile._ir import hir, hir_stubs
 from cuda.tile._ir.type import ClosureDefaultPlaceholder, FormattedPiece, StringFormat
@@ -22,10 +23,16 @@ from cuda.tile._stub import static_eval, static_assert, static_iter
 
 @lru_cache
 def get_function_hir(pyfunc: Callable, entry_point: bool) -> hir.Function:
-    # Get the original function from the decorated function if it exists.
-    pyfunc = getattr(pyfunc, "__wrapped__", pyfunc)
+    # Unwrap the @function decorator
+    while is_function_wrapper(pyfunc):
+        pyfunc = pyfunc.__wrapped__
 
-    source_lines, first_line = inspect.getsourcelines(pyfunc)
+    # Use findsource() instead of getsourcelines() because the latter unwraps any decorators,
+    # which we don't want.
+    file_source_lines, first_line = inspect.findsource(pyfunc)
+    source_lines = inspect.getblock(file_source_lines[first_line:])
+    first_line += 1
+
     # The source code of our function could be inside a class, an if-else block etc.
     # This means it can have extra indentation on the left. If we try to give it
     # to ast.parse() as is, we will get a parse error. The common workaround
