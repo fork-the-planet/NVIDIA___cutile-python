@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 
+from cuda.tile._ir.ops_utils import promote_types
 from cuda.tile._memory_model import MemoryOrder
 from cuda.tile._ir.op_impl import (
     require_optional_constant_int,
@@ -39,6 +40,7 @@ from cuda.tile._ir.arithmetic_ops import (
     RawWhereOperation,
     Unary,
     arithmetic_impl_registry,
+    promote_and_broadcast_to,
 )
 from cuda.tile._ir.static_eval_ops import static_eval_impl_registry
 from cuda.tile._ir.ops import (
@@ -1181,6 +1183,8 @@ def _get_dtype(ty: ScalarTy | VectorTy):
 
 
 @impl(cl_math.ceil, fixed_args=["math.ceil"])
+@impl(cl_math.exp, fixed_args=["math.exp"])
+@impl(cl_math.exp2, fixed_args=["math.exp2"])
 @impl(cl_math.sin, fixed_args=["math.sin"])
 @impl(cl_math.cos, fixed_args=["math.cos"])
 @impl(cl_math.tan, fixed_args=["math.tan"])
@@ -1188,6 +1192,7 @@ def _get_dtype(ty: ScalarTy | VectorTy):
 @impl(cl_math.cosh, fixed_args=["math.cosh"])
 @impl(cl_math.tanh, fixed_args=["math.tanh"])
 @impl(cl_math.sqrt, fixed_args=["math.sqrt"])
+@impl(cl_math.rsqrt, fixed_args=["math.rsqrt"])
 @impl(cl_math.floor, fixed_args=["math.floor"])
 @impl(cl_math.log, fixed_args=["math.log"])
 @impl(cl_math.log2, fixed_args=["math.log2"])
@@ -1198,6 +1203,33 @@ def math_float_unary_impl(op_name: str, x: Var):
         x_ty,
         op_name=op_name,
         operands_=(x,),
+    )
+
+
+def common_type(x: Var, y: Var):
+    x_ty = x.get_loose_type()
+    y_ty = y.get_loose_type()
+
+    if not datatype.is_arithmetic(x_ty.tensor_dtype()):
+        raise TileTypeError(f"Left-hand side has non-arithmetic dtype {x_ty.tensor_dtype()}")
+    if not datatype.is_arithmetic(y_ty.tensor_dtype()):
+        raise TileTypeError(f"Right-hand side has non-arithmetic dtype {y_ty.tensor_dtype()}")
+
+    return promote_types(x_ty, y_ty, x.ctx.typing_hooks)
+
+
+@impl(cl_math.atan2, fixed_args=["math.atan2"])
+def math_float_binary_impl(op_name: str, x: Var, y: Var):
+    require_scalar_or_vector_float_type(x)
+    require_scalar_or_vector_float_type(y)
+    ty = common_type(x, y)
+    x = promote_and_broadcast_to(x, ty)
+    y = promote_and_broadcast_to(y, ty)
+    return add_operation(
+        RawMLIROperation,
+        ty,
+        op_name=op_name,
+        operands_=(x, y),
     )
 
 

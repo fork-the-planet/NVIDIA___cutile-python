@@ -462,7 +462,7 @@ def binary_arithmetic_tensorlike(fn: str, x: Var[TensorLikeTy], y: Var[TensorLik
     if not is_arithmetic(x_ty.tensor_dtype()):
         raise TileTypeError(f"Left-hand side has non-arithmetic dtype {x_ty.tensor_dtype()}")
     if not is_arithmetic(y_ty.tensor_dtype()):
-        raise TileTypeError(f"Right-hard side has non-arithmetic dtype {y_ty.tensor_dtype()}")
+        raise TileTypeError(f"Right-hand side has non-arithmetic dtype {y_ty.tensor_dtype()}")
 
     if isinstance(x_ty, LooselyTypedScalar) and isinstance(y_ty, LooselyTypedScalar):
         return binop_propagate_constant(fn, x_ty.value, y_ty.value, None)

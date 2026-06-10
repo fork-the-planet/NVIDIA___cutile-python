@@ -6,6 +6,7 @@ import cuda.lang as cl
 import cuda.lang._datatype as datatype
 import builtins
 import math as host_math
+import sys
 import torch
 import pytest
 from cuda.lang import compile_simt
@@ -14,16 +15,23 @@ from cuda.lang.compilation import KernelSignature
 from cuda.lang._exception import TileTypeError
 
 
+rng = torch.Generator().manual_seed(0)
 FLOAT_TYPES = (
     cl.float16,
     cl.float32,
     cl.float64,
 )
+FLOAT_TOLERANCES = {
+    cl.float16: dict(rel=1e-3, abs=1e-3),
+    cl.float32: dict(rel=1e-5, abs=1e-5),
+    cl.float64: dict(rel=1e-10, abs=1e-10),
+}
 SIGNED_INT_TYPES = datatype.signed_integral_dtypes
 UNSIGNED_INT_TYPES = datatype.unsigned_integral_dtypes
 
 UNARY_FLOAT_OPS = (
     (device_math.ceil, host_math.ceil),
+    (device_math.exp, host_math.exp),
     (device_math.sin, host_math.sin),
     (device_math.cos, host_math.cos),
     (device_math.tan, host_math.tan),
@@ -31,18 +39,21 @@ UNARY_FLOAT_OPS = (
     (device_math.cosh, host_math.cosh),
     (device_math.tanh, host_math.tanh),
     (device_math.sqrt, host_math.sqrt),
+    (device_math.rsqrt, lambda x: 1 / host_math.sqrt(x)),
     (device_math.floor, host_math.floor),
     (device_math.log, host_math.log),
     (device_math.log2, host_math.log2),
     (device_math.abs, builtins.abs),
 )
 
+BINARY_FLOAT_OPS = (
+    (device_math.atan2, host_math.atan2),
+)
+
 
 @pytest.mark.parametrize("dtype", FLOAT_TYPES)
 @pytest.mark.parametrize("device_op, host_op", UNARY_FLOAT_OPS)
 def test_math_unary_float(dtype, device_op, host_op):
-    rng = torch.Generator().manual_seed(0)
-
     @cl.kernel
     def kernel(inp, out):
         out[0] = device_op(inp[0])
@@ -53,7 +64,63 @@ def test_math_unary_float(dtype, device_op, host_op):
     inp = torch.tensor([host_inp], dtype=torch_dt, device="cuda")
     out = torch.tensor([0.0], dtype=torch_dt, device="cuda")
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (inp, out))
-    assert out[0].item() == pytest.approx(expected, rel=1e-3, abs=1e-3)
+    assert out[0].item() == pytest.approx(expected, **FLOAT_TOLERANCES[dtype])
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="math.exp2 requires Python 3.11+")
+@pytest.mark.parametrize("dtype", FLOAT_TYPES)
+def test_math_exp2(dtype):
+    from math import exp2
+
+    @cl.kernel
+    def kernel(inp, out):
+        out[0] = device_math.exp2(inp[0])
+
+    torch_dt = datatype.to_torch_dtype(dtype)
+    host_inp = torch.rand((), generator=rng).item() + 0.5
+    expected = exp2(host_inp)
+    inp = torch.tensor([host_inp], dtype=torch_dt, device="cuda")
+    out = torch.tensor([0.0], dtype=torch_dt, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (inp, out))
+    assert out[0].item() == pytest.approx(expected, **FLOAT_TOLERANCES[dtype])
+
+
+@pytest.mark.parametrize("dtype", FLOAT_TYPES)
+@pytest.mark.parametrize("device_op, host_op", BINARY_FLOAT_OPS)
+def test_math_binary_float(dtype, device_op, host_op):
+
+    @cl.kernel
+    def kernel(lhs, rhs, out):
+        out[0] = device_op(lhs[0], rhs[0])
+
+    torch_dt = datatype.to_torch_dtype(dtype)
+    host_lhs = torch.rand((), generator=rng).item() + 0.5
+    host_rhs = torch.rand((), generator=rng).item() + 0.5
+    expected = host_op(host_lhs, host_rhs)
+    lhs = torch.tensor([host_lhs], dtype=torch_dt, device="cuda")
+    rhs = torch.tensor([host_rhs], dtype=torch_dt, device="cuda")
+    out = torch.tensor([0.0], dtype=torch_dt, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (lhs, rhs, out))
+    assert out[0].item() == pytest.approx(expected, **FLOAT_TOLERANCES[dtype])
+
+
+def test_math_binary_float_promotion():
+    dt1, dt2 = cl.float16, cl.float64
+
+    @cl.kernel
+    def kernel(lhs, rhs, out):
+        out[0] = device_math.atan2(dt1(lhs[0]), dt2(rhs[0]))
+
+    tdt1 = datatype.to_torch_dtype(dt1)
+    tdt2 = datatype.to_torch_dtype(dt2)
+    host_lhs = torch.rand((), generator=rng).item() + 0.5
+    host_rhs = torch.rand((), generator=rng).item() + 0.5
+    lhs = torch.tensor([host_lhs], dtype=tdt1, device="cuda")
+    rhs = torch.tensor([host_rhs], dtype=tdt2, device="cuda")
+    out = torch.tensor([0.0], dtype=tdt2, device="cuda")
+    expected = host_math.atan2(lhs.cpu().item(), rhs.cpu().item())
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (lhs, rhs, out))
+    assert out[0].item() == pytest.approx(expected, **FLOAT_TOLERANCES[dt2])
 
 
 @pytest.mark.parametrize("dtype", SIGNED_INT_TYPES)
