@@ -766,7 +766,10 @@ class TilePrintf(Operation, opcode="tile_printf", memory_effect=MemoryEffect.STO
             with tile_mutex("print_mutex", ctx):
                 result_typeid = None
                 bc.encode_PrintTkoOp(ctx.builder, result_typeid, arg_vars, None, self.format)
-        return [None]
+
+                # Bytecode < 13.2 does not produce or consume print ordering tokens.
+                # Return a dummy only to satisfy the IR result_var mapping.
+                return bc.encode_MakeTokenOp(ctx.builder, ctx.type_table.Token)
 
 
 @impl(print)
