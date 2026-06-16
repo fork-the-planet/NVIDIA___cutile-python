@@ -3,13 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import cuda.lang._datatype as datatype
+from cuda.lang._ir.op_defs import LoadPointer, StorePointer
 from cuda.lang._ir.type import MemorySpace, ScalarTy, VectorTy, PointerTy
 from cuda.tile import TileTypeError, DType
+from cuda.tile._memory_model import MemoryOrder
 from cuda.tile._ir.ir import Var
-from cuda.tile._ir.op_impl import require_array_type
+from cuda.tile._ir.op_impl import (
+    require_array_type,
+    require_optional_constant_enum,
+    require_optional_constant_int,
+)
 from cuda.tile._ir.ops import broadcast_to, implicit_cast
 from cuda.tile._ir.ops_utils import promote_types
-from cuda.tile._ir.type import TupleTy, TupleValue
+from cuda.tile._ir.type import PointerInfo, TupleTy, TupleValue
 from cuda.tile._datatype import is_integral, is_signed
 from cuda.lang._datatype import clusterlaunchcontrol_token, is_float, mbarrier
 
@@ -82,6 +88,18 @@ def require_pointer_type(var: Var) -> PointerTy:
     return ty
 
 
+def require_concrete_pointer_type(var: Var) -> PointerTy:
+    ptr_ty = require_pointer_type(var)
+    info = PointerInfo(ptr_ty.pointer_dtype)
+    if info.opaque:
+        raise TileTypeError(
+            f"Expected concrete pointer type but got {ptr_ty.pointer_dtype}."
+            "\nHint: you can use ``cl.bitcast(ptr, cl.pointer_dtype(dtype))``"
+            " to cast the pointer to a typed pointer."
+        )
+    return ptr_ty
+
+
 def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]) -> PointerTy:
     ptr_type = require_pointer_type(ptr_value)
     if ptr_type.memory_space not in spaces:
@@ -91,6 +109,36 @@ def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]) 
             f"but got {ptr_type.memory_space}"
         )
     return ptr_type
+
+
+def require_optional_alignment(alignment: Var) -> int | None:
+    alignment = require_optional_constant_int(alignment)
+
+    if alignment is None:
+        return None
+
+    if alignment <= 0 or alignment & (alignment - 1):
+        raise TileTypeError("alignment must be a positive power of two")
+
+    return alignment
+
+
+def require_pointer_memory_order(
+    operation: type[LoadPointer] | type[StorePointer],
+    ordering_var: Var,
+):
+    ordering = require_optional_constant_enum(ordering_var, MemoryOrder)
+    if ordering in operation.valid_orderings:
+        return ordering
+
+    formatted_expected = ", ".join(
+        "None" if order is None else str(order) for order in operation.valid_orderings
+    )
+    operation_name = "load" if operation is LoadPointer else "store"
+    raise TileTypeError(
+        f"Invalid memory order for Pointer.{operation_name}. "
+        f"Got {ordering}, expected one of {formatted_expected}"
+    )
 
 
 def require_mbarrier_ptr(

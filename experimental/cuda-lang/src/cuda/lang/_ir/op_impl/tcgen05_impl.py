@@ -4,6 +4,7 @@
 
 from typing import cast
 
+from cuda.tile._ir.cast_ops import implicit_cast
 import cuda.lang._datatype as datatype
 from cuda.lang._stub import tcgen05 as tcgen05_stub
 from cuda.lang._stub.tcgen05 import CTAGroup, Tcgen05LdStShape
@@ -15,7 +16,6 @@ from cuda.lang._ir.ops import (
     VectorTy,
     add_operation_variadic,
     astype,
-    implicit_cast,
     require_scalar_type,
     strictly_typed_const,
 )

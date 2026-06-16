@@ -29,7 +29,6 @@ def storeme(ptr: cl.Pointer[Any], mo: cl.MemoryOrder):
         (cl.MemoryOrder.ACQUIRE, loadme),
         (cl.MemoryOrder.RELAXED, loadme),
         (cl.MemoryOrder.WEAK, loadme),
-
         # Store does not support acquire or acq_rel
         (cl.MemoryOrder.RELAXED, storeme),
         (cl.MemoryOrder.RELEASE, storeme),
@@ -320,11 +319,73 @@ def test_allocate_shmem_in_runtime_conditional():
 
 
 def test_allocate_shmem_in_runtime_loop():
-    def kernel(tensor, cond):
-        for i in range(cl.int32(tensor[0])):
+    def kernel(tensor):
+        for _ in range(cl.int32(tensor[0])):
             cl.shared_array(shape=(1,), dtype=cl.int32)
 
     tensor_constraint = make_symbolic_tensor(shape=(2,), dtype=cl.float32)
-    bool_constraint = make_symbolic_scalar(dtype=cl.bool_)
     with pytest.raises(TileError, match="Memory allocated in dynamic control flow"):
-        compile_for_arguments(kernel, (tensor_constraint, bool_constraint))
+        compile_for_arguments(kernel, (tensor_constraint,))
+
+
+def test_pointer_getitem():
+    @cl.kernel
+    def kernel(arr):
+        arr[0] += arr.get_base_pointer()[0]
+
+    arr = torch.tensor([1], dtype=torch.int32).cuda()
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
+    assert arr.cpu().item() == 2
+
+
+def test_pointer_setitem():
+    @cl.kernel
+    def kernel(arr):
+        p = arr.get_base_pointer()
+        p[0] = 5
+
+    arr = torch.tensor([1], dtype=torch.int32).cuda()
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
+    assert arr.cpu().item() == 5
+
+
+def test_opaque_pointer_getitem():
+    @cl.kernel
+    def kernel(arr):
+        p = arr.get_base_pointer()
+        p = cl.bitcast(p, cl.opaque_pointer_dtype())
+        arr[0] += p[0]
+
+    with pytest.raises(
+        TileTypeError, match="Expected concrete pointer type but got opaque_pointer"
+    ):
+        arr = torch.tensor([1], dtype=torch.int32).cuda()
+        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
+
+
+def test_opaque_pointer_setitem():
+    @cl.kernel
+    def kernel(arr):
+        p = arr.get_base_pointer()
+        p = cl.bitcast(p, cl.opaque_pointer_dtype())
+        p[0] = 5
+
+    with pytest.raises(
+        TileTypeError,
+        match="Expected concrete pointer type but got opaque_pointer",
+    ):
+        arr = torch.tensor([1], dtype=torch.int32).cuda()
+        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
+
+
+def test_pointer_access_2d_fails():
+    @cl.kernel
+    def kernel(arr):
+        arr.get_base_pointer()[0, 0] = 5
+
+    with pytest.raises(
+        TileTypeError,
+        match="Expected a scalar, but given value has type Tuple",
+    ):
+        arr = torch.tensor([1], dtype=torch.int32).cuda()
+        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
