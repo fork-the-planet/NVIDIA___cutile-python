@@ -13,6 +13,8 @@ from typing_extensions import override
 import cuda.tile._bytecode as bc
 from cuda.tile import TileTypeError
 import cuda.tile._datatype as datatype
+from cuda.tile._bytecode import float_to_bits
+from cuda.tile._bytecode.float import float_from_bits
 from cuda.tile._datatype import numeric_dtype_category, is_integral
 from cuda.tile._exception import Loc, TileSyntaxError, TileValueError
 from cuda.tile._ir import hir_stubs, hir
@@ -248,6 +250,18 @@ def _strictly_typed_const_inner(builder: Builder,
                 return x
 
             value = _map_nested_tuple(truncate, value)
+        elif datatype.is_float(dtype):
+            bc_type = datatype.dtype_simple_bytecode_type(dtype)
+
+            def round_float(x):
+                x = float(x)
+                try:
+                    bits = float_to_bits(x, bc_type)
+                except ValueError as e:
+                    raise TileValueError(str(e))
+                return float_from_bits(bits, bc_type)
+
+            value = _map_nested_tuple(round_float, value)
 
     result = None if name is None else builder.ir_ctx.make_var(name, builder.loc)
     ret = builder.add_operation(TypedConst, ty, dict(value=value), result=result)

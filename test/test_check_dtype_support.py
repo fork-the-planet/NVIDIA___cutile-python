@@ -79,7 +79,7 @@ def test_f8e8m0fnu_rejects_negative(val):
         ct.printf("%f", t)
 
     with pytest.raises(TileValueError,
-                       match="negative values cannot be represented in float8_e8m0fnu"):
+                       match="Negative values cannot be represented in an unsigned float format"):
         compile_with(kernel, (), "sm_100", "13.2")
 
 
@@ -91,7 +91,7 @@ def test_f4e2m1fn_rejects_nan(val):
         ct.printf("%f", t)
 
     with pytest.raises(TileValueError,
-                       match="NaN cannot be represented in float4_e2m1fn"):
+                       match="NaN cannot be represented in a finite-only float format"):
         compile_with(kernel, (), "sm_100", "13.3")
 
 

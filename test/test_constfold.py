@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from io import BytesIO
 
+import numpy as np
 import pytest
 import torch
 import cuda.tile as ct
@@ -329,3 +330,24 @@ def test_strictly_typed_integer_constant_truncation_binary():
     x = torch.zeros(1, dtype=torch.int64, device="cuda")
     ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
     assert x.tolist() == [4]
+
+
+def test_strictly_typed_float_constant_rounding():
+    @ct.kernel
+    def kernel(x):
+        ct.scatter(x, 0, ct.float16(0.2))
+        ct.scatter(x, 1, ct.float64(ct.float8_e8m0fnu(0.2)))
+
+    x = torch.zeros(2, dtype=torch.float64, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+    assert x.tolist() == [float(np.float16(0.2)), 0.25]
+
+
+def test_strictly_typed_unsigned_float_constant_from_negative():
+    @ct.kernel
+    def kernel():
+        ct.float8_e8m0fnu(-0.2)
+
+    with pytest.raises(ct.TileValueError,
+                       match="Negative values cannot be represented in an unsigned float format"):
+        ct.launch(torch.cuda.current_stream(), (1,), kernel, ())
