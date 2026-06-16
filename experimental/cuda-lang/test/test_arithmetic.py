@@ -315,3 +315,26 @@ def test_bool_comparison():
     cl.launch(torch.cuda.current_stream(), (2,), (2,), kernel, (res, dx))
     assert res.cpu()[0] == False  # noqa: E712
     assert res.cpu()[1] == True  # noqa: E712
+
+
+@pytest.mark.parametrize(
+    "op,lhs,rhs,expect",
+    [
+        (operator.eq, 1, 1, 1),
+        (operator.ne, 1, 0, 1),
+        (operator.ge, 1, 0, 1),
+        (operator.gt, 1, 0, 1),
+        (operator.le, 0, 1, 1),
+        (operator.lt, 0, 1, 1),
+        (operator.gt, 0, 1, 0),
+    ],
+)
+def test_comparison_bool_value(op, lhs, rhs, expect):
+    @cl.kernel
+    def kernel(out, inp):
+        out[0] = cl.int8(op(inp[0], inp[1]))
+
+    inp = torch.tensor([lhs, rhs], dtype=torch.int32).cuda()
+    out = torch.zeros(1, dtype=torch.int8).cuda()
+    cl.launch(torch.cuda.current_stream(), (2,), (2,), kernel, (out, inp))
+    assert out.cpu().item() == expect

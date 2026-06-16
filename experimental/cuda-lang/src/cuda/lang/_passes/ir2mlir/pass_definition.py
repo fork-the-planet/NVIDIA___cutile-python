@@ -524,7 +524,7 @@ class IR2MLIR:
         rhs = self.get_var(operation.rhs)
 
         result = mlir_op(lhs=lhs, rhs=rhs)
-        result = mlir.arith.add_ExtSIOp(
+        result = mlir.arith.add_ExtUIOp(
             out_type=ir_type_to_mlir_type(res_type),
             in_=result,
         )
