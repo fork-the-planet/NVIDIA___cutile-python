@@ -225,8 +225,29 @@ def strictly_typed_const(value: Any, ty: Type, name: str | None = None) -> Var:
     return _strictly_typed_const_inner(Builder.get_current(), value, ty, name)
 
 
+def _map_nested_tuple(func, value):
+    return (tuple(_map_nested_tuple(func, x) for x in value)
+            if isinstance(value, tuple) else func(value))
+
+
 def _strictly_typed_const_inner(builder: Builder,
                                 value: Any, ty: Type, name: str | None = None) -> Var:
+    if isinstance(ty, TensorLikeTy):
+        dtype = ty.tensor_dtype()
+        if is_integral(dtype):
+            mask = -1 << dtype.bitwidth
+
+            def truncate(x):
+                x = int(x) & ~mask
+                assert x >= 0
+                if datatype.is_signed(dtype) and (x >> (dtype.bitwidth - 1)):
+                    # High bit set? Need to sign-extend it.
+                    x |= mask
+                    assert x < 0
+                return x
+
+            value = _map_nested_tuple(truncate, value)
+
     result = None if name is None else builder.ir_ctx.make_var(name, builder.loc)
     ret = builder.add_operation(TypedConst, ty, dict(value=value), result=result)
     if not isinstance(ty, TensorLikeTy) or ty.tensor_shape() == ():

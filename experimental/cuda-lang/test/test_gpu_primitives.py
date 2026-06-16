@@ -522,10 +522,10 @@ class TestShuffle:
 
         filecheck(
             cres.mlir,
-            f"""
+            """
             CHECK: 1234
             CHECK: 4321
-            CHECK: {0xFFFFFFFF}
+            CHECK: -1
             """,
         )
 

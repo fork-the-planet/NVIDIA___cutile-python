@@ -11,6 +11,7 @@ import re
 from cuda.tile._cext import CallingConvention
 from cuda.tile._compile import get_sm_arch
 from cuda.tile._exception import TileTypeError
+from util import assert_equal
 
 
 def nd_tensor(nd: int, dtype=None):
@@ -273,3 +274,58 @@ def test_semi_constant_tuple_yielded_by_ifelse():
     x = torch.zeros((4,), dtype=torch.int32, device="cuda")
     ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
     assert x.tolist() == [0, 1, 2, 3]
+
+
+def test_strictly_typed_integer_constant_truncation():
+    @ct.kernel
+    def kernel(x, y, z):
+        ct.scatter(x, 0, ct.int64(ct.uint32(-3)))
+        ct.scatter(x, 1, ct.int64(ct.uint32(0x1abcdef23)))
+        ct.scatter(x, 2, ct.int64(ct.int32(-3_000_000_000)))
+        ct.scatter(x, 3, ct.int64(ct.int32(3_000_000_000)))
+
+        for i in range(2000):
+            ct.scatter(y, i, ct.int64(ct.int8(i - 1000)))
+            ct.scatter(z, i, ct.int64(ct.uint8(i - 1000)))
+
+    x = torch.zeros(4, dtype=torch.int64, device="cuda")
+    y = torch.zeros(2000, dtype=torch.int64, device="cuda")
+    z = torch.zeros(2000, dtype=torch.int64, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x, y, z))
+    assert x.tolist() == [0xfffffffd, 0xabcdef23, 1294967296, -1294967296]
+
+    assert_equal(y, torch.arange(-1000, 1000, device="cuda").to(torch.int8).to(torch.int64))
+    assert_equal(z, torch.arange(-1000, 1000, device="cuda").to(torch.uint8).to(torch.int64))
+
+
+def test_strictly_typed_integer_constant_truncation_unary():
+    @ct.kernel
+    def kernel(x):
+        ct.scatter(x, 0, ct.int64(~ct.uint32(3)))
+        ct.scatter(x, 1, ct.int64(-ct.uint32(3)))
+
+    x = torch.zeros(2, dtype=torch.int64, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+    assert x.tolist() == [0xfffffffc, 0xfffffffd]
+
+
+def test_strictly_typed_boolean_constant_truncation():
+    @ct.kernel
+    def kernel(x):
+        ct.scatter(x, 0, ct.int64(ct.bool_(5)))
+        ct.scatter(x, 1, ct.int64(ct.bool_(-3)))
+
+    x = torch.zeros(2, dtype=torch.int64, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+    assert x.tolist() == [1, 1]
+
+
+def test_strictly_typed_integer_constant_truncation_binary():
+    @ct.kernel
+    def kernel(x):
+        t = ct.uint8(150) + ct.uint8(110)  # 260 = 4 (mod 256)
+        ct.scatter(x, 0, ct.int64(t))
+
+    x = torch.zeros(1, dtype=torch.int64, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kernel, (x,))
+    assert x.tolist() == [4]
