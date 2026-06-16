@@ -71,11 +71,7 @@ def kernel_1(c1: ct.Constant, s1, c2: ct.Constant, s2,
         ct.scatter(a2, (7 - i, i + 2, i), c2 * 1000.0 + s2 * 10 + i)
 
 
-def call_kernel_cutile_python_v1(cubin: bytes, kernel_name: str, runtime_pyargs):
-    driver = CudaDriver()
-    library = driver.cuLibraryLoadData(cubin)
-    kernel = driver.cuLibraryGetKernel(library, kernel_name)
-
+def _build_kernel_args(runtime_pyargs, is_v2=False) -> list:
     args = []
     for x in runtime_pyargs:
         if isinstance(x, torch.Tensor):
@@ -84,15 +80,31 @@ def call_kernel_cutile_python_v1(cubin: bytes, kernel_name: str, runtime_pyargs)
                 args.append(c_int32(s))
             for s in x.stride():
                 args.append(c_int32(s))
+        elif is_v2 and isinstance(x, tuple):
+            for elem in x:
+                if isinstance(elem, int):
+                    args.append(c_int32(elem))
+                elif isinstance(elem, float):
+                    args.append(c_float(elem))
+                else:
+                    assert False, f"Unsupported tuple element type: {type(elem)}"
         elif isinstance(x, int):
             args.append(c_int32(x))
         elif isinstance(x, float):
             args.append(c_float(x))
         else:
             assert False
+    return args
 
+
+def _call_kernel(cubin: bytes, kernel_name: str, runtime_pyargs, is_v2=False):
+    driver = CudaDriver()
+    library = driver.cuLibraryLoadData(cubin)
+    kernel = driver.cuLibraryGetKernel(library, kernel_name)
     stream = torch.cuda.current_stream()
-    driver.cuLaunchKernel(kernel, (1, 1, 1), (1, 1, 1), 0, c_void_p(stream.cuda_stream), args)
+    driver.cuLaunchKernel(kernel, (1, 1, 1), (1, 1, 1), 0,
+                          c_void_p(stream.cuda_stream),
+                          _build_kernel_args(runtime_pyargs, is_v2))
 
 
 def test_export_compat_cutile_python_v1():
@@ -119,12 +131,41 @@ def test_export_compat_cutile_python_v1():
                                  output_format="cubin")
     a1 = torch.zeros((32, 8), dtype=torch.int32, device="cuda")
     a2 = torch.zeros((8, 8, 8), dtype=torch.float32, device="cuda")
-    call_kernel_cutile_python_v1(
-            io.getvalue(),
-            "kernel_1_Kt1_I13_Si32_F4031000000000000_Sf32_A2i32_1v4l0_2t1_A3f32_7l0",
-            (5, 9.0, a1, a2))
+    _call_kernel(io.getvalue(),
+                 "kernel_1_Kt1_I13_Si32_F4031000000000000_Sf32_A2i32_1v4l0_2t1_A3f32_7l0",
+                 (5, 9.0, a1, a2))
     a1_cpu = a1.cpu()
     a2_cpu = a2.cpu()
     for i in range(5):
         assert a1_cpu[i*2+3, i] == 13 * 1000 + 5 * 10 + i
         assert a2_cpu[7 - i, i + 2, i] == 17.0 * 1000.0 + 9.0 * 10.0 + i
+
+
+@ct.kernel
+def kernel_2(pair, addend: ct.Constant[tuple], out):
+    ct.scatter(out, (), pair[0] + pair[1] + addend[0])
+
+
+def test_export_compat_cutile_python_v2():
+    sig = ct.compilation.KernelSignature(
+        parameters=[
+            ct.compilation.TupleConstraint(
+                [
+                    ct.compilation.ScalarConstraint(ct.int32),
+                    ct.compilation.ScalarConstraint(ct.int32),
+                ]),
+            ct.compilation.TupleConstraint(
+                [ct.compilation.ConstantConstraint(10)]),
+            ct.compilation.ArrayConstraint(ct.int32, 0, index_dtype=ct.int32,
+                                           stride_lower_bound_incl=0,
+                                           alias_groups=(), may_alias_internally=False),
+        ],
+        calling_convention=ct.compilation.CallingConvention.cutile_python_v2(),
+    )
+
+    io = BytesIO()
+    ct.compilation.export_kernel(kernel_2, [sig], gpu_code=get_sm_arch(), output_file=io,
+                                 output_format="cubin")
+    out = torch.zeros((), dtype=torch.int32, device="cuda")
+    _call_kernel(io.getvalue(), "kernel_2_Kt2_T2Si32Si32_T1I10_A0i32", ((3, 7), out), is_v2=True)
+    assert out.item() == 20

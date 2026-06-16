@@ -10,6 +10,7 @@ import cuda.tile._bytecode as bc
 from cuda.tile._compiler_options import CompilerOptions
 from cuda.tile._compile import compile_cubin, get_sm_arch
 from cuda.tile import _cext
+from cuda.tile._annotated_function import LeafAnnotationNode
 import cuda.tile as ct
 
 
@@ -115,7 +116,8 @@ class _HackKernel(_cext.TileDispatcher):
     def __init__(self, cubin: bytes, func_name: str):
         self._cubin = cubin
         self._func_name = func_name
-        super().__init__((False, False, False), (False, False, False), (False, False, False))
+        leaf = LeafAnnotationNode(constant=False, int64_index=False, int64_scalar=False)
+        super().__init__((leaf, leaf, leaf))
 
     def _compile(self, signature, ctx):
         assert len(signature.parameters) == 3

@@ -53,7 +53,7 @@ def dev_features_enabled():
 
 
 class TileDispatcher:
-    def __init__(self, arg_constant_flags: Sequence[bool]):
+    def __init__(self, parameter_annotations: Sequence):
         ...
 
 

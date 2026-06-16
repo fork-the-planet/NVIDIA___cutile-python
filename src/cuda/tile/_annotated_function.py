@@ -12,14 +12,37 @@ from cuda.tile._stub import ConstantAnnotation, ArrayAnnotation, ScalarAnnotatio
 from cuda.tile._datatype import int64
 
 
+@dataclass(frozen=True)
+class LeafAnnotationNode:
+    KIND = "leaf"
+
+    constant: bool      # ct.Constant: compile-time constant parameter.
+    int64_index: bool   # 64-bit array index dtype.
+    int64_scalar: bool  # int64 scalar parameter.
+
+
+@dataclass(frozen=True)
+class HomogeneousTupleNode:
+    KIND = "homogeneous_tuple"
+
+    each: "ParameterAnnotationNode"
+
+
+@dataclass(frozen=True)
+class HeterogeneousTupleNode:
+    KIND = "heterogeneous_tuple"
+
+    items: tuple["ParameterAnnotationNode", ...]
+
+
+ParameterAnnotationNode = LeafAnnotationNode | HomogeneousTupleNode | HeterogeneousTupleNode
+
+
 @dataclass
 class AnnotatedFunction:
     pyfunc: FunctionType
     pysig: inspect.Signature
-    constant_parameter_mask: Sequence[bool]
-    # array index dtype and scalar integer dtype can only be int64 or int32 now.
-    int64_index_parameter_mask: Sequence[bool]
-    int64_parameter_mask: Sequence[bool]
+    parameter_annotations: Sequence[ParameterAnnotationNode]
 
 
 def get_annotated_function(pyfunc: FunctionType) -> AnnotatedFunction:
@@ -27,40 +50,45 @@ def get_annotated_function(pyfunc: FunctionType) -> AnnotatedFunction:
     # Resolves string annotations produced by `from __future__ import annotations`.
     hints = typing.get_type_hints(pyfunc, include_extras=True)
     annotations = [hints.get(name, param.annotation) for name, param in sig.parameters.items()]
-
-    constant_parameter_mask = tuple(_has_constant_annotation(ann) for ann in annotations)
-    int64_index_parameter_mask = tuple(_has_int64_index_annotation(ann) for ann in annotations)
-    int64_parameter_mask = tuple(_has_int64_annotation(ann) for ann in annotations)
+    parameter_annotations = tuple(_build_annotation_node(ann) for ann in annotations)
     return AnnotatedFunction(pyfunc=pyfunc,
                              pysig=sig,
-                             constant_parameter_mask=constant_parameter_mask,
-                             int64_index_parameter_mask=int64_index_parameter_mask,
-                             int64_parameter_mask=int64_parameter_mask)
+                             parameter_annotations=parameter_annotations)
 
 
-def _has_constant_annotation(annotation: Any) -> bool:
+def _build_tuple_node(annotation: Any, outer_constant: bool) -> ParameterAnnotationNode:
+    args = get_args(annotation)
+    if len(args) == 2 and args[1] is ...:
+        return HomogeneousTupleNode(_build_annotation_node(args[0], outer_constant))
+    return HeterogeneousTupleNode(
+        tuple(_build_annotation_node(arg, outer_constant) for arg in args))
+
+
+def _build_annotation_node(annotation: Any,
+                           outer_constant: bool = False) -> ParameterAnnotationNode:
     if get_origin(annotation) is Annotated:
-        _, *metadata = get_args(annotation)
-        return any(isinstance(m, ConstantAnnotation) for m in metadata)
+        inner, *metadata = get_args(annotation)
+        is_constant = outer_constant or any(isinstance(m, ConstantAnnotation) for m in metadata)
+        if get_origin(inner) is tuple:
+            return _build_tuple_node(inner, is_constant)
+        return LeafAnnotationNode(constant=is_constant,
+                                  int64_index=_has_int64_index_annotation(metadata),
+                                  int64_scalar=_has_int64_scalar_annotation(metadata))
+    if get_origin(annotation) is tuple:
+        return _build_tuple_node(annotation, outer_constant)
+    return LeafAnnotationNode(constant=outer_constant, int64_index=False, int64_scalar=False)
+
+
+def _has_int64_index_annotation(metadata: Sequence[Any]) -> bool:
+    for m in metadata:
+        if isinstance(m, ArrayAnnotation) and m.index_dtype is int64:
+            return True
+        if (isinstance(m, ListAnnotation)
+                and isinstance(m.element, ArrayAnnotation)
+                and m.element.index_dtype is int64):
+            return True
     return False
 
 
-def _has_int64_index_annotation(annotation: Any) -> bool:
-    if get_origin(annotation) is Annotated:
-        _, *metadata = get_args(annotation)
-        for m in metadata:
-            if isinstance(m, ArrayAnnotation) and m.index_dtype is int64:
-                return True
-            if (isinstance(m, ListAnnotation)
-                    and isinstance(m.element, ArrayAnnotation)
-                    and m.element.index_dtype is int64):
-                return True
-        return False
-    return False
-
-
-def _has_int64_annotation(annotation: Any) -> bool:
-    if get_origin(annotation) is Annotated:
-        _, *metadata = get_args(annotation)
-        return any(isinstance(m, ScalarAnnotation) and m.dtype is int64 for m in metadata)
-    return False
+def _has_int64_scalar_annotation(metadata: Sequence[Any]) -> bool:
+    return any(isinstance(m, ScalarAnnotation) and m.dtype is int64 for m in metadata)

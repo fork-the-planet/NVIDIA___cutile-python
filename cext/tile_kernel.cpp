@@ -369,7 +369,6 @@ struct KernelFamily : SimpleRefcount<KernelFamily> {
     KernelMap kernels_by_constants;
 };
 
-
 static ArenaOffset arena_alloc_words(Arena& arena, size_t count) {
     ArenaOffset offset = arena.size();
     arena.resize(offset + count);
@@ -432,6 +431,8 @@ enum class ParameterKind {
     Integer,
     Float,
     List,
+    TupleBegin,
+    TupleEnd,
 };
 
 enum class PythonArgKind {
@@ -448,7 +449,10 @@ enum class PythonArgKind {
     // Python `float`
     PyFloat,
     // Python `list`
-    PyList
+    PyList,
+    // Python `tuple` open/close brackets
+    PyTupleBegin,
+    PyTupleEnd,
 };
 
 static ParameterKind param_kind_from_pyarg_kind(PythonArgKind k) {
@@ -460,11 +464,25 @@ static ParameterKind param_kind_from_pyarg_kind(PythonArgKind k) {
     case PythonArgKind::PyLong: return ParameterKind::Integer;
     case PythonArgKind::PyFloat: return ParameterKind::Float;
     case PythonArgKind::PyList: return ParameterKind::List;
+    case PythonArgKind::PyTupleBegin: return ParameterKind::TupleBegin;
+    case PythonArgKind::PyTupleEnd: return ParameterKind::TupleEnd;
     }
     CHECK(false);
 }
 
+static constexpr PyObject* kTupleEnd = nullptr;
+static constexpr PyTypeObject* kTupleEndType = nullptr;
+
 static Result<PythonArgKind> classify_arg(PyObject* arg) {
+    if (arg == kTupleEnd)
+        return PythonArgKind::PyTupleEnd;
+    if (PyTuple_CheckExact(arg))
+        return PythonArgKind::PyTupleBegin;
+    if (PyType_IsSubtype(Py_TYPE(arg), &PyTuple_Type))
+        return raise(PyExc_TypeError,
+            "Unsupported argument type '%s': only plain tuple is accepted, not subclasses",
+            Py_TYPE(arg)->tp_name);
+
     if (PyBool_Check(arg))
         return PythonArgKind::PyBool;
 
@@ -494,10 +512,16 @@ static Result<PythonArgKind> classify_arg(PyObject* arg) {
     return raise(PyExc_TypeError, "Unsupported argument type %s", Py_TYPE(arg)->tp_name);
 }
 
+struct LeafFlags {
+    bool constant    = false;
+    bool int64_index = false;
+    bool int64_param = false;
+};
 
 struct PythonArgProfile {
     RefPtr<KernelFamily> family;
     Vec<PythonArgKind> arg_kinds;
+    Vec<LeafFlags> flat_flags;
 };
 
 // Concatenate values of two chars in a single unsigned integer
@@ -1392,90 +1416,183 @@ static PyPtr parse_list_constraint(ConstantCursor& cursor) {
     return steal(PyObject_Call(constraint_class.get(), args.get(), kwargs.get()));
 }
 
+struct FlagNode {
+    bool constant    = false;
+    bool int64_index = false;
+    bool int64_param = false;
+    bool wildcard    = false;
+    Vec<FlagNode> children;
+
+    const FlagNode& child_at(size_t idx) const {
+        if (!wildcard) return children[idx];
+        return children.empty() ? *this : children[0];
+    }
+};
+
+static Status flatten_flag_node(const FlagNode& node, const Vec<PythonArgKind>& arg_kinds,
+                                size_t& idx, Vec<LeafFlags>& out) {
+    PythonArgKind kind = arg_kinds[idx++];
+    if (kind == PythonArgKind::PyTupleBegin) {
+        out.push_back({});  // PyTupleBegin marker
+        size_t child_idx = 0;
+        while (arg_kinds[idx] != PythonArgKind::PyTupleEnd) {
+            if (!node.wildcard && child_idx >= node.children.size()){
+                // will raise error below
+                ++child_idx;
+                ++idx;
+                continue;
+            }
+            if (!flatten_flag_node(node.child_at(child_idx), arg_kinds, idx, out))
+                return ErrorRaised;
+            ++child_idx;
+        }
+        if (!node.wildcard && child_idx != node.children.size())
+            return raise(PyExc_TypeError,
+                "annotation expects %zu tuple elements but got %zu",
+                node.children.size(), child_idx);
+        out.push_back({});  // PyTupleEnd marker
+        ++idx;  // consume PyTupleEnd
+        return OK;
+    }
+    if (!node.wildcard || !node.children.empty())
+        return raise(PyExc_TypeError, "annotation expects a tuple argument but got a leaf");
+    out.push_back({node.constant, node.int64_index, node.int64_param});
+    return OK;
+}
+
+static Status flatten_flags(const Vec<FlagNode>& flags, const Vec<PythonArgKind>& arg_kinds,
+                            Vec<LeafFlags>& out) {
+    out.clear();
+    out.reserve(arg_kinds.size());
+    size_t idx = 0;
+    for (const FlagNode& node : flags) {
+        if (!flatten_flag_node(node, arg_kinds, idx, out))
+            return ErrorRaised;
+    }
+    return OK;
+}
+
+static Status extract_leaf(const DriverApi* driver, PyObject* obj, PythonArgKind kind,
+                           const LeafFlags& flags, LaunchHelper& helper) {
+    unsigned idx_bits = flags.int64_index ? 64 : 32;
+    switch (kind) {
+    case PythonArgKind::TorchTensorDlpack:
+    case PythonArgKind::DlpackArray:
+    case PythonArgKind::CudaArray:
+        // TODO: apply flags.constant to array args?
+        if (flags.constant)
+            return raise(PyExc_TypeError,
+                         "ct.Constant[tuple] does not support array elements");
+        if (kind == PythonArgKind::TorchTensorDlpack)
+            return extract_array<arrayrepr_torch_tensor_dlpack>(driver, obj, idx_bits, helper);
+        if (kind == PythonArgKind::DlpackArray)
+            return extract_array<arrayrepr_dlpack>(driver, obj, idx_bits, helper);
+        return extract_array<arrayrepr_cuda_array_iface>(driver, obj, idx_bits, helper);
+    case PythonArgKind::PyBool:
+        return extract_py_bool(obj, flags.constant, helper);
+    case PythonArgKind::PyLong:
+        return extract_py_long(obj, flags.constant, flags.int64_param, helper);
+    case PythonArgKind::PyFloat:
+        extract_py_float(obj, flags.constant, helper);
+        return OK;
+    case PythonArgKind::PyList:
+        return extract_py_list(driver, obj, idx_bits, helper);
+    case PythonArgKind::PyTupleBegin:  // structure markers carry no data (filtered by caller)
+    case PythonArgKind::PyTupleEnd:
+        break;
+    }
+    // Unsupported types are already rejected by classify_arg, so an unhandled kind here
+    // is an internal logic error (a new PythonArgKind, or a tuple kind that leaked through).
+    CHECK(false);
+    return ErrorRaised;
+}
 
 static Status extract_cuda_args(const DriverApi* driver,
-                                PyObject* const* pyargs, size_t num_pyargs,
+                                const Vec<PyObject*>& pyarg_objs,
                                 const Vec<PythonArgKind>& arg_kinds,
-                                const Vec<bool>& constant_arg_flags,
-                                const Vec<bool>& int64_index_flags,
-                                const Vec<bool>& int64_param_flags,
+                                const Vec<LeafFlags>& flat_flags,
                                 LaunchHelper& helper) {
-    CHECK(num_pyargs == arg_kinds.size());
+    CHECK(pyarg_objs.size() == arg_kinds.size());
+    CHECK(flat_flags.size() == arg_kinds.size());
     helper.arena.clear();
     helper.cuarg_offsets.clear();
     helper.array_ptr_arena_offsets.clear();
     helper.list_args.clear();
     helper.total_list_data_size_words = 0;
     helper.constants.clear();
-    for (size_t i = 0; i < num_pyargs; ++i) {
-        PyObject* pyobj = pyargs[i];
-        bool is_constant = constant_arg_flags[i];
-        unsigned index_bitwidth = int64_index_flags[i] ? 64 : 32;
-        bool use_int64 = int64_param_flags[i];
-        // TODO: apply is_constant to array args?
-
-        switch (arg_kinds[i]) {
-        case PythonArgKind::TorchTensorDlpack:
-            if (!extract_array<arrayrepr_torch_tensor_dlpack>(
-                    driver, pyobj, index_bitwidth, helper))
-                return ErrorRaised;
-            break;
-        case PythonArgKind::DlpackArray:
-            if (!extract_array<arrayrepr_dlpack>(driver, pyobj, index_bitwidth, helper))
-                return ErrorRaised;
-            break;
-        case PythonArgKind::CudaArray:
-            if (!extract_array<arrayrepr_cuda_array_iface>(driver, pyobj, index_bitwidth, helper))
-                return ErrorRaised;
-            break;
-        case PythonArgKind::PyLong:
-            if (!extract_py_long(pyobj, is_constant, use_int64, helper)) return ErrorRaised;
-            break;
-        case PythonArgKind::PyFloat:
-            extract_py_float(pyobj, is_constant, helper);
-            break;
-        case PythonArgKind::PyBool:
-            if (!extract_py_bool(pyobj, is_constant, helper)) return ErrorRaised;
-            break;
-        case PythonArgKind::PyList:
-            if (!extract_py_list(driver, pyobj, index_bitwidth, helper)) return ErrorRaised;
-            break;
-        }
+    for (size_t i = 0; i < arg_kinds.size(); ++i) {
+        PythonArgKind kind = arg_kinds[i];
+        if (kind == PythonArgKind::PyTupleBegin || kind == PythonArgKind::PyTupleEnd)
+            continue;
+        if (!extract_leaf(driver, pyarg_objs[i], kind, flat_flags[i], helper))
+            return ErrorRaised;
     }
     return OK;
 }
 
+static PyPtr parse_element_constraint(ConstantCursor& cursor, ParameterKind kind,
+                                       bool is_constant, bool use_int64) {
+    switch (kind) {
+    case ParameterKind::Array:   return parse_array_constraint(cursor);
+    case ParameterKind::Boolean: return parse_pybool_constraint(cursor, is_constant);
+    case ParameterKind::Integer: return parse_pylong_constraint(cursor, is_constant, use_int64);
+    case ParameterKind::Float:   return parse_pyfloat_constraint(cursor, is_constant);
+    case ParameterKind::List:    return parse_list_constraint(cursor);
+    case ParameterKind::TupleBegin:
+    case ParameterKind::TupleEnd:
+        CHECK(false);  // Should be handled before parse_element_constraint
+        return {};
+    }
+    CHECK(false);
+    return {};
+}
+
+static PyPtr parse_param_constraint(ConstantCursor& cursor,
+                                    const Vec<ParameterKind>& param_kinds,
+                                    const Vec<LeafFlags>& flat_flags,
+                                    size_t& idx);
+
+static PyPtr parse_tuple_constraint(ConstantCursor& cursor,
+                                    const Vec<ParameterKind>& param_kinds,
+                                    const Vec<LeafFlags>& flat_flags,
+                                    size_t& idx) {
+    PyPtr elements_list = steal(PyList_New(0));
+    if (!elements_list) return {};
+    while (param_kinds[idx] != ParameterKind::TupleEnd) {
+        PyPtr elem = parse_param_constraint(cursor, param_kinds, flat_flags, idx);
+        if (!elem) return {};
+        if (PyList_Append(elements_list.get(), elem.get()) < 0) return {};
+    }
+    ++idx;  // consume TupleEnd
+    PyObject* signature_module = get_signature_module();
+    if (!signature_module) return {};
+    PyPtr constraint_class = getattr(signature_module, "TupleConstraint");
+    if (!constraint_class) return {};
+    return steal(PyObject_CallOneArg(constraint_class.get(), elements_list.get()));
+}
+
+static PyPtr parse_param_constraint(ConstantCursor& cursor,
+                                    const Vec<ParameterKind>& param_kinds,
+                                    const Vec<LeafFlags>& flat_flags,
+                                    size_t& idx) {
+    ParameterKind pk = param_kinds[idx];
+    size_t pos = idx++;
+    if (pk == ParameterKind::TupleBegin)
+        return parse_tuple_constraint(cursor, param_kinds, flat_flags, idx);
+    return parse_element_constraint(cursor, pk, flat_flags[pos].constant,
+                                    flat_flags[pos].int64_param);
+}
+
 static PyPtr parse_parameter_constraints(const Vec<int64_t>& constants,
                                          const Vec<ParameterKind>& param_kinds,
-                                         const Vec<bool>& constant_arg_flags,
-                                         const Vec<bool>& int64_param_flags) {
-    size_t num_args = param_kinds.size();
-    CHECK(num_args == constant_arg_flags.size());
-    CHECK(num_args == int64_param_flags.size());
+                                         const Vec<LeafFlags>& flat_flags) {
+    CHECK(param_kinds.size() == flat_flags.size());
     ConstantCursor cursor = {constants.data(), constants.size()};
     PyPtr param_constraints = steal(PyList_New(0));
     if (!param_constraints) return {};
-    for (size_t i = 0; i < num_args; ++i) {
-        PyPtr constraint;
-        switch (param_kinds[i]) {
-        case ParameterKind::Array:
-            constraint = parse_array_constraint(cursor);
-            break;
-        case ParameterKind::Boolean:
-            constraint = parse_pybool_constraint(cursor, constant_arg_flags[i]);
-            break;
-        case ParameterKind::Integer:
-            constraint = parse_pylong_constraint(
-                cursor, constant_arg_flags[i], int64_param_flags[i]
-            );
-            break;
-        case ParameterKind::Float:
-            constraint = parse_pyfloat_constraint(cursor, constant_arg_flags[i]);
-            break;
-        case ParameterKind::List:
-            constraint = parse_list_constraint(cursor);
-            break;
-        }
+    size_t idx = 0;
+    while (idx < param_kinds.size()) {
+        PyPtr constraint = parse_param_constraint(cursor, param_kinds, flat_flags, idx);
         if (!constraint) return {};
         if (PyList_Append(param_constraints.get(), constraint.get()))
             return {};
@@ -1484,13 +1601,19 @@ static PyPtr parse_parameter_constraints(const Vec<int64_t>& constants,
     return param_constraints;
 }
 
+static CallConvVersion minimum_calling_convention(const Vec<ParameterKind>& param_kinds) {
+    for (ParameterKind pk : param_kinds) {
+        if (pk == ParameterKind::TupleBegin)
+            return CallConvVersion::CutilePython_V2;
+    }
+    return CallConvVersion::CutilePython_V1;
+}
+
 static PyPtr make_signature(const Vec<int64_t>& constants,
                             const Vec<ParameterKind>& param_kinds,
-                            const Vec<bool>& constant_arg_flags,
-                            const Vec<bool>& int64_param_flags,
+                            const Vec<LeafFlags>& flat_flags,
                             const PyPtr& calling_convention) {
-    PyPtr parameters = parse_parameter_constraints(constants, param_kinds, constant_arg_flags,
-                                                   int64_param_flags);
+    PyPtr parameters = parse_parameter_constraints(constants, param_kinds, flat_flags);
     if (!parameters) return {};
 
     PyObject* signature_module = get_signature_module();
@@ -1815,20 +1938,54 @@ static Status hoisted_tensor_map_encode(const DriverApi& driver,
 
 
 namespace { struct TileDispatcher {
-    Vec<bool> constant_arg_flags;
-    Vec<bool> int64_index_flags;
-    Vec<bool> int64_param_flags;
+    Vec<FlagNode> flags;
     TileContextDispatcher default_context_dispatcher;
 
     static PyTypeObject pytype;
 }; }
 
+constexpr int kMaxTupleNestingDepth = 64;
 
-static void get_pyarg_types(PyObject* const* pyargs, Py_ssize_t num_pyargs,
-                            Vec<PyTypeObject*>& pyarg_types) {
+static Status flatten_tuple_elems(PyObject* tuple, int depth, Vec<PyTypeObject*>& pyarg_types,
+                                      Vec<PyObject*>& pyarg_objs);
+
+static Status flatten_pyarg(PyObject* obj, int depth, Vec<PyTypeObject*>& pyarg_types,
+                             Vec<PyObject*>& pyarg_objs) {
+    pyarg_types.push_back(Py_TYPE(obj));
+    pyarg_objs.push_back(obj);
+    if (PyTuple_CheckExact(obj))
+        return flatten_tuple_elems(obj, depth, pyarg_types, pyarg_objs);
+    // Tuple subclasses (e.g. namedtuple) are not exact tuples, so they fall through as
+    // ordinary leaf types and are rejected later by classify_arg(). That keeps the more
+    // expensive PyTuple_Check() off this per-argument hot path (run on every dispatch) and
+    // on the cache-miss path instead.
+    return OK;
+}
+
+static Status flatten_tuple_elems(PyObject* tuple, int depth, Vec<PyTypeObject*>& pyarg_types,
+                                      Vec<PyObject*>& pyarg_objs) {
+    if (depth >= kMaxTupleNestingDepth)
+        return raise(PyExc_RecursionError,
+            "tuple argument nesting exceeds maximum depth of %d", kMaxTupleNestingDepth);
+    Py_ssize_t n = PyTuple_GET_SIZE(tuple);
+    for (Py_ssize_t j = 0; j < n; ++j) {
+        if (!flatten_pyarg(PyTuple_GET_ITEM(tuple, j), depth + 1, pyarg_types, pyarg_objs))
+            return ErrorRaised;
+    }
+    pyarg_types.push_back(kTupleEndType);
+    pyarg_objs.push_back(kTupleEnd);
+    return OK;
+}
+
+static Status flatten_pyargs(PyObject* const* pyargs, Py_ssize_t num_pyargs,
+                              Vec<PyTypeObject*>& pyarg_types, Vec<PyObject*>& pyarg_objs) {
     pyarg_types.clear();
-    for (Py_ssize_t i = 0; i < num_pyargs; ++i)
-        pyarg_types.push_back(Py_TYPE(pyargs[i]));
+    pyarg_objs.clear();
+    for (Py_ssize_t i = 0; i < num_pyargs; ++i) {
+        if (!flatten_pyarg(pyargs[i], 0, pyarg_types, pyarg_objs))
+            return ErrorRaised;
+    }
+    return OK;
 }
 
 static Result<TileKernel> compile(const DriverApi* driver,
@@ -2162,27 +2319,28 @@ static Result<PreparedLaunch> prepare_launch(
     if (!stream_context.is_ok()) return ErrorRaised;
     helper->cuda_context = *stream_context;
 
-    get_pyarg_types(pyargs, num_pyargs, helper->pyarg_types);
+    if (!flatten_pyargs(pyargs, num_pyargs, helper->pyarg_types, helper->pyarg_objs))
+        return ErrorRaised;
     TileDispatcher& dispatcher = py_unwrap<TileDispatcher>(dispatcher_pyobj);
     TileContextDispatcher& ctx_dispatcher = dispatcher.default_context_dispatcher;
     ProfileMap::Item* profile_item = ctx_dispatcher.arg_profiles.find(helper->pyarg_types);
     if (!profile_item) {
         // Slower path
-        if (static_cast<size_t>(num_pyargs) != dispatcher.constant_arg_flags.size()) {
+        if (static_cast<size_t>(num_pyargs) != dispatcher.flags.size()) {
             return raise(PyExc_TypeError, "Kernel expects %zu arguments but %zd %s given",
-                    dispatcher.constant_arg_flags.size(), num_pyargs,
+                    dispatcher.flags.size(), num_pyargs,
                     num_pyargs == 1 ? "was" : "were");
         }
 
         Vec<PythonArgKind> arg_kinds;
-        arg_kinds.reserve(num_pyargs);
+        arg_kinds.reserve(helper->pyarg_types.size());
         Vec<ParameterKind> param_kinds;
-        param_kinds.reserve(num_pyargs);
-        for (Py_ssize_t i = 0; i < num_pyargs; ++i) {
-            Result<PythonArgKind> c = classify_arg(pyargs[i]);
-            if (!c.is_ok()) return ErrorRaised;
-            arg_kinds.push_back(*c);
-            param_kinds.push_back(param_kind_from_pyarg_kind(*c));
+        param_kinds.reserve(helper->pyarg_types.size());
+        for (size_t i = 0; i < helper->pyarg_objs.size(); ++i) {
+            Result<PythonArgKind> kind = classify_arg(helper->pyarg_objs[i]);
+            if (!kind.is_ok()) return ErrorRaised;
+            arg_kinds.push_back(*kind);
+            param_kinds.push_back(param_kind_from_pyarg_kind(*kind));
         }
 
         FamilyMap::Item* family_item = ctx_dispatcher.kernel_families.find(param_kinds);
@@ -2192,19 +2350,29 @@ static Result<PreparedLaunch> prepare_launch(
                     std::move(param_kinds), std::move(new_family));
         }
 
+        // Flatten the annotation flags against this argument structure.
+        Vec<LeafFlags> flat_flags;
+        if (!flatten_flags(dispatcher.flags, arg_kinds, flat_flags))
+            return ErrorRaised;
+
         Vec<PyPtr> typeobj_refs;
         typeobj_refs.reserve(helper->pyarg_types.size());
-        for (PyTypeObject* typeobj : helper->pyarg_types)
-            typeobj_refs.push_back(newref(reinterpret_cast<PyObject*>(typeobj)));
+        for (PyTypeObject* typeobj : helper->pyarg_types) {
+            // kTupleEnd is a null sentinel, not a real type object: store an empty PyPtr
+            // (which hashes/compares as null, matching the kTupleEnd entries in the lookup
+            // key) rather than calling newref(nullptr), which would abort.
+            PyObject* obj = reinterpret_cast<PyObject*>(typeobj);
+            typeobj_refs.push_back(obj ? newref(obj) : PyPtr{});
+        }
 
         profile_item = ctx_dispatcher.arg_profiles.insert(
                     std::move(typeobj_refs),
-                    PythonArgProfile{family_item->value, std::move(arg_kinds)});
+                    PythonArgProfile{family_item->value, std::move(arg_kinds),
+                                     std::move(flat_flags)});
     }
 
-    if (!extract_cuda_args(driver, pyargs, num_pyargs, profile_item->value.arg_kinds,
-                           dispatcher.constant_arg_flags, dispatcher.int64_index_flags,
-                           dispatcher.int64_param_flags, *helper)) {
+    if (!extract_cuda_args(driver, helper->pyarg_objs, profile_item->value.arg_kinds,
+                           profile_item->value.flat_flags, *helper)) {
         return ErrorRaised;
     }
 
@@ -2216,12 +2384,11 @@ static Result<PreparedLaunch> prepare_launch(
         for (PythonArgKind k : profile_item->value.arg_kinds)
             param_kinds.push_back(param_kind_from_pyarg_kind(k));
 
-        PyPtr cconv = get_cconv(CallConvVersion::CutilePython_V1);
+        PyPtr cconv = get_cconv(minimum_calling_convention(param_kinds));
         if (!cconv) return ErrorRaised;
 
         PyPtr signature = make_signature(
-                helper->constants, param_kinds, dispatcher.constant_arg_flags,
-                dispatcher.int64_param_flags, cconv);
+                helper->constants, param_kinds, profile_item->value.flat_flags, cconv);
         if (!signature) return ErrorRaised;
 
         KernelImage* image = capture_kernel_image ? &kernel_image.emplace() : nullptr;
@@ -2439,25 +2606,66 @@ static Result<double> benchmark(const DriverApi* driver,
     return total_us;
 }
 
-static Result<Vec<bool>> parse_flags_tuple(PyObject* tuple) {
-    if (!PyTuple_Check(tuple))
-        return raise(PyExc_TypeError, "expected a tuple of booleans");
-
-    Vec<bool> flags;
-    Py_ssize_t tuple_size = PyTuple_GET_SIZE(tuple);
-    flags.reserve(tuple_size);
-    for (Py_ssize_t i = 0; i < tuple_size; ++i) {
-        PyObject* item = PyTuple_GET_ITEM(tuple, i);
-        if (!PyBool_Check(item))
-            return raise(PyExc_TypeError, "expected a tuple of booleans");
-
-        int value = PyObject_IsTrue(item);
-        if (value < 0) return ErrorRaised;
-        flags.push_back(static_cast<bool>(value));
+// Parse one Python ParameterAnnotationNode into a FlagNode.
+static Result<FlagNode> parse_flag_node(PyObject* obj) {
+    PyPtr kind = getattr(obj, "KIND");
+    FlagNode node;
+    if (!kind) return ErrorRaised;
+    if (!PyUnicode_CompareWithASCIIString(kind.get(), "leaf")) {
+        PyPtr constant     = getattr(obj, "constant");
+        PyPtr int64_index  = getattr(obj, "int64_index");
+        PyPtr int64_scalar = getattr(obj, "int64_scalar");
+        if (!constant || !int64_index || !int64_scalar) return ErrorRaised;
+        node.constant    = (constant.get() == Py_True);
+        node.int64_index = (int64_index.get() == Py_True);
+        node.int64_param = (int64_scalar.get() == Py_True);
+        node.wildcard    = true;
+        return node;
     }
-    return flags;
+    if (!PyUnicode_CompareWithASCIIString(kind.get(), "homogeneous_tuple")) {
+        PyPtr each = getattr(obj, "each");
+        if (!each) return ErrorRaised;
+        Result<FlagNode> elem = parse_flag_node(each.get());
+        if (!elem.is_ok()) return ErrorRaised;
+        node.wildcard = true;
+        node.children.push_back(std::move(*elem));
+        return node;
+    }
+    if (!PyUnicode_CompareWithASCIIString(kind.get(), "heterogeneous_tuple")) {
+        PyPtr items = getattr(obj, "items");
+        if (!items) return ErrorRaised;
+        if (!PyTuple_Check(items.get()))
+            return raise(PyExc_TypeError, "heterogeneous_tuple `items` must be a tuple, got %s",
+                         Py_TYPE(items.get())->tp_name);
+        Py_ssize_t n = PyTuple_GET_SIZE(items.get());
+        node.wildcard = false;
+        node.children.reserve(n);
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            Result<FlagNode> child = parse_flag_node(PyTuple_GET_ITEM(items.get(), i));
+            if (!child.is_ok()) return ErrorRaised;
+            node.children.push_back(std::move(*child));
+        }
+        return node;
+    }
+    return raise(PyExc_TypeError,
+                 "expected a ParameterAnnotationNode (leaf/homogeneous_tuple/heterogeneous_tuple),"
+                 " got KIND=%R", kind.get());
 }
 
+// Parse a Python sequence of per-parameter ParameterAnnotationNode trees into FlagNode trees.
+static Result<Vec<FlagNode>> parse_flag_nodes_seq(PyObject* nodes_seq) {
+    if (!PyTuple_Check(nodes_seq))
+        return raise(PyExc_TypeError, "expected a tuple of parameter annotation nodes");
+    Py_ssize_t n = PyTuple_GET_SIZE(nodes_seq);
+    Vec<FlagNode> result;
+    result.reserve(n);
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        Result<FlagNode> node = parse_flag_node(PyTuple_GET_ITEM(nodes_seq, i));
+        if (!node.is_ok()) return ErrorRaised;
+        result.push_back(std::move(*node));
+    }
+    return result;
+}
 
 static int TileContext_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     const char* keywords[] = {"config", nullptr};
@@ -2529,28 +2737,17 @@ PyTypeObject TileContext::pytype = {
 
 
 static int TileDispatcher_init(PyObject* self, PyObject* args, PyObject* kwargs) {
-    const char* keywords[] = {"", "", "", nullptr};
-    PyObject* py_constant_arg_flags = nullptr;
-    PyObject* py_int64_index_flags = nullptr;
-    PyObject* py_int64_param_flags = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOO", const_cast<char**>(keywords),
-                                     &py_constant_arg_flags, &py_int64_index_flags,
-                                     &py_int64_param_flags))
+    const char* keywords[] = {"", nullptr};
+    PyObject* py_parameter_annotations = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", const_cast<char**>(keywords),
+                                     &py_parameter_annotations))
         return -1;
 
-    Result<Vec<bool>> constant_arg_flags = parse_flags_tuple(py_constant_arg_flags);
-    if (!constant_arg_flags.is_ok()) return -1;
-
-    Result<Vec<bool>> int64_index_flags = parse_flags_tuple(py_int64_index_flags);
-    if (!int64_index_flags.is_ok()) return -1;
-
-    Result<Vec<bool>> int64_param_flags = parse_flags_tuple(py_int64_param_flags);
-    if (!int64_param_flags.is_ok()) return -1;
+    Result<Vec<FlagNode>> flags = parse_flag_nodes_seq(py_parameter_annotations);
+    if (!flags.is_ok()) return -1;
 
     TileDispatcher& dispatcher = py_unwrap<TileDispatcher>(self);
-    dispatcher.constant_arg_flags = std::move(*constant_arg_flags);
-    dispatcher.int64_index_flags = std::move(*int64_index_flags);
-    dispatcher.int64_param_flags = std::move(*int64_param_flags);
+    dispatcher.flags = std::move(*flags);
     return 0;
 }
 
@@ -2582,29 +2779,35 @@ static PyObject* get_parameter_constraints_from_pyargs(PyObject* self, PyObject*
     PyObject** kernel_args = reinterpret_cast<PyTupleObject*>(pyargs)->ob_item;
     Py_ssize_t num_kernel_args = PyTuple_GET_SIZE(pyargs);
 
-    Vec<PythonArgKind> kinds;
-    Vec<ParameterKind> param_kinds;
-    for (Py_ssize_t i = 0; i < num_kernel_args; ++i) {
-        Result<PythonArgKind> c = classify_arg(kernel_args[i]);
-        if (!c.is_ok()) return nullptr;
-        kinds.push_back(*c);
-        param_kinds.push_back(param_kind_from_pyarg_kind(*c));
-    }
-
     LaunchHelperPtr helper = launch_helper_get();
+
+    if (!flatten_pyargs(kernel_args, num_kernel_args, helper->pyarg_types, helper->pyarg_objs))
+        return nullptr;
+
+    Vec<PythonArgKind> arg_kinds;
+    Vec<ParameterKind> param_kinds;
+    arg_kinds.reserve(helper->pyarg_types.size());
+    param_kinds.reserve(helper->pyarg_types.size());
+    for (size_t i = 0; i < helper->pyarg_types.size(); ++i) {
+        Result<PythonArgKind> kind = classify_arg(helper->pyarg_objs[i]);
+        if (!kind.is_ok()) return nullptr;
+        arg_kinds.push_back(*kind);
+        param_kinds.push_back(param_kind_from_pyarg_kind(*kind));
+    }
 
     Result<const DriverApi*> driver = get_driver_api();
     if (!driver.is_ok()) return nullptr;
 
-    if (!extract_cuda_args(*driver, kernel_args, num_kernel_args, kinds,
-                           dispatcher.constant_arg_flags, dispatcher.int64_index_flags,
-                           dispatcher.int64_param_flags, *helper)) {
+    Vec<LeafFlags> flat_flags;
+    if (!flatten_flags(dispatcher.flags, arg_kinds, flat_flags))
+        return nullptr;
+
+    if (!extract_cuda_args(*driver, helper->pyarg_objs, arg_kinds, flat_flags, *helper)) {
         return nullptr;
     }
 
     return parse_parameter_constraints(
-            helper->constants, param_kinds, dispatcher.constant_arg_flags,
-            dispatcher.int64_param_flags).release();
+            helper->constants, param_kinds, flat_flags).release();
 }
 
 static Result<Grid> parse_grid(PyObject* tuple) {

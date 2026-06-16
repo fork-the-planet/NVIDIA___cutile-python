@@ -33,11 +33,14 @@ TensorLike = torch.Tensor
 Scalar = Union[int, float]
 
 
-def get_bytecode(kernel, kernel_args, sm_arch_func=get_sm_arch) -> bytes:
+def get_bytecode(
+    kernel, kernel_args,
+    sm_arch_func=get_sm_arch,
+    cconv=CallingConvention.cutile_python_v1()
+) -> bytes:
     if not isinstance(kernel, ct.kernel):
         kernel = ct.kernel(kernel)
 
-    cconv = CallingConvention.cutile_python_v1()
     sig = KernelSignature.from_kernel_args(kernel, kernel_args, cconv)
     io = BytesIO()
     ct.compilation.export_kernel(kernel, [sig], io,

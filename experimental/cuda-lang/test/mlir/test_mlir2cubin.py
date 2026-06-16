@@ -10,6 +10,7 @@ from cuda.lang._compile import mlir2cubin
 import cuda.lang as cl
 from cuda.lang._compile import get_compute_capability
 from cuda.tile import _cext
+from cuda.tile._annotated_function import LeafAnnotationNode
 from cuda.tile._exception import TileCompilerExecutionError
 
 
@@ -17,8 +18,11 @@ class _HackKernel(_cext.TileDispatcher):
     def __init__(self, cubin: bytes, func_name: str, arity: int):
         self._cubin = cubin
         self._func_name = func_name
-        flags = tuple(False for _ in range(arity))
-        super().__init__(flags, flags, flags)
+        annotations = tuple(
+            LeafAnnotationNode(constant=False, int64_index=False, int64_scalar=False)
+            for _ in range(arity)
+        )
+        super().__init__(annotations)
 
     def _compile(self, signature, ctx):
         return self._cubin, self._func_name, None, []

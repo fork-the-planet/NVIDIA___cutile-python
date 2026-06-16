@@ -13,6 +13,7 @@ from collections import defaultdict
 
 import cuda.tile as ct
 import cuda.tile._cext as cext
+from cuda.tile._annotated_function import LeafAnnotationNode
 from cuda.tile._datatype import DType
 from cuda.tile.compilation._signature import (
     ArrayConstraint, ConstantConstraint, ScalarConstraint, ParameterConstraint)
@@ -141,7 +142,7 @@ def cutile_call(grid: tuple[int, ...],
     alias_map = defaultdict(list)
 
     ann = kernel._annotated_function
-    const_mask = ann.constant_parameter_mask
+    annotations = ann.parameter_annotations
     kernel_name = ann.pyfunc.__name__
     params = list(ann.pysig.parameters)
     if len(args) != len(params):
@@ -149,7 +150,17 @@ def cutile_call(grid: tuple[int, ...],
             f"{kernel_name} expects {len(params)} arguments, got {len(args)}"
         )
 
-    for (i, (x, is_const)) in enumerate(zip(args, const_mask)):
+    # The JAX/FFI integration is one-arg-one-role and treats every annotation as a flat
+    # leaf (it reads `.constant`/`.int64_index`/`.int64_scalar` directly). Tuple parameters
+    # produce non-leaf annotation nodes, which it cannot flatten into buffers/constraints.
+    for i, ann_node in enumerate(annotations):
+        if not isinstance(ann_node, LeafAnnotationNode):
+            raise NotImplementedError(
+                f"{kernel_name}: argument {i} ('{params[i]}') is a tuple parameter; "
+                f"tuple parameters are not supported via the JAX/FFI integration"
+            )
+
+    for (i, (x, ann_node)) in enumerate(zip(args, annotations)):
         if isinstance(x, OutputPlaceholder):
             roles.append('o')
             outputs.append(jax.ShapeDtypeStruct(x.shape, x.dtype))
@@ -163,7 +174,7 @@ def cutile_call(grid: tuple[int, ...],
             input_arrays.append(x.array)
             outputs.append(jax.ShapeDtypeStruct(x.array.shape, x.array.dtype))
         elif isinstance(x, (bool, int, float)):
-            if is_const:
+            if ann_node.constant:
                 roles.append('c')
                 constants.append(x)
             else:
@@ -172,7 +183,7 @@ def cutile_call(grid: tuple[int, ...],
         else:
             raise TypeError(f"Unexpected type for argument[{i}]: {type(x)}")
 
-    _check_roles(kernel_name, params, const_mask, roles)
+    _check_roles(kernel_name, params, annotations, roles)
 
     for i, x in enumerate(input_arrays):
         aliases = alias_map[id(x)]
@@ -200,10 +211,10 @@ def cutile_call(grid: tuple[int, ...],
 
 def _check_roles(kernel_name: str,
                  params: Sequence[inspect.Parameter],
-                 const_mask: Sequence[bool],
+                 annotations: Sequence[Any],
                  roles: Sequence[str]):
-    for i, (role, is_const, pname) in enumerate(zip(roles, const_mask, params)):
-        if is_const and role != 'c':
+    for i, (role, ann_node, pname) in enumerate(zip(roles, annotations, params)):
+        if ann_node.constant and role != 'c':
             raise TypeError(
                 f"{kernel_name}: argument {i} ('{pname}') is annotated ct.Constant; "
                 f"expected a static scalar argument"
@@ -292,13 +303,12 @@ def _cutile_call_ffi_p_lower(
     input_output_aliases: dict[int, int] = {}
 
     ann_func = kernel._annotated_function
-    int64_index_mask = ann_func.int64_index_parameter_mask
-    int64_scalar_mask = ann_func.int64_parameter_mask
+    annotations = ann_func.parameter_annotations
     scalar_packed: list[int] = []
 
     ni, no, nc, ns = 0, 0, 0, 0
     for pos, role in enumerate(roles):
-        is_i64_index = int64_index_mask[pos]
+        is_i64_index = annotations[pos].int64_index
         idx_dtype = ct.int64 if is_i64_index else ct.int32
         if role == 'i':
             buffer_ids.append(ni)
@@ -321,7 +331,7 @@ def _cutile_call_ffi_p_lower(
             buffer_ids.append(ns + num_inputs + num_outputs)
             index_bitwidths.append(0)  # unused for scalar slot
             dtype, packed = pack_scalar(scalars[ns],
-                                        want_int64=int64_scalar_mask[pos])
+                                        want_int64=annotations[pos].int64_scalar)
             constraints.append(ScalarConstraint(dtype))
             scalar_packed.append(packed)
             ns += 1

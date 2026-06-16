@@ -16,7 +16,12 @@ from cuda.tile._passes.hir2ir import hir2ir
 from cuda.tile._passes.dce import dead_code_elimination_pass
 from cuda.tile._passes.eliminate_assign_ops import eliminate_assign_ops
 from cuda.tile._compile import _create_kernel_parameters, get_sm_arch
-from cuda.tile._annotated_function import AnnotatedFunction, get_annotated_function
+from cuda.tile._annotated_function import (
+    AnnotatedFunction,
+    LeafAnnotationNode,
+    ParameterAnnotationNode,
+    get_annotated_function,
+)
 from cuda.tile._cext import get_compute_capability as _get_compute_capability
 from cuda.tile._compiler_options import CompilerOptions
 from cuda.tile._exception import TileCompilerExecutionError
@@ -140,15 +145,17 @@ def get_function_ir(
     function: hir.Function,
     signature: KernelSignature,
     ctx: ir.IRContext,
-    constant_mask: Sequence[bool] | None = None,
+    parameter_annotations: Sequence[ParameterAnnotationNode] | None = None,
 ) -> ir.Block:
-    if constant_mask is None:
-        constant_mask = [False] * len(signature.parameters)
+    if parameter_annotations is None:
+        parameter_annotations = [
+            LeafAnnotationNode(constant=False, int64_index=False, int64_scalar=False)
+        ] * len(signature.parameters)
     parameter_names = function.signature.parameters.keys()
     with ir.TileBuilder(ctx, function.body.loc) as builder, cuda_lang_impl_registry.as_current():
         params = _create_kernel_parameters(
             signature.parameters,
-            constant_mask,
+            parameter_annotations,
             parameter_names,
             function.param_locs,
             ctx
@@ -213,7 +220,7 @@ def compile_simt(
     ctx = ctx or ir.IRContext(log_ir_on_error=log_flags.log_hir or log_flags.log_ir)
 
     func_ir = get_function_ir(
-        func_hir, signature, ctx, function.constant_parameter_mask
+        func_hir, signature, ctx, function.parameter_annotations
     )
 
     if log_flags.log_ir:

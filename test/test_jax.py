@@ -425,3 +425,27 @@ def test_jit_sharding(n):
 
     c, c_ref = compute(a, b, 3.0, 4.0)
     assert jnp.allclose(c, c_ref, atol=1e-5)
+
+
+@ct.kernel
+def _tuple_param_heterogeneous(x, y, addends: tuple[ct.Constant[int], int]):
+    bid = ct.bid(0)
+    ct.store(y, bid, ct.load(x, bid, 1) + addends[0] + addends[1])
+
+
+@ct.kernel
+def _tuple_param_homogeneous(x, y, addends: tuple[int, ...]):
+    bid = ct.bid(0)
+    ct.store(y, bid, ct.load(x, bid, 1) + addends[0])
+
+
+@pytest.mark.parametrize("kernel, tuple_arg", [
+    (_tuple_param_heterogeneous, (3, 4)),
+    (_tuple_param_homogeneous, (3,)),
+])
+def test_tuple_parameter_rejected(kernel, tuple_arg):
+    x = _f32(10)
+    ph = OutputPlaceholder(x.shape, x.dtype)
+    with pytest.raises(NotImplementedError,
+                       match="tuple parameters are not supported via the JAX/FFI integration"):
+        cutile_call((10,), kernel, (x, ph, tuple_arg))

@@ -21,7 +21,7 @@ from cuda.tile._ir.ops import GetArrayListItem, \
     TileReshape, AssumeDivBy, TileReduce, TileScan, AssumeBounded
 from cuda.tile._ir.control_flow_ops import Loop, IfElse, Continue, Break
 from cuda.tile.compilation._signature import ParameterConstraint, \
-    ArrayConstraint, ListConstraint, ScalarConstraint
+    ArrayConstraint, ListConstraint, TupleConstraint, ScalarConstraint
 
 
 ALIAS_UNIVERSE = -1
@@ -54,17 +54,50 @@ class DataflowResult:
         return self.predicates[var_name]
 
 
+def _register_leaf_param(state, constraint: ArrayConstraint | ScalarConstraint,
+                         vars, alias_set_mapper):
+    if isinstance(constraint, ArrayConstraint):
+        predicates = _get_array_predicates(constraint, alias_set_mapper)
+        for var, pred in zip(vars, predicates, strict=True):
+            state.tracker.update(var, pred)
+            state.list_array_tracker.update(var, ALWAYS_TRUE_AGG_PREDICATE)
+    else:
+        [var] = vars
+        state.set_always_true(var)
+
+
+def _register_tuple_params(state, constraint: TupleConstraint, flat_params, offset: int,
+                           alias_set_mapper) -> int:
+    for elem in constraint.elements:
+        if isinstance(elem, (ArrayConstraint, ScalarConstraint)):
+            n = 1 + 2 * elem.ndim if isinstance(elem, ArrayConstraint) else 1
+            _register_leaf_param(state, elem, flat_params[offset:offset + n], alias_set_mapper)
+            offset += n
+        elif isinstance(elem, TupleConstraint):
+            offset = _register_tuple_params(state, elem, flat_params, offset, alias_set_mapper)
+        elif isinstance(elem, ListConstraint):
+            assert isinstance(elem.element, ArrayConstraint)
+            base_ptr, size_var = flat_params[offset], flat_params[offset + 1]
+            state.tracker.update(base_ptr,
+                                 DataPredicate(alias_set=alias_set_mapper(elem.alias_groups),
+                                               div_by=1,
+                                               may_alias_internally=elem.elements_may_alias))
+            elt_predicates = _get_array_predicates(elem.element, alias_set_mapper)
+            state.list_array_tracker.update(base_ptr,
+                                            _AggregatePredicate(dict(enumerate(elt_predicates))))
+            state.set_always_true(size_var)
+            offset += 2
+    return offset
+
+
 def dataflow_analysis(root_block: Block,
                       parameter_constraints: Sequence[tuple[tuple[Var, ...], ParameterConstraint]]
                       ) -> DataflowResult:
     state = _State(_Tracker(), _Tracker())
     alias_set_mapper = _AliasSetMapper()
     for flat_params, constraint in parameter_constraints:
-        if isinstance(constraint, ArrayConstraint):
-            predicates = _get_array_predicates(constraint, alias_set_mapper)
-            for var, pred in zip(flat_params, predicates, strict=True):
-                state.tracker.update(var, pred)
-                state.list_array_tracker.update(var, ALWAYS_TRUE_AGG_PREDICATE)
+        if isinstance(constraint, (ArrayConstraint, ScalarConstraint)):
+            _register_leaf_param(state, constraint, flat_params, alias_set_mapper)
         elif isinstance(constraint, ListConstraint):
             assert isinstance(constraint.element, ArrayConstraint)
             assert len(flat_params) == 2
@@ -77,9 +110,8 @@ def dataflow_analysis(root_block: Block,
             agg_pred = _AggregatePredicate(dict(enumerate(elt_predicates)))
             state.list_array_tracker.update(base_ptr, agg_pred)
             state.set_always_true(size_var)
-        elif isinstance(constraint, ScalarConstraint):
-            [only_param] = flat_params
-            state.set_always_true(only_param)
+        elif isinstance(constraint, TupleConstraint):
+            _register_tuple_params(state, constraint, flat_params, 0, alias_set_mapper)
         else:
             assert False
 

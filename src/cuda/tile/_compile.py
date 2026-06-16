@@ -23,7 +23,9 @@ from types import FunctionType
 from typing import Optional, Sequence
 import zipfile
 
-from cuda.tile._annotated_function import AnnotatedFunction, get_annotated_function
+from cuda.tile._annotated_function import (
+    AnnotatedFunction, HeterogeneousTupleNode, HomogeneousTupleNode, LeafAnnotationNode,
+    ParameterAnnotationNode, get_annotated_function)
 from cuda.tile._bytecode.version import BytecodeVersion
 from cuda.tile._cext import get_compute_capability, TileContext, default_tile_context
 from cuda.tile._compiler_options import CompilerOptions
@@ -36,8 +38,8 @@ from cuda.tile._exception import (
 from cuda.tile._ir import ir, hir
 from cuda.tile._ir.ir import TypingHooks
 from cuda.tile._ir.aggregate_support import flatten_block_parameters
-from cuda.tile._ir.ops import loosely_typed_const, tile_impl_registry
-from cuda.tile._ir.type import TileTy, ArrayTy, ListTy
+from cuda.tile._ir.ops import loosely_typed_const, tile_impl_registry, sym2var, build_tuple
+from cuda.tile._ir.type import TileTy, ArrayTy, ListTy, TupleTy
 from cuda.tile._passes.ast2hir import get_function_hir
 from cuda.tile._passes.code_motion import hoist_loop_invariants
 from cuda.tile._passes.unhoist_partition_views import unhoist_partition_views
@@ -64,7 +66,7 @@ from cuda.tile._ir2bytecode import generate_bytecode_for_kernel
 from cuda.tile._version import __version__ as cutile_version
 import cuda.tile._bytecode as bc
 from cuda.tile.compilation._signature import KernelSignature, ParameterConstraint, \
-    ScalarConstraint, ArrayConstraint, ListConstraint, ConstantConstraint
+    ScalarConstraint, ArrayConstraint, ListConstraint, TupleConstraint, ConstantConstraint
 
 logger = logging.getLogger(__name__)
 
@@ -123,40 +125,119 @@ class _KernelParameters:
     nonconstant_flat_vars: Sequence[tuple[tuple[ir.Var, ...], ParameterConstraint]]
 
 
+def _all_const(node: ParameterAnnotationNode) -> bool:
+    if isinstance(node, LeafAnnotationNode):
+        return node.constant
+    if isinstance(node, HomogeneousTupleNode):
+        return _all_const(node.each)
+    return all(_all_const(item) for item in node.items)
+
+
+def _any_const(node: ParameterAnnotationNode) -> bool:
+    if isinstance(node, LeafAnnotationNode):
+        return node.constant
+    if isinstance(node, HomogeneousTupleNode):
+        return _any_const(node.each)
+    return any(_any_const(item) for item in node.items)
+
+
+def _make_nonconstant_var(
+        constraint: ParameterConstraint, name: str, loc,
+        ir_ctx: ir.IRContext, nonconstant_flat_vars: list) -> ir.Var:
+    if isinstance(constraint, ConstantConstraint):
+        raise TypeError(
+            f"Internal error: cannot make a non-constant var for ConstantConstraint `{name}`")
+    v = ir_ctx.make_var(name, loc)
+    v.set_type(_constraint_to_ty(constraint, ir_ctx.typing_hooks))
+    [flat_vars] = flatten_block_parameters([v])
+    nonconstant_flat_vars.append((flat_vars, constraint))
+    return v
+
+
+def _build_partial_const_var(constraint: ParameterConstraint,
+                             node: ParameterAnnotationNode,
+                             name: str, loc,
+                             ir_ctx: ir.IRContext,
+                             nonconstant_flat_vars: list) -> ir.Var:
+    """Build an IR var for a parameter that may have mixed constant/non-constant elements.
+    node is a leaf (wildcard) or a tuple node (one child per element of the tuple)."""
+    if isinstance(constraint, TupleConstraint):
+        if _all_const(node):
+            return sym2var(_tuple_constraint_to_value(constraint), constant_only=True)
+        elem_vars = []
+        for i, elem in enumerate(constraint.elements):
+            if isinstance(node, HeterogeneousTupleNode):
+                child_node = node.items[i]
+            elif isinstance(node, HomogeneousTupleNode):
+                child_node = node.each
+            else:
+                child_node = node
+            ev = _build_partial_const_var(elem, child_node, f"{name}_{i}", loc,
+                                          ir_ctx, nonconstant_flat_vars)
+            elem_vars.append(ev)
+        return build_tuple(tuple(elem_vars))
+    if _all_const(node):
+        if not isinstance(constraint, ConstantConstraint):
+            raise TypeError(
+                f"Expected a ConstantConstraint for constant element `{name}`,"
+                f" got '{type(constraint).__name__}'")
+        return loosely_typed_const(constraint.value, name=name)
+    return _make_nonconstant_var(constraint, name, loc, ir_ctx, nonconstant_flat_vars)
+
+
 def _create_kernel_parameters(parameter_constraints: Sequence[ParameterConstraint],
-                              constant_parameter_mask: Sequence[bool],
+                              parameter_annotations: Sequence[ParameterAnnotationNode],
                               parameter_names: Sequence[str],
                               parameter_locations: Sequence[Loc],
                               ir_ctx: ir.IRContext) -> _KernelParameters:
     aggregate_vars = []
     nonconstant_flat_vars = []
-    for pos, (constraint, is_const, name, loc) in enumerate(
-            zip(parameter_constraints, constant_parameter_mask,
+    for pos, (constraint, node, name, loc) in enumerate(
+            zip(parameter_constraints, parameter_annotations,
                 parameter_names, parameter_locations, strict=True)):
-        if is_const:
-            if not isinstance(constraint, ConstantConstraint):
-                raise TypeError(f"Expected a ConstantConstraint for the constant parameter"
-                                f" {name} at position {pos}, got '{type(constraint).__name__}'")
-            var = loosely_typed_const(constraint.value, name=name)
-        else:
-            if isinstance(constraint, ScalarConstraint):
-                ty = ir_ctx.typing_hooks.get_tensor_like_type(constraint.dtype, ())
-            elif isinstance(constraint, ArrayConstraint):
-                ty = _get_array_ty(constraint, ir_ctx.typing_hooks)
-            elif isinstance(constraint, ListConstraint):
-                assert isinstance(constraint.element, ArrayConstraint)
-                array_ty = _get_array_ty(constraint.element, ir_ctx.typing_hooks)
-                ty = ListTy(array_ty)
+        if _all_const(node):
+            if isinstance(constraint, ConstantConstraint):
+                var = loosely_typed_const(constraint.value, name=name)
+            elif isinstance(constraint, TupleConstraint):
+                var = sym2var(_tuple_constraint_to_value(constraint), constant_only=True)
             else:
-                raise TypeError(f"Unexpected parameter descriptor type"
-                                f" '{type(constraint).__name__}'"
-                                f" for non-constant parameter `{name}` at position {pos}")
-            var = ir_ctx.make_var(name, loc)
-            var.set_type(ty)
-            [flat_vars] = flatten_block_parameters([var])
-            nonconstant_flat_vars.append((flat_vars, constraint))
+                raise TypeError(f"Expected a constant for parameter `{name}` at position {pos},"
+                                f" got '{type(constraint).__name__}'")
+        elif _any_const(node):
+            var = _build_partial_const_var(constraint, node, name, loc,
+                                           ir_ctx, nonconstant_flat_vars)
+        else:
+            var = _make_nonconstant_var(constraint, name, loc, ir_ctx, nonconstant_flat_vars)
         aggregate_vars.append(var)
     return _KernelParameters(aggregate_vars, nonconstant_flat_vars)
+
+
+def _constraint_to_ty(
+        constraint: "ScalarConstraint | ArrayConstraint | TupleConstraint | ListConstraint",
+        typing_hooks: TypingHooks):
+    if isinstance(constraint, ScalarConstraint):
+        return typing_hooks.get_tensor_like_type(constraint.dtype, ())
+    elif isinstance(constraint, ArrayConstraint):
+        return _get_array_ty(constraint, typing_hooks)
+    elif isinstance(constraint, TupleConstraint):
+        return TupleTy([_constraint_to_ty(e, typing_hooks) for e in constraint.elements])
+    elif isinstance(constraint, ListConstraint):
+        return ListTy(_get_array_ty(constraint.element, typing_hooks))
+    else:
+        raise TypeError(f"Unsupported constraint type: {type(constraint).__name__}")
+
+
+def _tuple_constraint_to_value(constraint: "TupleConstraint") -> tuple:
+    result = []
+    for e in constraint.elements:
+        if isinstance(e, ConstantConstraint):
+            result.append(e.value)
+        elif isinstance(e, TupleConstraint):
+            result.append(_tuple_constraint_to_value(e))
+        else:
+            raise TypeError(
+                f"Expected a ConstantConstraint in a Constant[tuple], got {type(e).__name__}")
+    return tuple(result)
 
 
 def _get_array_ty(param: ArrayConstraint, typing_hooks: TypingHooks):
@@ -274,7 +355,7 @@ class _IrKeeper:
             with ir.Builder(ir_ctx, self._func_hir.body.loc) as ir_builder:
                 with tile_impl_registry.as_current():
                     params = _create_kernel_parameters(sig.parameters,
-                                                       self.ann_func.constant_parameter_mask,
+                                                       self.ann_func.parameter_annotations,
                                                        param_names,
                                                        self._func_hir.param_locs,
                                                        ir_ctx)
