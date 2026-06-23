@@ -183,7 +183,7 @@ def test_memory_space_enum_mappings(enum, expect):
     if expect is None:
         with pytest.raises(
             TileCompilerExecutionError,
-            match="op only acquire and release semantics are supported",
+            match=r"acquire.*release",
         ):
             compile_simt(kernel, [KernelSignature(())])
     else:

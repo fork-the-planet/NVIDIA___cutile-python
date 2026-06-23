@@ -126,12 +126,15 @@ class CodeBuilder:
         assert isinstance(val, attr_class)
         val.encode_tagged(self.string_table, self.buf)
 
-    def encode_opattr_dense_int_or_fp_elements(self, val: bytes):
+    def encode_opattr_dense_typed_elements(self, val: bytes):
         cid = self.constant_table.dense_constant(val)
         encode_varint(cid.constant_id, self.buf)
 
     def encode_opattr_dense_int32_array(self, val: Sequence[int]):
         encode_int_list(val, 4, self.buf)
+
+    def encode_opattr_dense_bool_array(self, val: Sequence[bool]):
+        encode_int_list([int(bool(x)) for x in val], 1, self.buf)
 
     def encode_opattr_optimization_hints(self, val: OptimizationHints):
         encode_dictionary_untagged(val.hints_by_arch, self.string_table, self.buf)

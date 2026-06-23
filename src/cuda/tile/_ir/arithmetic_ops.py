@@ -413,7 +413,7 @@ class RawBinaryArithmeticOperation(Operation, opcode="raw_binary_arith"):
                                         rounding_mode=rounding_mode,
                                         flush_to_zero=self.flush_to_zero)
             case "pow", "float":
-                return bc.encode_PowOp(ctx.builder, res_typeid, lhs, rhs)
+                return bc.encode_FPowFOp(ctx.builder, res_typeid, lhs, rhs)
             case "atan2", "float":
                 return bc.encode_Atan2Op(ctx.builder, res_typeid, lhs, rhs)
             case "min", "int":

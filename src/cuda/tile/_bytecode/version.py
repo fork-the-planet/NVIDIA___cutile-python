@@ -10,6 +10,9 @@ class BytecodeVersion(enum.IntEnum):
     V_13_2 = 130200
     V_13_3 = 130300
 
+    # dev only
+    V_13_4 = 130400
+
     def major(self) -> int:
         return self._value_ // 10000
 

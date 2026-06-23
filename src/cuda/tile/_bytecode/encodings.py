@@ -42,6 +42,28 @@ class ComparisonPredicate(enum.Enum):
     GREATER_THAN_OR_EQUAL = b"\x05"
 
 
+class GpuArchitecture(enum.Enum):
+    SM_80 = b"\x50"
+    SM_86 = b"\x56"
+    SM_87 = b"\x57"
+    SM_88 = b"\x58"
+    SM_89 = b"\x59"
+    SM_90 = b"\x5a"
+    SM_100 = b"\x64"
+    SM_103 = b"\x67"
+    SM_110 = b"\x6e"
+    SM_120 = b"\x78"
+    SM_121 = b"\x79"
+
+
+class HintKey(enum.Enum):
+    NumCTAInCGA = b"\x00"
+    Occupancy = b"\x01"
+    AllowTMA = b"\x02"
+    Latency = b"\x03"
+    NumWorkerWarpsPerCTA = b"\x04"
+
+
 class IntegerOverflow(enum.Enum):
     NONE = b"\x00"
     NSW = b"\x01"
@@ -63,16 +85,13 @@ class MemoryScope(enum.Enum):
     SYS = b"\x02"
 
 
-class ProgramIDDim(enum.Enum):
-    X = b"\x00"
-    Y = b"\x01"
-    Z = b"\x02"
-
-
-class PtrAttr(enum.Enum):
-    NONE = b"\x00"
-    UNICAST = b"\x01"
-    MULTICAST = b"\x02"
+class MultimemReductionKind(enum.Enum):
+    ADD = b"\x00"
+    MIN = b"\x01"
+    MAX = b"\x02"
+    AND = b"\x03"
+    OR = b"\x04"
+    XOR = b"\x05"
 
 
 class RoundingMode(enum.Enum):
@@ -83,6 +102,7 @@ class RoundingMode(enum.Enum):
     APPROX = b"\x04"
     FULL = b"\x05"
     NEAREST_INT_TO_ZERO = b"\x06"
+    NEAREST_AWAY = b"\x07"
 
 
 class Signedness(enum.Enum):
@@ -486,7 +506,7 @@ def encode_ConstantOp(
     # Result types
     encode_typeid(result_type, _buf)
     # Attributes
-    code_builder.encode_opattr_dense_int_or_fp_elements(value)
+    code_builder.encode_opattr_dense_typed_elements(value)
     return code_builder.new_op()
 
 
@@ -682,6 +702,40 @@ def encode_ExtractOp(
     return code_builder.new_op()
 
 
+def encode_FPowFOp(
+    code_builder: CodeBuilder,
+    result_type: TypeId,
+    source: Value,
+    exponent: Value,
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(84, _buf)
+    # Result types
+    encode_typeid(result_type, _buf)
+    # Operands
+    encode_operand(source, _buf)
+    encode_operand(exponent, _buf)
+    return code_builder.new_op()
+
+
+def encode_FPowIOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_type: TypeId,  # since 13.4
+    source: Value,  # since 13.4
+    exponent: Value,  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(130, _buf)
+    # Result types
+    encode_typeid(result_type, _buf)
+    # Operands
+    encode_operand(source, _buf)
+    encode_operand(exponent, _buf)
+    return code_builder.new_op()
+
+
 def encode_FToFOp(
     code_builder: CodeBuilder,
     to_type: TypeId,
@@ -706,12 +760,18 @@ def encode_FToIOp(
     from_: Value,
     signedness: Signedness,
     rounding_mode: RoundingMode,
+    saturating: bool,  # since 13.4
 ) -> Value:
     _buf = code_builder.buf
     # Opcode
     encode_varint(43, _buf)
     # Result types
     encode_typeid(to_type, _buf)
+    # Flags
+    _flag_bits = bool(saturating)
+    assert _flag_bits < 1 or code_builder.version >= BytecodeVersion.V_13_4
+    if code_builder.version >= BytecodeVersion.V_13_4:
+        encode_varint(_flag_bits, _buf)
     # Attributes
     code_builder.encode_opattr_enum(Signedness, signedness)
     code_builder.encode_opattr_enum(RoundingMode, rounding_mode)
@@ -786,6 +846,38 @@ def encode_ForOp(
     encode_operand(step, _buf)
     encode_unsized_variadic_operands(initValues, _buf)
     return code_builder.new_op_with_nested_blocks(len(result_types), 1)
+
+
+def encode_GdcLaunchDependentsTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_token_type: TypeId,  # since 13.4
+    token: Optional[Value],  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(119, _buf)
+    # Result types
+    encode_typeid(result_token_type, _buf)
+    # Operands
+    encode_varint(int(token is not None), _buf)
+    encode_optional_operand(token, _buf)
+    return code_builder.new_op()
+
+
+def encode_GdcWaitTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_token_type: TypeId,  # since 13.4
+    token: Optional[Value],  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(120, _buf)
+    # Result types
+    encode_typeid(result_token_type, _buf)
+    # Operands
+    encode_varint(int(token is not None), _buf)
+    encode_optional_operand(token, _buf)
+    return code_builder.new_op()
 
 
 def encode_GetGlobalOp(
@@ -883,7 +975,7 @@ def encode_GlobalOp(
         encode_varint(_flag_bits, _buf)
     # Attributes
     code_builder.encode_opattr_str(sym_name)
-    code_builder.encode_opattr_dense_int_or_fp_elements(value)
+    code_builder.encode_opattr_dense_typed_elements(value)
     code_builder.encode_opattr_int(alignment)
     if code_builder.version >= BytecodeVersion.V_13_3:
         code_builder.encode_opattr_enum(SymbolVisibility, symbol_visibility)
@@ -925,6 +1017,26 @@ def encode_IfOp(
     # Operands
     encode_operand(condition, _buf)
     return code_builder.new_op_with_nested_blocks(len(result_types), 2)
+
+
+def encode_InsertOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_type: TypeId,  # since 13.4
+    source: Value,  # since 13.4
+    destination: Value,  # since 13.4
+    indices: Sequence[Value],  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(118, _buf)
+    # Variadic result types
+    encode_sized_typeid_seq((result_type,), _buf)
+    # Operands
+    encode_varint(2 + len(indices), _buf)
+    encode_operand(source, _buf)
+    encode_operand(destination, _buf)
+    encode_unsized_variadic_operands(indices, _buf)
+    return code_builder.new_op()
 
 
 def encode_IntToPtrOp(
@@ -1018,6 +1130,7 @@ def encode_LoadViewTkoOp(
     memory_ordering_semantics: MemoryOrderingSemantics,
     memory_scope: Optional[MemoryScope],
     optimization_hints: Optional[OptimizationHints],
+    inbounds: Sequence[bool],  # since 13.4
 ) -> Tuple[Value, Value]:
     _buf = code_builder.buf
     # Opcode
@@ -1034,6 +1147,13 @@ def encode_LoadViewTkoOp(
         code_builder.encode_opattr_enum(MemoryScope, memory_scope)
     if optimization_hints is not None:
         code_builder.encode_opattr_optimization_hints(optimization_hints)
+    if code_builder.version >= BytecodeVersion.V_13_4:
+        code_builder.encode_opattr_dense_bool_array(inbounds)
+    else:
+        if any(inbounds):
+            raise ValueError(
+                "'inbounds' is set but requires bytecode version 13.4+; "
+                "older bytecode versions can only represent an all-false vector")
     # Operands
     encode_operand(view, _buf)
     encode_sized_variadic_operands(index, _buf)
@@ -1202,6 +1322,21 @@ def encode_MaxIOp(
     # Operands
     encode_operand(lhs, _buf)
     encode_operand(rhs, _buf)
+    return code_builder.new_op()
+
+
+def encode_MemoryFenceAliasTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_token_type: TypeId,  # since 13.4
+    token: Value,  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(131, _buf)
+    # Result types
+    encode_typeid(result_token_type, _buf)
+    # Operands
+    encode_operand(token, _buf)
     return code_builder.new_op()
 
 
@@ -1399,6 +1534,103 @@ def encode_MulhiIOp(
     return code_builder.new_op()
 
 
+def encode_MultimemLoadReduceViewTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    reduced_values_type: TypeId,  # since 13.4
+    result_token_type: TypeId,  # since 13.4
+    view: Value,  # since 13.4
+    index: Sequence[Value],  # since 13.4
+    token: Optional[Value],  # since 13.4
+    memory_ordering_semantics: MemoryOrderingSemantics,  # since 13.4
+    memory_scope: Optional[MemoryScope],  # since 13.4
+    reduction: MultimemReductionKind,  # since 13.4
+    inbounds: Sequence[bool],  # since 13.4
+) -> Tuple[Value, Value]:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(121, _buf)
+    # Variadic result types
+    encode_sized_typeid_seq((reduced_values_type, result_token_type,), _buf)
+    # Flags
+    encode_varint((memory_scope is not None)
+                  | ((token is not None) << 1), _buf)
+    # Attributes
+    code_builder.encode_opattr_enum(MemoryOrderingSemantics, memory_ordering_semantics)
+    if memory_scope is not None:
+        code_builder.encode_opattr_enum(MemoryScope, memory_scope)
+    code_builder.encode_opattr_enum(MultimemReductionKind, reduction)
+    code_builder.encode_opattr_dense_bool_array(inbounds)
+    # Operands
+    encode_operand(view, _buf)
+    encode_sized_variadic_operands(index, _buf)
+    encode_optional_operand(token, _buf)
+    return code_builder.new_op(2)
+
+
+def encode_MultimemReduceViewTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_token_type: TypeId,  # since 13.4
+    view: Value,  # since 13.4
+    tile: Value,  # since 13.4
+    index: Sequence[Value],  # since 13.4
+    token: Optional[Value],  # since 13.4
+    memory_ordering_semantics: MemoryOrderingSemantics,  # since 13.4
+    memory_scope: MemoryScope,  # since 13.4
+    reduction: MultimemReductionKind,  # since 13.4
+    inbounds: Sequence[bool],  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(128, _buf)
+    # Variadic result types
+    encode_sized_typeid_seq((result_token_type,), _buf)
+    # Flags
+    encode_varint((token is not None), _buf)
+    # Attributes
+    code_builder.encode_opattr_enum(MemoryOrderingSemantics, memory_ordering_semantics)
+    code_builder.encode_opattr_enum(MemoryScope, memory_scope)
+    code_builder.encode_opattr_enum(MultimemReductionKind, reduction)
+    code_builder.encode_opattr_dense_bool_array(inbounds)
+    # Operands
+    encode_operand(view, _buf)
+    encode_operand(tile, _buf)
+    encode_sized_variadic_operands(index, _buf)
+    encode_optional_operand(token, _buf)
+    return code_builder.new_op()
+
+
+def encode_MultimemStoreViewTkoOp(  # since 13.4
+    code_builder: CodeBuilder,
+    result_token_type: TypeId,  # since 13.4
+    view: Value,  # since 13.4
+    tile: Value,  # since 13.4
+    index: Sequence[Value],  # since 13.4
+    token: Optional[Value],  # since 13.4
+    memory_ordering_semantics: MemoryOrderingSemantics,  # since 13.4
+    memory_scope: Optional[MemoryScope],  # since 13.4
+    inbounds: Sequence[bool],  # since 13.4
+) -> Value:
+    _buf = code_builder.buf
+    # Opcode
+    encode_varint(129, _buf)
+    # Variadic result types
+    encode_sized_typeid_seq((result_token_type,), _buf)
+    # Flags
+    encode_varint((memory_scope is not None)
+                  | ((token is not None) << 1), _buf)
+    # Attributes
+    code_builder.encode_opattr_enum(MemoryOrderingSemantics, memory_ordering_semantics)
+    if memory_scope is not None:
+        code_builder.encode_opattr_enum(MemoryScope, memory_scope)
+    code_builder.encode_opattr_dense_bool_array(inbounds)
+    # Operands
+    encode_operand(view, _buf)
+    encode_operand(tile, _buf)
+    encode_sized_variadic_operands(index, _buf)
+    encode_optional_operand(token, _buf)
+    return code_builder.new_op()
+
+
 def encode_NegFOp(
     code_builder: CodeBuilder,
     result_type: TypeId,
@@ -1499,23 +1731,6 @@ def encode_PermuteOp(
     code_builder.encode_opattr_dense_int32_array(permutation)
     # Operands
     encode_operand(source, _buf)
-    return code_builder.new_op()
-
-
-def encode_PowOp(
-    code_builder: CodeBuilder,
-    result_type: TypeId,
-    source: Value,
-    exponent: Value,
-) -> Value:
-    _buf = code_builder.buf
-    # Opcode
-    encode_varint(84, _buf)
-    # Result types
-    encode_typeid(result_type, _buf)
-    # Operands
-    encode_operand(source, _buf)
-    encode_operand(exponent, _buf)
     return code_builder.new_op()
 
 
@@ -1866,6 +2081,7 @@ def encode_StoreViewTkoOp(
     memory_ordering_semantics: MemoryOrderingSemantics,
     memory_scope: Optional[MemoryScope],
     optimization_hints: Optional[OptimizationHints],
+    inbounds: Sequence[bool],  # since 13.4
 ) -> Value:
     _buf = code_builder.buf
     # Opcode
@@ -1882,6 +2098,13 @@ def encode_StoreViewTkoOp(
         code_builder.encode_opattr_enum(MemoryScope, memory_scope)
     if optimization_hints is not None:
         code_builder.encode_opattr_optimization_hints(optimization_hints)
+    if code_builder.version >= BytecodeVersion.V_13_4:
+        code_builder.encode_opattr_dense_bool_array(inbounds)
+    else:
+        if any(inbounds):
+            raise ValueError(
+                "'inbounds' is set but requires bytecode version 13.4+; "
+                "older bytecode versions can only represent an all-false vector")
     # Operands
     encode_operand(tile, _buf)
     encode_operand(view, _buf)
@@ -2038,11 +2261,12 @@ __all__ = [
     'AtomicRMWMode',
     'ComparisonOrdering',
     'ComparisonPredicate',
+    'GpuArchitecture',
+    'HintKey',
     'IntegerOverflow',
     'MemoryOrderingSemantics',
     'MemoryScope',
-    'ProgramIDDim',
-    'PtrAttr',
+    'MultimemReductionKind',
     'RoundingMode',
     'Signedness',
     'SymbolVisibility',
@@ -2076,11 +2300,15 @@ __all__ = [
     'encode_ExpOp',
     'encode_ExtIOp',
     'encode_ExtractOp',
+    'encode_FPowFOp',
+    'encode_FPowIOp',
     'encode_FToFOp',
     'encode_FToIOp',
     'encode_FloorOp',
     'encode_FmaOp',
     'encode_ForOp',
+    'encode_GdcLaunchDependentsTkoOp',
+    'encode_GdcWaitTkoOp',
     'encode_GetGlobalOp',
     'encode_GetIndexSpaceShapeOp',
     'encode_GetNumTileBlocksOp',
@@ -2089,6 +2317,7 @@ __all__ = [
     'encode_GlobalOp',
     'encode_IToFOp',
     'encode_IfOp',
+    'encode_InsertOp',
     'encode_IntToPtrOp',
     'encode_IotaOp',
     'encode_JoinTokensOp',
@@ -2104,6 +2333,7 @@ __all__ = [
     'encode_MakeTokenOp',
     'encode_MaxFOp',
     'encode_MaxIOp',
+    'encode_MemoryFenceAliasTkoOp',
     'encode_MinFOp',
     'encode_MinIOp',
     'encode_MmaFOp',
@@ -2113,13 +2343,15 @@ __all__ = [
     'encode_MulFOp',
     'encode_MulIOp',
     'encode_MulhiIOp',
+    'encode_MultimemLoadReduceViewTkoOp',
+    'encode_MultimemReduceViewTkoOp',
+    'encode_MultimemStoreViewTkoOp',
     'encode_NegFOp',
     'encode_NegIOp',
     'encode_OffsetOp',
     'encode_OrIOp',
     'encode_PackOp',
     'encode_PermuteOp',
-    'encode_PowOp',
     'encode_PrintTkoOp',
     'encode_PtrToIntOp',
     'encode_PtrToPtrOp',

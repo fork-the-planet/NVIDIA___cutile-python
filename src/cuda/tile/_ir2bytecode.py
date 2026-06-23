@@ -33,7 +33,7 @@ def dtype_typeid(tt: bc.TypeTable, dtype: datatype.DType) -> bc.TypeId:
     if is_pointer_dtype(dtype):
         pointee_dtype = PointerInfo(dtype).pointee_dtype
         pointee = dtype_typeid(tt, pointee_dtype)
-        return tt.pointer(pointee)
+        return tt.pointer(pointee, bc.PtrAttr.Missing)
     return tt.simple(dtype_simple_bytecode_type(dtype))
 
 
@@ -41,13 +41,13 @@ def tensor_view_typeid(tt: bc.TypeTable, array_ty: ArrayTy) -> bc.TypeId:
     dtype = dtype_typeid(tt, array_ty.dtype)
     shape = [size_to_bytecode(x) for x in array_ty.shape]
     strides = [size_to_bytecode(x) for x in array_ty.strides]
-    return tt.tensor_view(dtype, shape, strides)
+    return tt.tensor_view(dtype, shape, strides, bc.PtrAttr.Missing)
 
 
 def tensor_view_typeid_for_list(tt: bc.TypeTable, item_size_words: int) -> bc.TypeId:
     shape = [bc.DYNAMIC_SHAPE, item_size_words]
     strides = [item_size_words, 1]
-    return tt.tensor_view(tt.I64, shape, strides)
+    return tt.tensor_view(tt.I64, shape, strides, bc.PtrAttr.Missing)
 
 
 def typeid(tt: bc.TypeTable, ty: Type) -> bc.TypeId:
@@ -147,10 +147,12 @@ def _get_type_conversion_encoder(from_dtype: Type, to_dtype: Type):
                                       rounding_mode=bc.RoundingMode.NEAREST_EVEN)
         case 'f', 'si': return partial(bc.encode_FToIOp,
                                        signedness=bc.Signedness.Signed,
-                                       rounding_mode=bc.RoundingMode.NEAREST_INT_TO_ZERO)
+                                       rounding_mode=bc.RoundingMode.NEAREST_INT_TO_ZERO,
+                                       saturating=False)
         case 'f', 'ui': return partial(bc.encode_FToIOp,
                                        signedness=bc.Signedness.Unsigned,
-                                       rounding_mode=bc.RoundingMode.NEAREST_INT_TO_ZERO)
+                                       rounding_mode=bc.RoundingMode.NEAREST_INT_TO_ZERO,
+                                       saturating=False)
         case 'si', 'f': return partial(bc.encode_IToFOp,
                                        signedness=bc.Signedness.Signed,
                                        rounding_mode=round_to_float)

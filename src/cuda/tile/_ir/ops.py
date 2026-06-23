@@ -291,7 +291,8 @@ class GetArrayListItem(Operation, opcode="get_array_list_item"):
             token=None,
             memory_ordering_semantics=bc.MemoryOrderingSemantics.WEAK,
             memory_scope=None,
-            optimization_hints=None
+            optimization_hints=None,
+            inbounds=(False, False)
         )
 
         item_typeid_tuple = tuple(typeid(ctx.type_table, ty)
@@ -858,6 +859,10 @@ def make_gather_scatter_view(array: Var, tile_shape: Sequence[int],
     return ret
 
 
+def _uniform_tuple(val: Any, *, rank: int):
+    return (val,) * rank
+
+
 @dataclass(eq=False)
 class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
     latency: Optional[int] = attribute()
@@ -890,6 +895,7 @@ class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
             memory_ordering_semantics=memory_order_to_bytecode[self.memory_order],
             memory_scope=memory_scope_to_bytecode[self.memory_scope],
             optimization_hints=ctx.load_store_hints(self.latency, self.allow_tma),
+            inbounds=_uniform_tuple(False, rank=len(self.index)),
         )
         return res, res_token
 
@@ -1040,6 +1046,7 @@ class TileStore(Operation, opcode="tile_store", memory_effect=MemoryEffect.STORE
             memory_ordering_semantics=memory_order_to_bytecode[self.memory_order],
             memory_scope=memory_scope_to_bytecode[self.memory_scope],
             optimization_hints=ctx.load_store_hints(self.latency, self.allow_tma),
+            inbounds=_uniform_tuple(False, rank=len(self.index))
         )
 
 

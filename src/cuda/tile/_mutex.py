@@ -27,7 +27,7 @@ def tile_mutex(mutex_name: str, ctx: BytecodeContext):
         ctx.global_section.define_global(mutex_name, tt.tile(tt.I32, (1,)),
                                          _MUTEX_UNLOCKED.to_bytes(4, "little"))
 
-    ptr_tile_ty = tt.tile(tt.pointer(tt.I32), ())
+    ptr_tile_ty = tt.tile(tt.pointer(tt.I32, bc.PtrAttr.Missing), ())
     ptr = bc.encode_GetGlobalOp(ctx.builder, ptr_tile_ty, mutex_name)
     tile_ty = tt.tile(tt.I32, ())
 

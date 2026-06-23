@@ -23,6 +23,13 @@ class PaddingValue(enum.Enum):
     NegInf = b"\x04"
 
 
+class PtrAttr(enum.Enum):
+    Missing = b""
+    Default = b"\x00"
+    Unicast = b"\x01"
+    Multicast = b"\x02"
+
+
 def encode_typeid(type_id: TypeId, buf: bytearray):
     encode_varint(type_id.type_id, buf)
 

@@ -18,13 +18,22 @@ def test_write_simple_module():
     with bc.write_bytecode(1, buf, version=bc.BytecodeVersion.V_13_1) as writer:
         tt = writer.type_table
         with writer.function(name="foo",
-                             parameter_types=[tt.tile(tt.pointer(tt.F32), ()),
+                             parameter_types=[tt.tile(tt.pointer(
+                                                  tt.F32,
+                                                  bc.PtrAttr.Missing),
+                                                  ()),
                                               tt.tile(tt.I32, ()),
                                               tt.tile(tt.I32, ()),
-                                              tt.tile(tt.pointer(tt.F32), ()),
+                                              tt.tile(tt.pointer(
+                                                  tt.F32,
+                                                  bc.PtrAttr.Missing),
+                                                  ()),
                                               tt.tile(tt.I32, ()),
                                               tt.tile(tt.I32, ()),
-                                              tt.tile(tt.pointer(tt.F32), ()),
+                                              tt.tile(tt.pointer(
+                                                  tt.F32,
+                                                  bc.PtrAttr.Missing),
+                                                  ()),
                                               tt.tile(tt.I32, ()),
                                               tt.tile(tt.I32, ())],
                              result_types=[],
@@ -32,7 +41,7 @@ def test_write_simple_module():
                              hints=None,
                              debug_attr=bc.MISSING_DEBUG_ATTR_ID) as (builder, parameters):
             x, x_len, x_stride, y, y_len, y_stride, result, result_len, result_stride = parameters
-            view_ty = tt.tensor_view(tt.F32, (bc.DYNAMIC_SHAPE,), (1,))
+            view_ty = tt.tensor_view(tt.F32, (bc.DYNAMIC_SHAPE,), (1,), bc.PtrAttr.Missing)
             partition_ty = tt.partition_view((1,), view_ty, [0], bc.PaddingValue.Zero)
 
             partitions = []
@@ -61,7 +70,8 @@ def test_write_simple_module():
                         memory_ordering_semantics=bc.MemoryOrderingSemantics.WEAK,
                         memory_scope=None,
                         optimization_hints=None,
-                        token=None)
+                        token=None,
+                        inbounds=(False,))
                 tiles.append(tile)
 
             x_tile, y_tile = tiles
@@ -82,7 +92,8 @@ def test_write_simple_module():
                     token=None,
                     memory_ordering_semantics=bc.MemoryOrderingSemantics.WEAK,
                     memory_scope=None,
-                    optimization_hints=None)
+                    optimization_hints=None,
+                    inbounds=(False,))
 
             bc.encode_ReturnOp(builder, [])
 

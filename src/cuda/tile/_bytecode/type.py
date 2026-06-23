@@ -6,7 +6,7 @@ import enum
 from typing import Sequence
 
 from .basic import encode_varint, encode_int_list
-from .type_base import TypeId, _TypeTableBase, encode_sized_typeid_seq, PaddingValue
+from .type_base import TypeId, _TypeTableBase, encode_sized_typeid_seq, PaddingValue, PtrAttr
 from .type_base import encode_typeid as encode_typeid  # noqa: F401
 from .version import BytecodeVersion
 
@@ -75,9 +75,22 @@ class TypeTable(_TypeTableBase):
     def Token(self) -> TypeId:
         return self.simple(SimpleType.Token)
 
-    def pointer(self, pointeeType: TypeId) -> TypeId:
+    def pointer(self, pointeeType: TypeId, ptrAttr: PtrAttr) -> TypeId:
         buf = bytearray(_CompositeType.Pointer._value_)
+        use_unified_bitfield = self.version >= BytecodeVersion.V_13_3
+        optional_flags = 0
+        if ptrAttr != PtrAttr.Missing:
+            optional_flags |= (1 << 0)
+        if self.version >= BytecodeVersion.V_13_4 and use_unified_bitfield:
+            encode_varint(optional_flags, buf)
         encode_varint(pointeeType.type_id, buf)
+        if self.version >= BytecodeVersion.V_13_4:
+            buf.extend(ptrAttr._value_)
+        else:
+            if ptrAttr != PtrAttr.Missing:
+                raise ValueError(
+                    "parameter 'ptrAttr' requires bytecode version 13.4+, "
+                    "but targeting " + self.version.as_string())
         return self[bytes(buf)]
 
     def tile(self, elementType: TypeId, shape: Sequence[int]) -> TypeId:
@@ -89,11 +102,25 @@ class TypeTable(_TypeTableBase):
     def tensor_view(self,
                     elementType: TypeId,
                     shape: Sequence[int],
-                    strides: Sequence[int]) -> TypeId:
+                    strides: Sequence[int],
+                    ptrAttr: PtrAttr) -> TypeId:
         buf = bytearray(_CompositeType.TensorView._value_)
+        use_unified_bitfield = self.version >= BytecodeVersion.V_13_3
+        optional_flags = 0
+        if ptrAttr != PtrAttr.Missing:
+            optional_flags |= (1 << 0)
+        if self.version >= BytecodeVersion.V_13_4 and use_unified_bitfield:
+            encode_varint(optional_flags, buf)
         encode_varint(elementType.type_id, buf)
         encode_int_list(shape, 8, buf)
         encode_int_list(strides, 8, buf)
+        if self.version >= BytecodeVersion.V_13_4:
+            buf.extend(ptrAttr._value_)
+        else:
+            if ptrAttr != PtrAttr.Missing:
+                raise ValueError(
+                    "parameter 'ptrAttr' requires bytecode version 13.4+, "
+                    "but targeting " + self.version.as_string())
         return self[bytes(buf)]
 
     def partition_view(self,
@@ -103,17 +130,16 @@ class TypeTable(_TypeTableBase):
                        padding_value: PaddingValue) -> TypeId:
         buf = bytearray(_CompositeType.PartitionView._value_)
         use_unified_bitfield = self.version >= BytecodeVersion.V_13_3
+        optional_flags = 0
+        if padding_value != PaddingValue.Missing:
+            optional_flags |= (1 << 0)
         if use_unified_bitfield:
-            optional_flags = 0
-            if padding_value != PaddingValue.Missing:
-                optional_flags |= (1 << 0)
             encode_varint(optional_flags, buf)
         encode_int_list(tile_shape, 4, buf)
         encode_varint(tensor_view.type_id, buf)
         encode_int_list(dim_map, 4, buf)
         if use_unified_bitfield:
-            if padding_value != PaddingValue.Missing:
-                buf.extend(padding_value._value_)
+            buf.extend(padding_value._value_)
         else:
             encode_varint(int(padding_value != PaddingValue.Missing), buf)
             buf.extend(padding_value._value_)

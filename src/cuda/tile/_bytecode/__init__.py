@@ -7,7 +7,7 @@ from .attribute import (  # noqa: F401
     LoadStoreHints, OptimizationHints, TaggedAttribute
 )
 from .writer import BytecodeWriter, FunctionBuilder, GlobalSection, write_bytecode  # noqa: F401
-from .type import SimpleType, TypeTable, TypeId, PaddingValue  # noqa: F401
+from .type import SimpleType, TypeTable, TypeId, PaddingValue, PtrAttr  # noqa: F401
 from .debug_info import DebugAttrId, DebugAttrTable, MISSING_DEBUG_ATTR_ID  # noqa: F401
 from .code_builder import CodeBuilder, Value  # noqa: F401
 from .float import float_to_bits, float_bit_size  # noqa: F401
