@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TypeVar, Generic
+from typing import TypeVar, Generic, Literal
 
 from cuda.lang._execution import stub, function
 from cuda.tile._stub import (
@@ -11,7 +11,7 @@ from cuda.tile._stub import (
 )
 from cuda.tile._memory_model import MemoryOrder, MemoryScope, MemorySpace
 from cuda.lang._datatype import DType, int32
-from .types import Pointer, Scalar
+from .types import Pointer, Scalar, Vector
 from cuda.tile._exception import TileTypeError
 
 T = TypeVar("T")
@@ -41,6 +41,66 @@ class Array(TileArray, Generic[T]):
 
     @stub
     def __getitem__(self, indices: int | tuple[int, ...]) -> T: ...
+
+    @function
+    def load_element(
+        self,
+        indices: int | tuple[int, ...],
+        *,
+        count: int | None = None,
+        alignment: int | None = None,
+        volatile: bool = False,
+        ordering: MemoryOrder | None = None,
+    ) -> "T | Vector[T]":
+        """Load the element at ``indices``.
+
+        Shorthand for ``self.get_element_pointer(indices).load(...)``: the
+        element pointer is derived from ``indices`` and the keyword arguments
+        (``count``, ``alignment``, ``volatile``, ``ordering``) are forwarded
+        unchanged to :meth:`Pointer.load`, which documents their semantics.
+
+        Args:
+            indices: Scalar or tuple index of the element to load.
+
+        Returns:
+            The loaded scalar, or a vector of ``count`` elements when ``count``
+            is given.
+        """
+        return self.get_element_pointer(indices).load(
+            count=count,
+            alignment=alignment,
+            volatile=volatile,
+            ordering=ordering,
+        )
+
+    @function
+    def store_element(
+        self,
+        indices: int | tuple[int, ...],
+        value: "T | Vector[T]",
+        *,
+        alignment: int | None = None,
+        volatile: bool = False,
+        ordering: Literal[MemoryOrder.RELAXED,
+                          MemoryOrder.RELEASE, MemoryOrder.WEAK] | None = None,
+    ) -> None:
+        """Store ``value`` to the element at ``indices``.
+
+        Shorthand for ``self.get_element_pointer(indices).store(value, ...)``:
+        the element pointer is derived from ``indices`` and the keyword
+        arguments (``alignment``, ``volatile``, ``ordering``) are forwarded
+        unchanged to :meth:`Pointer.store`, which documents their semantics.
+
+        Args:
+            indices: Scalar or tuple index of the element to store to.
+            value: Scalar or vector value to store.
+        """
+        self.get_element_pointer(indices).store(
+            value,
+            alignment=alignment,
+            volatile=volatile,
+            ordering=ordering,
+        )
 
 
 @stub(host=True)
