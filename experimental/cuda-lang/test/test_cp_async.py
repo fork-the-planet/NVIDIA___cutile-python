@@ -115,6 +115,32 @@ class TestG2S(CpAsyncPtxTestBase):
             "multicast::cluster",
         )
 
+    @require_blackwell_cc100()
+    def test_shared_cluster_mbarrier_address_space(self):
+        @cl.kernel
+        def kernel(x, pred, i, j, H: cl.Constant[int], W: cl.Constant[int]):
+            tensor_map = cl.tensor_map_tiled(x, (H, W)).as_opaque_ptr()
+            smem = cl.shared_array(shape=(H * W,), dtype=cl.int32, alignment=512)
+            smem = cl.map_shared_to_cluster(smem.get_base_pointer(), 0)
+            mbar = cl.shared_array(1, cl.mbarrier, alignment=8).get_base_pointer()
+            mbar = cl.map_shared_to_cluster(mbar, 0)
+
+            cl.cp_async_bulk_tensor_global_to_shared(
+                tensor_map,
+                (i, j),
+                smem,
+                mbar,
+                multicast_mask=0x3,
+                group=cl.CTAGroup.CTA_2,
+            )
+
+        match = (
+            "Expected pointer memory space to be MemorySpace.SHARED "
+            "but got MemorySpace.SHARED_CLUSTER"
+        )
+        with pytest.raises(TileTypeError, match=match):
+            self.check_ptx_source(kernel)
+
     def test_unsupported_kwargs_for_cta_mode(self, subtests):
         @cl.kernel
         def k1(x, pred, i, j, H: cl.Constant[int], W: cl.Constant[int]):

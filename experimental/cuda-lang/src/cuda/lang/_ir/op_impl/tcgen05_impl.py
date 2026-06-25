@@ -26,7 +26,8 @@ from cuda.lang._ir.ops import (
     require_scalar_type,
     strictly_typed_const,
 )
-from cuda.lang._ir.op_defs import RawMLIROperation, RawNVVMIntrinsic
+from cuda.lang._ir.op_defs import RawNVVMIntrinsic
+from .raw_mlir_operation_utils import RawMLIROperationBuilder
 from cuda.lang._ir.type_checking_helpers import (
     is_none,
     make_type_checking_error,
@@ -250,9 +251,9 @@ def tcgen05_mma_impl(
     collector_op: Var[Any],
     a_shift: Var[Any],
 ):
-    kind = require_constant_enum(kind, Tcgen05MMAKind)
-    cta_group = require_optional_constant_enum(cta_group, CTAGroup) or CTAGroup.CTA_1
-    collector_op = require_constant_enum(collector_op, Tcgen05MMACollectorOp)
+    kind_value = require_constant_enum(kind, Tcgen05MMAKind)
+    cta_group_value = require_optional_constant_enum(cta_group, CTAGroup) or CTAGroup.CTA_1
+    collector_op_value = require_constant_enum(collector_op, Tcgen05MMACollectorOp)
     require_pointer_in_memory_space(matrix_d, (MemorySpace.TENSOR,))
     matrix_a = _require_tcgen05_mma_matrix_a(matrix_a)
     require_integral_scalar_type(matrix_b, bitwidth=64)
@@ -262,14 +263,20 @@ def tcgen05_mma_impl(
         enable_input_d, datatype.bool_, "enable_input_d as bool_"
     )
 
-    operands = [
-        matrix_d,
-        matrix_a,
-        matrix_b,
-        idesc,
-        enable_input_d,
-    ]
-    operand_counts = [1 for _ in operands]
+    builder = (
+        RawMLIROperationBuilder(name="nvvm.tcgen05.mma")
+        .add_attribute("mmaKind", enum_to_mlir_attribute(kind_value, mlir.Tcgen05MMAKind))
+        .add_attribute("ctaGroup", enum_to_mlir_attribute(cta_group_value, mlir.CTAGroupKind))
+        .add_attribute(
+            "collectorOp",
+            enum_to_mlir_attribute(collector_op_value, mlir.Tcgen05MMACollectorOp),
+        )
+        .add_operand(matrix_d)
+        .add_operand(matrix_a)
+        .add_operand(matrix_b)
+        .add_operand(idesc)
+        .add_operand(enable_input_d)
+    )
 
     if not is_none(scale_input_d):
         value = require_constant_int(scale_input_d)
@@ -278,26 +285,13 @@ def tcgen05_mma_impl(
                 "Expected scale_input_d to be an immediate in [0, 15]"
             )
         scale_input_d = astype(scale_input_d, datatype.int32)
-        operands += [scale_input_d]
-        operand_counts += [1]
-    else:
-        operand_counts += [0]
+    builder = builder.add_optional_operand(scale_input_d)
 
     if not is_none(disable_output_lane):
-        expected_len = 4 if cta_group is CTAGroup.CTA_1 else 8
+        expected_len = 4 if cta_group_value is CTAGroup.CTA_1 else 8
         require_vector_type(disable_output_lane, expected_len)
         disable_output_lane = astype(disable_output_lane, datatype.int32)
-        operands += [disable_output_lane]
-        operand_counts += [1]
-    else:
-        operand_counts += [0]
-
-    attributes = dict(
-        mmaKind=enum_to_mlir_attribute(kind, mlir.Tcgen05MMAKind),
-        ctaGroup=enum_to_mlir_attribute(cta_group, mlir.CTAGroupKind),
-        collectorOp=enum_to_mlir_attribute(collector_op, mlir.Tcgen05MMACollectorOp),
-        operandSegmentSizes=mlir.DenseI32ArrayAttr(operand_counts),
-    )
+    builder = builder.add_optional_operand(disable_output_lane)
 
     if not is_none(a_shift):
         value = require_constant_bool(a_shift)
@@ -306,12 +300,6 @@ def tcgen05_mma_impl(
                 raise make_type_checking_error(
                     "a_shift can only be applied if A is in tensor memory", a_shift
                 )
-            attributes["aShift"] = mlir.UnitAttr()
+            builder = builder.add_unit_attribute("aShift")
 
-    add_operation_variadic(
-        RawMLIROperation,
-        (),
-        op_name="nvvm.tcgen05.mma",
-        operands_=tuple(operands),
-        mlir_attributes=tuple(attributes.items()),
-    )
+    builder.emit()

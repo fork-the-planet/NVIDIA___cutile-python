@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from cuda.tile._ir.op_impl import ImplRegistry
-from cuda.tile._ir.ops import loosely_typed_const
+from cuda.tile._ir.ops import implicit_cast
+import cuda.lang._datatype as datatype
+from cuda.lang._mlir import BoolAttr
 from cuda.lang._enums import MemorySpace
 from cuda.lang._stub import cp_async
-from cuda.lang._stub._nvvm_mlir_support import _raw_nvvm_mlir_operation_impl
-from cuda.lang._stub import nvvm_mlir_interfaces
+from .raw_mlir_operation_utils import RawMLIROperationBuilder
 from ..type_checking_helpers import (
+    is_none,
     make_type_checking_error,
     require_boolean_scalar_type,
-    require_integral_scalar_type,
     require_mbarrier_ptr,
     require_none,
     require_optional,
@@ -53,6 +54,12 @@ def validate_g2s_mode(mode: cp_async.TMALoadMode, im2col_count: int) -> None:
             raise make_type_checking_error(f"Unsupported TMA load mode {mode}")
 
 
+def optional_cast(var, dtype, context: str):
+    if is_none(var):
+        return None
+    return implicit_cast(var, dtype, context)
+
+
 @impl(cp_async.cp_async_bulk_tensor_global_to_shared)
 def cp_async_bulk_tensor_global_to_shared_impl(
     src_tensor_map_descriptor,
@@ -67,9 +74,9 @@ def cp_async_bulk_tensor_global_to_shared_impl(
     predicate,
 ):
     tensor_map = tensor_map_descriptor_like(src_tensor_map_descriptor)
-    require_uniform_int_tuple_type(src_coordinates)
+    src_coordinate_vars = require_uniform_int_tuple_type(src_coordinates)
     im2col_offset_vars = require_uniform_int_tuple_type(im2col_offsets)
-    require_mbarrier_ptr(mbarrier)
+    require_mbarrier_ptr(mbarrier, (MemorySpace.SHARED,))
     mode = require_constant_enum(mode, cp_async.TMALoadMode)
     validate_g2s_mode(mode, len(im2col_offset_vars))
     mode = getattr(mlir.TMALoadMode, mode.name)
@@ -78,6 +85,16 @@ def cp_async_bulk_tensor_global_to_shared_impl(
         (MemorySpace.SHARED, MemorySpace.SHARED_CLUSTER),
     )
     is_cta_only = dst_ty.memory_space == MemorySpace.SHARED
+    group_attr = None
+    src_coordinates = tuple(
+        implicit_cast(coord, datatype.int32, "TMA coordinates")
+        for coord in src_coordinate_vars
+    )
+    im2col_offsets = tuple(
+        implicit_cast(offset, datatype.int16, "TMA im2col offsets")
+        for offset in im2col_offset_vars
+    )
+    l2_cache_hint = optional_cast(l2_cache_hint, datatype.int64, "TMA L2 cache hint")
 
     if is_cta_only:
         message = (
@@ -88,27 +105,40 @@ def cp_async_bulk_tensor_global_to_shared_impl(
         require_none(multicast_mask, message)
         require_none(group, message)
     else:
-        require_optional(multicast_mask, require_integral_scalar_type)
-        require_optional(l2_cache_hint, require_integral_scalar_type)
+        multicast_mask = optional_cast(
+            multicast_mask, datatype.int16, "TMA multicast mask"
+        )
         require_optional(predicate, require_boolean_scalar_type)
         group_value = require_optional_constant_enum(group, cp_async.CTAGroup)
-        if group_value is not None:
-            group = loosely_typed_const(getattr(mlir.CTAGroupKind, group_value.name))
+        group_attr = (
+            None
+            if group_value is None
+            else mlir.CTAGroupKindAttr(
+                value=getattr(mlir.CTAGroupKind, group_value.name)
+            )
+        )
 
-    return _raw_nvvm_mlir_operation_impl(
-        nvvm_mlir_interfaces.cp_async_bulk_tensor_shared_cluster_global,
-        dst_memory,
-        tensor_map,
-        src_coordinates,
-        mbarrier,
-        im2col_offsets,
-        multicast_mask,
-        l2_cache_hint,
-        loosely_typed_const(mode),
-        loosely_typed_const(is_cta_only),
-        group,
-        predicate,
+    builder = (
+        RawMLIROperationBuilder(
+            name="nvvm.cp.async.bulk.tensor.shared.cluster.global"
+        )
+        .add_attribute("mode", mlir.TMALoadModeAttr(value=mode))
+        .add_attribute("isCTAOnly", BoolAttr(value=is_cta_only))
     )
+    if not is_cta_only and group_attr is not None:
+        builder = builder.add_attribute("group", group_attr)
+
+    builder = (
+        builder.add_operand(dst_memory)
+        .add_operand(tensor_map)
+        .add_variadic_operand(src_coordinates)
+        .add_operand(mbarrier)
+        .add_variadic_operand(im2col_offsets)
+        .add_optional_operand(multicast_mask)
+        .add_optional_operand(l2_cache_hint)
+        .add_optional_operand(predicate)
+    )
+    builder.emit()
 
 
 @impl(cp_async.cp_async_bulk_tensor_shared_to_global)
@@ -122,16 +152,22 @@ def cp_async_bulk_tensor_shared_to_global_impl(
 ):
     require_pointer_in_memory_space(src_memory, (MemorySpace.SHARED,))
     tensor_map = tensor_map_descriptor_like(dst_tensor_map_descriptor)
-    require_uniform_int_tuple_type(dst_coordinates)
-    require_optional(l2_cache_hint, require_integral_scalar_type)
+    dst_coordinate_vars = require_uniform_int_tuple_type(dst_coordinates)
     mode = require_constant_enum(mode, cp_async.TMAStoreMode)
     mode = getattr(mlir.TMAStoreMode, mode.name)
-    return _raw_nvvm_mlir_operation_impl(
-        nvvm_mlir_interfaces.cp_async_bulk_tensor_global_shared_cta,
-        tensor_map,
-        src_memory,
-        dst_coordinates,
-        l2_cache_hint,
-        loosely_typed_const(mode),
-        predicate,
+    dst_coordinates = tuple(
+        implicit_cast(coord, datatype.int32, "TMA coordinates")
+        for coord in dst_coordinate_vars
     )
+    l2_cache_hint = optional_cast(l2_cache_hint, datatype.int64, "TMA L2 cache hint")
+    predicate = optional_cast(predicate, datatype.bool_, "TMA predicate")
+    builder = (
+        RawMLIROperationBuilder(name="nvvm.cp.async.bulk.tensor.global.shared.cta")
+        .add_attribute("mode", mlir.TMAStoreModeAttr(value=mode))
+        .add_operand(tensor_map)
+        .add_operand(src_memory)
+        .add_variadic_operand(dst_coordinates)
+        .add_optional_operand(l2_cache_hint)
+        .add_optional_operand(predicate)
+    )
+    builder.emit()
