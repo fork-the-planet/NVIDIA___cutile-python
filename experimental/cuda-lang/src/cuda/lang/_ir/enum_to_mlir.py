@@ -9,7 +9,7 @@
 from functools import singledispatch, partial
 
 import cuda.lang._enums as enums
-from cuda.lang._exception import TileInternalError, TileValueError
+from cuda.lang._exception import InternalError, InvalidValueError
 import cuda.lang._mlir as mlir
 
 
@@ -25,13 +25,13 @@ def enum_to_mlir_nvvm_attribute(cl_enum_value, mlir_enum):
     mlir_attribute_class = mlir_enum.__name__ + "Attr"
     mlir_attribute = getattr(mlir.nvvm, mlir_attribute_class, None)
     if mlir_attribute is None:
-        raise TileInternalError(
+        raise InternalError(
             f"Expected mlir module to have class {mlir_attribute_class} "
             "but it could not be found"
         )
     mlir_enum_value = getattr(mlir_enum, cl_enum_value.name, None)
     if mlir_enum_value is None:
-        raise TileInternalError(
+        raise InternalError(
             f"Expected enum {type(cl_enum_value)} to have corresponding "
             "enum in mlir bindings but it could not be found"
         )
@@ -40,7 +40,7 @@ def enum_to_mlir_nvvm_attribute(cl_enum_value, mlir_enum):
 
 def invalid_enum_member(enum_value, value_map):
     valid = ", ".join(str(value) for value in value_map)
-    return TileValueError(f"Expected one of {valid}, got {enum_value}")
+    return InvalidValueError(f"Expected one of {valid}, got {enum_value}")
 
 
 cl_enum_to_mlir_attribute.register(
@@ -103,7 +103,7 @@ def tc5_mma_kind_to_mlir_attribute(enum_value: enums.Tcgen05MMAKind):
         case Kind.I8:
             return attr(NVVMKind.I8)
         case _:
-            raise TileInternalError(
+            raise InternalError(
                 f"Tcgen05MMAKind.{enum_value._name_} does not have a known "
                 "field in the corresponding NVVM enum"
             )

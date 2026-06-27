@@ -5,7 +5,7 @@
 from cuda.lang._ir.op_defs import RawNVVMIntrinsic
 from cuda.lang._ir.type import ScalarTy
 from cuda.lang._stub import core_api
-from cuda.tile import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.tile._datatype import int32
 from cuda.tile._ir.ir import Var, add_operation
 from cuda.tile._ir.op_impl import ImplRegistry, require_constant_int
@@ -30,7 +30,7 @@ def core_api_impl_registry() -> ImplRegistry:
 def read_gridlike_special_register_impl(sreg_name: str, axis: Var) -> Var:
     axis = require_constant_int(axis)
     if axis not in (0, 1, 2):
-        raise TileTypeError(f"Axis must be 0, 1, or 2, but {axis} was given.")
+        raise TypeCheckingError(f"Axis must be 0, 1, or 2, but {axis} was given.")
     axis_name = "xyz"[axis]
     return add_operation(
         RawNVVMIntrinsic,

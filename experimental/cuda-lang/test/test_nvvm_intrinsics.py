@@ -6,7 +6,8 @@ import pytest
 import torch
 
 import cuda.lang as cl
-from cuda.tile import static_assert, TileTypeError
+from cuda.lang._exception import TypeCheckingError
+from cuda.tile import static_assert
 from .util import require_blackwell_or_newer
 
 
@@ -33,7 +34,7 @@ def test_float_intrinsic_invalid_implicit_cast():
 
     x = torch.tensor([3.0, 5.0], dtype=torch.float64, device="cuda")
     y = torch.zeros((), dtype=torch.float32, device="cuda")
-    with pytest.raises(TileTypeError, match="cannot implicitly cast float64 to float32"):
+    with pytest.raises(TypeCheckingError, match="cannot implicitly cast float64 to float32"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kern, (x, y))
 
 

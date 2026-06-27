@@ -10,7 +10,8 @@ import cuda.lang as cl
 import torch
 
 from cuda.lang.compilation import KernelSignature, ScalarConstraint
-from cuda.tile import static_assert, TileTypeError
+from cuda.lang._exception import TypeCheckingError
+from cuda.tile import static_assert
 from cuda.tile._cext import _spy_on_cuLaunchKernel_begin, _spy_on_cuLaunchKernel_end
 
 
@@ -105,7 +106,7 @@ def test_dynamic_shared_alignment_cannot_exceed_initial_alignment():
         )
         smem[0] = cl.uint8(0)
 
-    with pytest.raises(TileTypeError, match="cannot exceed 1024"):
+    with pytest.raises(TypeCheckingError, match="cannot exceed 1024"):
         cl.compile_simt(
             kern,
             [KernelSignature(())],
@@ -332,7 +333,7 @@ def test_dynamic_kwarg_is_required():
     def kern(n):
         cl.shared_array(shape=(n,), dtype=cl.int32)
 
-    with pytest.raises(TileTypeError,
+    with pytest.raises(TypeCheckingError,
                        match="Shape must be constant when `dynamic` is False"):
         cl.launch(torch.cuda.current_stream(), (1,), (32,), kern, (33,))
 
@@ -342,7 +343,7 @@ def test_arbitrary_expression_is_not_allowed():
     def kern(n):
         cl.shared_array(shape=(n + cl.thread_count(0),), dtype=cl.int32, dynamic=True)
 
-    with pytest.raises(TileTypeError,
+    with pytest.raises(TypeCheckingError,
                        match="Size of shared array must be either"
                              " a constant or a kernel parameter"):
         cl.launch(torch.cuda.current_stream(), (1,), (32,), kern, (33,))

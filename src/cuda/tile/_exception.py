@@ -132,43 +132,64 @@ class TileError(Exception):
         return f"{self.message}\n{format_location(self.loc)}"
 
 
-class TileSyntaxError(TileError):
+class UnsupportedSyntaxError(TileError):
     """Exception when a python syntax not supported by cuTile is encountered."""
     pass
 
 
-class TileTypeError(TileError):
+TileSyntaxError = UnsupportedSyntaxError
+
+
+class TypeCheckingError(TileError):
     """Exception when an unexpected type or |data type| is encountered."""
     pass
 
 
-class TileRecursionError(TileError):
+TileTypeError = TypeCheckingError
+
+
+class RecursionLimitError(TileError):
     """Thrown at compile time to indicate that the recursion limit has been reached
     when inlining a function call.
     """
 
 
-class TileValueError(TileError):
+TileRecursionError = RecursionLimitError
+
+
+class InvalidValueError(TileError):
     """Exception when an unexpected python value is encountered."""
     pass
 
 
-class TileUnsupportedFeatureError(TileError):
+TileValueError = InvalidValueError
+
+
+class UnsupportedFeatureError(TileError):
     """Exception when a feature is not supported by the underlying compiler or
       the GPU architecture."""
     pass
 
 
-class TileInternalError(TileError):
+TileUnsupportedFeatureError = UnsupportedFeatureError
+
+
+class InternalError(TileError):
     pass
 
 
-class TileStaticEvalError(TileError):
+TileInternalError = InternalError
+
+
+class StaticEvalError(TileError):
     """Thrown at compile time when the expression inside static_eval() violates the compile-time
     evaluation constraints."""
 
 
-class TileStaticAssertionError(TileError):
+TileStaticEvalError = StaticEvalError
+
+
+class StaticAssertionError(TileError):
     """Thrown at compile time when the condition of static_assert() evaluates to False."""
 
     def __init__(self, message: str, loc: Loc = Loc.unknown()):
@@ -176,6 +197,9 @@ class TileStaticAssertionError(TileError):
         if len(message) > 0:
             full_message += ": " + message
         super().__init__(full_message, loc)
+
+
+TileStaticAssertionError = StaticAssertionError
 
 
 class ConstantNotFoundError(Exception):
@@ -220,7 +244,7 @@ def _parse_tileir_stderr(stderr: str) -> tuple[str, Optional[Loc]]:
     return "\n".join(msgs), loc
 
 
-class TileCompilerError(TileInternalError):
+class InternalCompilerError(InternalError):
     def __init__(self,
                  message: str,
                  loc: Loc,
@@ -231,8 +255,11 @@ class TileCompilerError(TileInternalError):
         self.compiler_version = compiler_version
 
 
-class TileCompilerExecutionError(TileCompilerError):
-    """Exception when ``tileiras`` compiler throws an error."""
+TileCompilerError = InternalCompilerError
+
+
+class CompilerExecutionError(InternalCompilerError):
+    """Exception when compiler throws an error."""
     def __init__(self,
                  return_code: int,
                  stderr: str,
@@ -245,10 +272,16 @@ class TileCompilerExecutionError(TileCompilerError):
                          compiler_flags, compiler_version)
 
 
-class TileCompilerTimeoutError(TileCompilerError):
-    """Exception when ``tileiras`` compiler timeout limit is exceeded."""
+TileCompilerExecutionError = CompilerExecutionError
+
+
+class CompilerTimeoutError(InternalCompilerError):
+    """Exception when the compiler timeout limit is exceeded."""
     def __init__(self,
                  message: str,
                  compiler_flags: str,
                  compiler_version: Optional[str]):
         super().__init__(message, _unknown_loc, compiler_flags, compiler_version)
+
+
+TileCompilerTimeoutError = CompilerTimeoutError

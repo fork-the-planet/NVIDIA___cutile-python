@@ -5,7 +5,7 @@
 import operator
 
 import cuda.lang._datatype as datatype
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang._ir.ir import Var, add_operation
 from cuda.lang._ir.type import (
     ArrayTy,
@@ -104,7 +104,7 @@ def pointer_info_impl(dtype: Var) -> Var:
     try:
         res = PointerInfo(dtype)
     except TypeError as e:
-        raise TileTypeError(str(e))
+        raise TypeCheckingError(str(e))
 
     return loosely_typed_const(res)
 
@@ -121,7 +121,7 @@ def pointer_info_pointee_dtype_impl(object: Var, name: Var) -> Var:
     try:
         pointee_dtype = info.pointee_dtype
     except ValueError as e:
-        raise TileTypeError(str(e))
+        raise TypeCheckingError(str(e))
 
     return loosely_typed_const(pointee_dtype)
 
@@ -146,7 +146,7 @@ def _get_array_base_pointer(array: Var) -> Var:
     base_ptr = array_val.base_ptr
     expected_type = array_base_pointer_type(array_ty)
     if base_ptr.get_type() != expected_type:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "Array base pointer type does not match expected type: "
             f"{expected_type=}, got {base_ptr.get_type()}"
         )
@@ -158,7 +158,7 @@ def _array_linear_offset(array: Var, indices: tuple[Var, ...]) -> Var:
     zero = strictly_typed_const(0, ScalarTy(uint64))
     offset = zero
     if len(indices) != len(array_val.strides):
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected {len(array_val.strides)} indices but got {len(indices)}"
         )
     for index, stride in zip(indices, array_val.strides, strict=True):
@@ -275,7 +275,7 @@ def pointer_load(
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(LoadPointer, ordering)
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
-        raise TileTypeError("Expected explicit alignment on atomic load")
+        raise TypeCheckingError("Expected explicit alignment on atomic load")
     if count is None or count == 1:
         result_ty = ScalarTy(pointee_dtype)
     else:
@@ -302,7 +302,7 @@ def pointer_store(
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(StorePointer, ordering)
     if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
-        raise TileTypeError("Expected explicit alignment on atomic store")
+        raise TypeCheckingError("Expected explicit alignment on atomic store")
 
     pointee_dtype = pointer_ty.pointee_dtype
     value = implicit_cast(value, pointee_dtype,
@@ -323,7 +323,7 @@ def pointer_with_offset(pointer: Var, offset: Var) -> Var:
     require_pointer_type(pointer)
     ty = require_scalar_type(offset)
     if not datatype.is_integral(ty.dtype):
-        raise TileTypeError("Only integers cna be used to take the offset of a pointer")
+        raise TypeCheckingError("Only integers cna be used to take the offset of a pointer")
     return add_operation(
         PointerOffset,
         pointer.get_type(),
@@ -341,7 +341,7 @@ def pointer_opaque_impl(object: Var[PointerTy], name: Var):
 def pointer_pointee_dtype_impl(object: Var[PointerTy], name: Var):
     ty = object.get_type()
     if ty.opaque:
-        raise TileTypeError("Opaque pointers have no pointee_dtype")
+        raise TypeCheckingError("Opaque pointers have no pointee_dtype")
     return loosely_typed_const(ty.pointee_dtype)
 
 
@@ -389,7 +389,7 @@ def address_space_cast_impl(value: Var, memory_space: Var) -> Var:
 @impl(core_api.reinterpret_pointer_as_array)
 def reinterpret_pointer_as_array_impl(pointer: Var, dtype: Var, shape: Var, strides: Var) -> Var:
     if not strides.is_constant() or strides.get_constant() is not None:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "Reinterpreting a pointer as an array with "
             "non-default strides is not yet implemented."
         )

@@ -18,7 +18,7 @@ import cuda.lang._ir.type as ir_type
 from cuda.lang.compilation import KernelSignature
 import cuda.lang._datatype as datatype
 from cuda.tile._datatype import PointerInfo
-from cuda.lang._exception import TileCompilerError, TileInternalError, TileTypeError
+from cuda.lang._exception import InternalError, TypeCheckingError
 from .type_conversion import (
     ir_type_to_mlir_type,
     mlir_constant_of_type,
@@ -392,11 +392,11 @@ class IR2MLIR:
         if self.defined(var):
             return self.var_map[var.name]
 
-        raise KeyError(f"Variable {var.name} not found")
+        raise InternalError(f"Variable {var.name} not found")
 
     def def_var(self, var: ir.Var, value: mlir.Value):
         if self.defined(var):
-            raise ValueError(f"Variable {var.name} is already defined")
+            raise InternalError(f"Variable {var.name} is already defined")
 
         self.var_map[var.name] = value
 
@@ -1121,12 +1121,12 @@ class IR2MLIR:
             or not isinstance(res_ty, ir_type.VectorTy)
             or x_ty.length != 1
         ):
-            raise TileCompilerError(
+            raise InternalError(
                 "Expected length-1 vector but got result "
                 f"type {res_ty} and operand type {x_ty}"
             )
         if x_ty.element_dtype != res_ty.element_dtype:
-            raise TileCompilerError(
+            raise InternalError(
                 "Expected broadcast operand and result type to have same "
                 f"dtype but got result type {res_ty} and operand type {x_ty}"
             )
@@ -1149,7 +1149,7 @@ class IR2MLIR:
                 res_ty = ir_type_to_mlir_type(res_ty)
                 res = mlir.llvm.add_PoisonOp(res_type=res_ty)
                 if len(res_ty.shape) != 1:
-                    raise TileCompilerError(
+                    raise InternalError(
                         f"Expected vector to have 1d shape but got {res_ty}"
                     )
                 for i in range(res_ty.shape[0]):
@@ -1187,7 +1187,7 @@ class IR2MLIR:
         )
         if prev_type := self._seen_foreign_functions.get(function_name):
             if prev_type != function_type:
-                raise TileTypeError(
+                raise TypeCheckingError(
                     f"Tried calling foreign function {function_name} with type {function_type} "
                     f"but it has already been declared with type {prev_type!r}"
                 )
@@ -1229,14 +1229,14 @@ class IR2MLIR:
                 return [res]
             case ir_type.ScalarTy() as st, ir_type.PointerTy():
                 if not datatype.is_integral(st.dtype):
-                    raise TileInternalError(
+                    raise InternalError(
                         "bitcast to or from pointer must go through integer"
                     )
                 res = mlir.llvm.add_IntToPtrOp(res_type=dst_mlir_ty, arg=x)
                 return [res]
             case ir_type.PointerTy(), ir_type.ScalarTy() as st:
                 if not datatype.is_integral(st.dtype):
-                    raise TileInternalError(
+                    raise InternalError(
                         "bitcast to or from pointer must go through integer"
                     )
                 res = mlir.llvm.add_PtrToIntOp(res_type=dst_mlir_ty, arg=x)

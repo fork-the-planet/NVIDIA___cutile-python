@@ -4,7 +4,7 @@
 
 from cuda.lang._ir.ops import AllocDynSharedMemory, IfElse, Loop, AllocStaticSharedMemory
 from cuda.lang._ir.ir import IRContext, Block, TileBlock, Operation
-from cuda.lang._exception import TileError
+from cuda.lang._exception import UnsupportedFeatureError
 
 
 def visit_block(block: Block, in_control_flow: bool) -> None:
@@ -20,7 +20,7 @@ def visit_op(op: Operation, in_control_flow: bool) -> None:
         case Loop():
             visit_block(op.body, True)
         case (AllocStaticSharedMemory() | AllocDynSharedMemory()) if in_control_flow:
-            raise TileError(
+            raise UnsupportedFeatureError(
                 "Memory allocated in dynamic control flow",
                 op.loc
             )

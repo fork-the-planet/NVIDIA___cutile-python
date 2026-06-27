@@ -3,21 +3,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from cuda.tile._exception import (
-    TileError,
-    TileTypeError,
-    TileUnsupportedFeatureError,
-    TileInternalError,
-    TileCompilerError,
-    TileCompilerExecutionError,
-    TileValueError,
+    TypeCheckingError,
+    InvalidValueError,
+    UnsupportedFeatureError,
+    InternalError,
+    UnsupportedSyntaxError,
+    RecursionLimitError,
+    StaticEvalError,
+    StaticAssertionError,
+    InternalCompilerError,
+    CompilerExecutionError,
+    CompilerTimeoutError,
 )
 
 __all__ = (
-    "TileError",
-    "TileTypeError",
-    "TileUnsupportedFeatureError",
-    "TileInternalError",
-    "TileCompilerError",
-    "TileCompilerExecutionError",
-    "TileValueError",
+    "TypeCheckingError",
+    "InvalidValueError",
+    "UnsupportedFeatureError",
+    "InternalError",
+    "UnsupportedSyntaxError",
+    "RecursionLimitError",
+    "StaticEvalError",
+    "StaticAssertionError",
+    "InternalCompilerError",
+    "CompilerExecutionError",
+    "CompilerTimeoutError",
 )

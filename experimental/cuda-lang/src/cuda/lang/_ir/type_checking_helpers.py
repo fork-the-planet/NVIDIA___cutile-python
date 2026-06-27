@@ -8,10 +8,11 @@ import cuda.lang._datatype as datatype
 from cuda.lang._ir.ir import add_operation
 from cuda.lang._ir.op_defs import LoadPointer, StorePointer, TensorMapAsOpaquePtr
 from cuda.lang._ir.type import MemorySpace, ScalarTy, TensorMapTy, VectorTy, PointerTy
-from cuda.tile import TileTypeError, DType
+from cuda.tile import DType
 from cuda.tile._memory_model import MemoryOrder
 from cuda.tile._ir.ir import Var
 from cuda.tile._ir.op_impl import (
+    make_type_checking_error,
     require_array_type,
     require_optional_constant_enum,
     require_optional_constant_int,
@@ -143,10 +144,11 @@ def require_concrete_pointer_type(var: Var) -> PointerTy:
     ptr_ty = require_pointer_type(var)
     info = PointerInfo(ptr_ty.pointer_dtype)
     if info.opaque:
-        raise TileTypeError(
+        raise make_type_checking_error(
             f"Expected concrete pointer type but got {ptr_ty.pointer_dtype}."
             "\nHint: you can use ``cl.bitcast(ptr, cl.pointer_dtype(dtype))``"
-            " to cast the pointer to a typed pointer."
+            " to cast the pointer to a typed pointer.",
+            var,
         )
     return ptr_ty
 
@@ -155,9 +157,10 @@ def require_pointer_in_memory_space(ptr_value, spaces: tuple[MemorySpace, ...]) 
     ptr_type = require_pointer_type(ptr_value)
     if ptr_type.memory_space not in spaces:
         expected = ' or '.join(map(str, spaces))
-        raise TileTypeError(
+        raise make_type_checking_error(
             f"Expected pointer memory space to be {expected} "
-            f"but got {ptr_type.memory_space}"
+            f"but got {ptr_type.memory_space}",
+            ptr_value,
         )
     return ptr_type
 
@@ -194,7 +197,7 @@ def tensor_map_descriptor_like(var: Var):
 def require_tensor_map_ty(var: Var) -> TensorMapTy:
     ty = var.get_type()
     if not isinstance(ty, TensorMapTy):
-        raise TileTypeError(f"Expected a tensor map, got {ty}")
+        raise make_type_checking_error(f"Expected a tensor map, got {ty}", var)
     return ty
 
 
@@ -211,7 +214,7 @@ def require_optional_alignment(alignment: Var) -> int | None:
         return None
 
     if alignment <= 0 or alignment & (alignment - 1):
-        raise TileTypeError("alignment must be a positive power of two")
+        raise make_type_checking_error("alignment must be a positive power of two")
 
     return alignment
 
@@ -228,7 +231,7 @@ def require_pointer_memory_order(
         "None" if order is None else str(order) for order in operation.valid_orderings
     )
     operation_name = "load" if operation is LoadPointer else "store"
-    raise TileTypeError(
+    raise make_type_checking_error(
         f"Invalid memory order for Pointer.{operation_name}. "
         f"Got {ordering}, expected one of {formatted_expected}"
     )
@@ -243,7 +246,7 @@ def require_mbarrier_ptr(
 ) -> PointerTy:
     mbar_ptr_type = require_pointer_in_memory_space(mbar, spaces)
     if mbar_ptr_type.opaque or mbar_ptr_type.pointee_dtype is not mbarrier:
-        raise TileTypeError(f"Expected a pointer to an mbarrier, got {mbar}")
+        raise make_type_checking_error(f"Expected a pointer to an mbarrier, got {mbar}", mbar)
     return mbar_ptr_type
 
 
@@ -270,9 +273,9 @@ def require_scalar_or_vector_type(var: Var, dtype_predicate=None) -> VectorTy | 
             )
 
     if dtype_predicate is not None and not dtype_predicate(dtype):
-        return make_type_checking_error(
+        raise make_type_checking_error(
             "Expected scalar or vector to satisfy constraint "
-            f"{dtype_predicate.__name__} but got {ty}"
+            f"{dtype_predicate.__name__} but got {ty}", var
         )
 
     return ty
@@ -291,7 +294,7 @@ def broadcast_to_same_shape(x: Var, y: Var) -> tuple[Var, Var]:
         case VectorTy() as vt, ScalarTy():
             y = broadcast_to(y, vt.tensor_shape())
         case VectorTy() as vt1, VectorTy() as vt2 if vt1.length != vt2.length:
-            raise TileTypeError(
+            raise make_type_checking_error(
                 f"Expected scalar and vector with compatible shape but got {vt1} and {vt2}",
             )
     return x, y
@@ -302,12 +305,12 @@ def common_type(x: Var, y: Var):
     y_ty = y.get_loose_type()
 
     if not datatype.is_arithmetic(x_ty.tensor_dtype()):
-        raise TileTypeError(
-            f"Left-hand side has non-arithmetic dtype {x_ty.tensor_dtype()}"
+        raise make_type_checking_error(
+            f"Left-hand side has non-arithmetic dtype {x_ty.tensor_dtype()}", x
         )
     if not datatype.is_arithmetic(y_ty.tensor_dtype()):
-        raise TileTypeError(
-            f"Right-hand side has non-arithmetic dtype {y_ty.tensor_dtype()}"
+        raise make_type_checking_error(
+            f"Right-hand side has non-arithmetic dtype {y_ty.tensor_dtype()}", y
         )
 
     return promote_types(x_ty, y_ty, x.ctx.typing_hooks)
@@ -317,8 +320,3 @@ def optional_cast(var, dtype, context: str):
     if is_none(var):
         return None
     return implicit_cast(var, dtype, context)
-
-
-def make_type_checking_error(message: str, culprit: Var | None = None):
-    # TODO: recover the context similarly to _make_type_error in cutile
-    raise TileTypeError(message)

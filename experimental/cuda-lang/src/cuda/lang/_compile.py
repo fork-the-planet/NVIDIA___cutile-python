@@ -24,7 +24,6 @@ from cuda.tile._annotated_function import (
 )
 from cuda.tile._cext import get_compute_capability as _get_compute_capability
 from cuda.tile._compiler_options import CompilerOptions
-from cuda.tile._exception import TileCompilerExecutionError
 from cuda.lang._logging import get_log_flags
 from cuda.lang._ir import ir, hir
 from cuda.lang._passes.ast2hir import get_function_hir
@@ -41,6 +40,7 @@ from cuda.lang.compilation import (
     ListConstraint,
     ConstantConstraint,
 )
+from cuda.lang._exception import CompilerExecutionError
 from ._execution import kernel
 from cuda.lang._ir.ops import cuda_lang_impl_registry
 from ._ir._host_program import HostProgram, get_host_programs_by_var
@@ -76,7 +76,7 @@ def mlir2cubin(
                 argv, input=mlir_text.encode(), capture_output=True, check=True
             )
         except subprocess.CalledProcessError as e:
-            raise TileCompilerExecutionError(
+            raise CompilerExecutionError(
                 return_code=e.returncode,
                 stderr=e.stderr.decode(),
                 compiler_flags=argv,

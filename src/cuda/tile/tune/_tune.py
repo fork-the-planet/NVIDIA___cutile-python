@@ -45,7 +45,7 @@ class TuningResult(Generic[T]):
     successes: Sequence[Measurement]
     """Measurement of each succeeded config"""
 
-    failures: Sequence[tuple[T, str, str]]
+    failures: Sequence[tuple[T, type[BaseException], str]]
     """`(config, exc_type, message)` for each failed config"""
 
     def summary(self, *, top_k=10, bottom_k=2) -> str:
@@ -89,7 +89,7 @@ class TuningResult(Generic[T]):
                 first_line = msg.split("\n", 1)[0]
                 if len(first_line) > 60:
                     first_line = first_line[:57] + "..."
-                lines.append(f"    {cfg}: {err_type}: {first_line}")
+                lines.append(f"    {cfg}: {err_type.__name__}: {first_line}")
             if n_fail > top_k:
                 lines.append(f"    ... {n_fail - top_k} more not shown")
         if n_ok > top_k or n_fail > top_k:
@@ -264,7 +264,7 @@ def exhaustive_search(
             candidate.warmup(stream, _WARM_UP_REPEATS, single_run_timeout_sec)
             candidate.run_benchmark(stream, _BATCH_REPEATS)
         except Exception as e:
-            errors.append((cfg, type(e).__name__, str(e)))
+            errors.append((cfg, type(e), str(e)))
             continue
 
         if candidate.converged():
@@ -279,7 +279,7 @@ def exhaustive_search(
         try:
             candidate.run_benchmark(stream, _BATCH_REPEATS)
         except Exception as e:
-            errors.append((candidate.config, type(e).__name__, str(e)))
+            errors.append((candidate.config, type(e), str(e)))
             continue
 
         if candidate.converged():
@@ -307,7 +307,7 @@ def exhaustive_search(
                        candidate.mean_us - candidate.error_margin_us < cutoff_mean_us):
                     candidate.run_benchmark(stream, _BATCH_REPEATS)
             except Exception as e:
-                errors.append((candidate.config, type(e).__name__, str(e)))
+                errors.append((candidate.config, type(e), str(e)))
                 continue
 
             if not quiet and isatty:
@@ -320,7 +320,7 @@ def exhaustive_search(
     if not successes:
         cfg, exc_type, msg = errors[0]
         raise ValueError(f"No valid config found in search space."
-                         f"\nConfig: {cfg}\n{exc_type}: {msg}")
+                         f"\nConfig: {cfg}\n{exc_type.__name__}: {msg}")
 
     best = min(successes, key=lambda measure: measure.mean_us)
     result = TuningResult(best=best,

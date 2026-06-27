@@ -16,13 +16,13 @@ from cuda.lang._ir.ops import (
     RawComparisonOperation,
     RawBinaryArithmeticOperation,
 )
-from cuda.lang._exception import TileInternalError
+from cuda.lang._exception import InternalError
 
 
 def _checked_getattr(self, attr: str) -> Var | Block:
     if (attr_value := getattr(self, attr)) is not None:
         return attr_value
-    raise TileInternalError(f"self.{attr} is unexpectedly None")
+    raise InternalError(f"self.{attr} is unexpectedly None")
 
 
 class CFGFlattener:

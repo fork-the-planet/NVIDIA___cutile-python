@@ -5,6 +5,7 @@
 from typing import TypeVar, Generic, Literal
 
 from cuda.lang._execution import stub, function
+from cuda.lang._exception import TypeCheckingError
 from cuda.tile._stub import (
     Array as TileArray,
     static_eval,
@@ -12,7 +13,6 @@ from cuda.tile._stub import (
 from cuda.tile._memory_model import MemoryOrder, MemoryScope, MemorySpace
 from cuda.lang._datatype import DType, int32
 from .types import Pointer, Scalar, Vector
-from cuda.tile._exception import TileTypeError
 
 T = TypeVar("T")
 
@@ -118,8 +118,10 @@ def dtype_of(value, /) -> DType:
         from cuda.tile._ir.typing_support import dtype_of_constant_scalar
         return dtype_of_constant_scalar(value)
     else:
-        raise TileTypeError(f"dtype_of() expects a scalar or a pointer as the argument,"
-                            f" got {type(value)}")
+        raise TypeCheckingError(
+            f"dtype_of() expects a scalar or a pointer as the argument,"
+            f" got {type(value)}"
+        )
 
 
 FULL_MASK = 0xFFFFFFFF

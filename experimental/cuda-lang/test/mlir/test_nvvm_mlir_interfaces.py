@@ -5,7 +5,7 @@
 
 import pytest
 import cuda.lang as cl
-from cuda.lang._exception import TileCompilerExecutionError, TileTypeError, TileValueError
+from cuda.lang._exception import CompilerExecutionError, TypeCheckingError, InvalidValueError
 from cuda.lang._compile import compile_simt, KernelSignature
 import cuda.lang._stub.nvvm_mlir_interfaces as nvvm
 import torch
@@ -85,7 +85,7 @@ def test_mlir_interface_error_on_non_constant_enum():
         nvvm.fence_proxy(kind=dyn_kind)
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected FenceProxyKind constant, but given value is not constant",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (False,))
@@ -98,7 +98,7 @@ def test_mlir_interface_error_on_non_constant_attr():
         nvvm.cluster_arrive(aligned=cond)
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected a boolean constant, but given value is not constant",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (False,))
@@ -114,7 +114,7 @@ def test_wrong_enum_class():
         cl.memory_barrier(scope=nvvm.MemScopeKind.CLUSTER)
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match=r"Expected MemoryScope, but given value has type Enum\[MemScopeKind\]",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
@@ -148,7 +148,7 @@ def test_memory_scope_enum_mappings(enum, expect):
 
     if expect is None:
         with pytest.raises(
-            TileValueError,
+            InvalidValueError,
             match=(
                 "Expected one of MemoryScope.BLOCK, MemoryScope.CLUSTER, "
                 "MemoryScope.DEVICE, MemoryScope.SYS, got MemoryScope.NONE"
@@ -188,7 +188,7 @@ def test_memory_space_enum_mappings(enum, expect):
 
     if expect is None:
         with pytest.raises(
-            TileCompilerExecutionError,
+            CompilerExecutionError,
             match=r"acquire.*release",
         ):
             compile_simt(kernel, [KernelSignature(())])

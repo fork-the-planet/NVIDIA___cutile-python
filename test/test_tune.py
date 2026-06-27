@@ -153,11 +153,11 @@ def test_skips_failed_configs(monkeypatch):
     assert len(result.failures) == 2
 
     err_cfg, err_type, err_msg = result.failures[0]
-    assert (err_cfg, err_type) == (64, "TileCompilerTimeoutError")
+    assert (err_cfg, err_type) == (64, TileCompilerTimeoutError)
     assert "simulated timeout" in err_msg
 
     err_cfg, err_type, _ = result.failures[1]
-    assert (err_cfg, err_type) == (256, "TileCompilerExecutionError")
+    assert (err_cfg, err_type) == (256, TileCompilerExecutionError)
     assert "1 succeeded, 2 failed" in str(result)
 
     assert len(result.successes) == 1
@@ -291,7 +291,7 @@ def test_ipc_tune_handles_launch_timeout(monkeypatch):
     assert len(result.successes) == 2
 
     err_cfg, err_type, err_msg = result.failures[0]
-    assert (err_cfg, err_type) == (1, "TileLaunchTimeoutError")
+    assert (err_cfg, err_type) == (1, tune_utils.TileLaunchTimeoutError)
     assert "CUDA kernel launch exceeded timeout" in err_msg
 
 

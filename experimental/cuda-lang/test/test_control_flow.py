@@ -5,7 +5,7 @@
 import pytest
 import cuda.lang as cl
 from cuda.tile import static_assert, static_eval
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 import torch
 
 
@@ -65,7 +65,7 @@ def test_negative_stride():
         for i in range(2, 1, -1):
             pass
 
-    with pytest.raises(TileTypeError, match="Step must be positive, got -1"):
+    with pytest.raises(TypeCheckingError, match="Step must be positive, got -1"):
         cl.launch(
             torch.cuda.current_stream(),
             (),

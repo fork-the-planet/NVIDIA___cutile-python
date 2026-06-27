@@ -12,7 +12,7 @@ from cuda.tile._ir.cast_ops import implicit_cast
 from cuda.tile._ir.ops import strictly_typed_const
 from cuda.tile._ir.ops_utils import promote_dtypes
 from cuda.tile._ir.type import LooselyTypedScalar
-from cuda.lang._exception import TileInternalError, TileTypeError
+from cuda.lang._exception import InternalError, TypeCheckingError
 import cuda.lang._datatype as datatype
 from ..type_checking_helpers import require_vector_type, require_scalar_type
 from ..op_defs import RawMLIROperation, VectorGetItem
@@ -80,14 +80,14 @@ def _optional_vector_constructor_dtype(dtype: Var) -> datatype.DType | None:
 def _require_vector_constructor_element(element: Var, index: int) -> None:
     try:
         require_scalar_type(element)
-    except TileTypeError as e:
-        raise TileTypeError(f"Vector() element {index}: {str(e)}")
+    except TypeCheckingError as e:
+        raise TypeCheckingError(f"Vector() element {index}: {str(e)}")
 
 
 @impl(Vector)
 def vector_constructor_impl(elements: tuple[Var, ...], dtype: Var) -> Var[VectorTy]:
     if not elements:
-        raise TileTypeError("Vector() expects at least one element")
+        raise TypeCheckingError("Vector() expects at least one element")
 
     for index, element in enumerate(elements):
         _require_vector_constructor_element(element, index)
@@ -110,10 +110,10 @@ def vector_elementwise_apply(
 ):
     vector_types = [require_vector_type(v) for v in vectors]
     if len(vectors) == 0:
-        raise TileInternalError("Expected at least one vector")
+        raise InternalError("Expected at least one vector")
     length = vector_types[0].length
     if not all(v.length == length for v in vector_types[1:]):
-        raise TileInternalError("Expected all vectors to have same length")
+        raise InternalError("Expected all vectors to have same length")
 
     def apply_one(i: int):
         index = strictly_typed_const(i, ScalarTy(datatype.int32))
@@ -124,7 +124,7 @@ def vector_elementwise_apply(
     first_element = apply_one(0)
     element_type = first_element.get_type()
     if not isinstance(element_type, ScalarTy):
-        raise TileInternalError(
+        raise InternalError(
             "Expected elementwise application of function to vector to "
             f"return a scalar but got {element_type}"
         )
@@ -143,7 +143,7 @@ def vector_elementwise_apply(
 # vector_setitem utility though.
 @impl(operator.setitem, overload=(VectorTy, WILDCARD, WILDCARD))
 def vector_setitem_impl(object: Var[VectorTy], key: Var, value: Var):
-    raise TileTypeError("Vectors are immutable: item assignment is not supported")
+    raise TypeCheckingError("Vectors are immutable: item assignment is not supported")
 
 
 @impl(operator.getitem, overload=(VectorTy, WILDCARD))

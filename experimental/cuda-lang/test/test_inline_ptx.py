@@ -4,7 +4,7 @@
 
 import pytest
 import cuda.lang as cl
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 import torch
 
 from .util import compile_for_arguments
@@ -75,7 +75,7 @@ class TestInlinePTXErrors:
         def kernel():
             cl._inline_ptx("add.u32 %0, %1, %1;", ("=x", cl.int32), ("r", 2))
 
-        with pytest.raises(TileTypeError, match="Unknown constraint dtype 'x'"):
+        with pytest.raises(TypeCheckingError, match="Unknown constraint dtype 'x'"):
             compile_for_arguments(kernel, [])
 
     def test_invalid_rmw_constraint(self):
@@ -86,5 +86,5 @@ class TestInlinePTXErrors:
                 ("r", 2),
             )
 
-        with pytest.raises(TileTypeError, match="Unknown constraint rmw modifier '@'"):
+        with pytest.raises(TypeCheckingError, match="Unknown constraint rmw modifier '@'"):
             compile_for_arguments(kernel, [])

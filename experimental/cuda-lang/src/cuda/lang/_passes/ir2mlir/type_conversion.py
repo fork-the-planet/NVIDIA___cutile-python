@@ -9,7 +9,7 @@ import cuda.lang._ir.type as ir_type
 import cuda.lang._mlir as mlir
 import cuda.lang._datatype as datatype
 from cuda.tile._datatype import is_pointer_dtype, PointerInfo
-from cuda.lang._exception import TileInternalError
+from cuda.lang._exception import InternalError
 
 
 @singledispatch
@@ -139,7 +139,7 @@ def _get_type_conversion_encoder(
     to_dtype = to_type.tensor_dtype()
 
     if from_type.tensor_shape() != to_type.tensor_shape():
-        raise TileInternalError(
+        raise InternalError(
             f"Cannot convert between different shapes: {from_type} and {to_type}"
         )
 
@@ -153,7 +153,7 @@ def _get_type_conversion_encoder(
             return "f"
         if datatype.is_integral(t) or datatype.is_boolean(t):
             return "si" if datatype.is_signed(t) else "ui"
-        raise TileInternalError(f"Unsupported dtype: {t}")
+        raise InternalError(f"Unsupported dtype: {t}")
 
     from_kind, to_kind = kind(from_dtype), kind(to_dtype)
     lhs_width = from_dtype.bitwidth

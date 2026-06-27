@@ -9,7 +9,7 @@ import torch
 
 import cuda.lang as cl
 from cuda.lang._datatype import to_torch_dtype
-from cuda.lang._exception import TileTypeError, TileValueError
+from cuda.lang._exception import TypeCheckingError, InvalidValueError
 from cuda.lang.compilation import KernelSignature
 from cuda.tile import static_iter
 
@@ -111,7 +111,7 @@ def test_vector_constructor_rejects_empty():
     def kernel():
         cl.Vector()
 
-    with pytest.raises(TileTypeError, match=r"Vector\(\) expects at least one element"):
+    with pytest.raises(TypeCheckingError, match=r"Vector\(\) expects at least one element"):
         cl.compile_simt(kernel, [KernelSignature([])])
 
 
@@ -120,7 +120,7 @@ def test_vector_constructor_rejects_non_scalar_element():
     def kernel():
         cl.Vector((1, 2))
 
-    with pytest.raises(TileTypeError, match=r"Vector\(\) element 0: Expected a scalar"):
+    with pytest.raises(TypeCheckingError, match=r"Vector\(\) element 0: Expected a scalar"):
         cl.compile_simt(kernel, [KernelSignature([])])
 
 
@@ -129,7 +129,7 @@ def test_vector_constructor_explicit_dtype_rejects_out_of_range_element():
     def kernel():
         cl.Vector(1, 300, dtype=cl.int8)
 
-    with pytest.raises(TileValueError, match="out of range of int8"):
+    with pytest.raises(InvalidValueError, match="out of range of int8"):
         cl.compile_simt(kernel, [KernelSignature([])])
 
 
@@ -139,7 +139,7 @@ def test_vector_constructor_rejects_negative_for_unsigned():
         cl.Vector(cl.uint32(1), -1)
 
     with pytest.raises(
-        TileValueError, match=r"out of range of uint32"
+        InvalidValueError, match=r"out of range of uint32"
     ):
         cl.compile_simt(kernel, [KernelSignature([])])
 
@@ -149,7 +149,7 @@ def test_vector_constructor_rejects_widen_dtype():
     def kernel():
         cl.Vector(cl.int8(1), 2, 3, 5_000_000_000)
 
-    with pytest.raises(TileValueError, match="out of range of int8"):
+    with pytest.raises(InvalidValueError, match="out of range of int8"):
         cl.compile_simt(kernel, [KernelSignature([])])
 
 
@@ -407,6 +407,6 @@ def test_vector_setitem():
             v[0] = 1
 
     with pytest.raises(
-        TileTypeError, match="Vectors are immutable: item assignment is not supported"
+        TypeCheckingError, match="Vectors are immutable: item assignment is not supported"
     ):
         cl.compile_simt(kernel, [KernelSignature([])])

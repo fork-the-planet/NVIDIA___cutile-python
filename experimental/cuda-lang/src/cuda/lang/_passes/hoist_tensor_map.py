@@ -10,7 +10,7 @@ from cuda.lang._ir import ir
 from cuda.lang._ir._host_program import HostProgram
 from cuda.lang._ir.ops import CreateTensorMap
 from cuda.lang._ir.type import TensorMapTy
-from cuda.tile import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.tile._ir.ir import Var
 from cuda.tile._ir.core_ops import assign
 from cuda.tile import _cext
@@ -36,14 +36,18 @@ def hoist_tensor_maps(kernel_body: ir.Block,
         for i, param in enumerate(kernel_body.params):
             if param.name == x.name:
                 return i
-        raise TileTypeError("Array used for tensor map creation must be a kernel parameter",
-                            loc=x.loc)
+        raise TypeCheckingError(
+            "Array used for tensor map creation must be a kernel parameter",
+            loc=x.loc
+        )
 
     def var_to_host_program(x: Var, prog: HostProgram):
         var_prog = host_program_by_var.get(x.name)
         if var_prog is None:
-            raise TileTypeError("Array used for tensor map creation must be a kernel parameter",
-                                loc=x.loc)
+            raise TypeCheckingError(
+                "Array used for tensor map creation must be a kernel parameter",
+                loc=x.loc
+            )
         prog.extend(var_prog)
 
     hoisted_maps = []

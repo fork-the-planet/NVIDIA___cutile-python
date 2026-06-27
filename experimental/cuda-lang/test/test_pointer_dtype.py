@@ -6,7 +6,7 @@ import pytest
 import torch.cuda
 
 import cuda.lang as cl
-import cuda.tile as ct
+from cuda.lang._exception import TypeCheckingError
 from cuda.tile import static_assert
 
 
@@ -74,5 +74,5 @@ def test_opaque_pointer_raises_on_pointee_dtype_access():
         ptr_info = cl.PointerInfo(opaque_ptr_dtype)
         ptr_info.pointee_dtype
 
-    with pytest.raises(ct.TileTypeError, match="Opaque pointer has no pointee dtype"):
+    with pytest.raises(TypeCheckingError, match="Opaque pointer has no pointee dtype"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())

@@ -7,7 +7,7 @@ from cuda.lang._compile import get_compute_capability
 import torch
 import pytest
 
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 
 cc = get_compute_capability()
 if cc < (10, 0):
@@ -57,7 +57,7 @@ def bad_clc_type():
     ),
 )
 def test_invalid_usage(kernel, match):
-    with pytest.raises(TileTypeError, match=match):
+    with pytest.raises(TypeCheckingError, match=match):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
 
 

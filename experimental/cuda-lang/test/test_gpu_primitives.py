@@ -4,7 +4,7 @@
 import math
 
 import cuda.lang as cl
-from cuda.lang._exception import TileCompilerExecutionError
+from cuda.lang._exception import CompilerExecutionError
 import torch
 import pytest
 
@@ -25,7 +25,7 @@ def test_arch_specific_kernel_failure():
         cl.elect_sync()
 
     with pytest.raises(
-        TileCompilerExecutionError,
+        CompilerExecutionError,
         match="Cannot select: intrinsic %llvm.nvvm.elect.sync",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())

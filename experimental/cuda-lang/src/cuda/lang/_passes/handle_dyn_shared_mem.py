@@ -9,7 +9,7 @@ from cuda.lang._ir.ops import AllocDynSharedMemory, GetDynSharedMemoryBasePtr, \
     get_dyn_shared_memory_base_ptr
 from cuda.lang._ir.op_impl.pointer_impl import reinterpret_pointer, pointer_with_offset
 from cuda.lang._datatype import int32
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang._ir.type import PointerTy, ScalarTy
 from cuda.tile._ir.ops import _is_power_of_2
 from cuda.tile._ir.core_ops import assign
@@ -26,7 +26,7 @@ def handle_dynamic_shared_memory(kernel_body: ir.Block,
     alloc_ops.sort(key=_get_alignment, reverse=True)
     max_alignment = _get_alignment(alloc_ops[0])
     if max_alignment > GetDynSharedMemoryBasePtr.initial_alignment:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "Dynamic shared memory alignment cannot exceed "
             f"{GetDynSharedMemoryBasePtr.initial_alignment} bytes",
             loc=alloc_ops[0].loc,
@@ -95,14 +95,18 @@ def _build_host_program(alloc_op: AllocDynSharedMemory,
     for size_var in alloc_op.shape:
         var_prog = host_program_by_var.get(size_var.name)
         if var_prog is None:
-            raise TileTypeError("Size of shared array must be either a constant"
-                                " or a kernel parameter", loc=size_var.loc)
+            raise TypeCheckingError(
+                "Size of shared array must be either a constant"
+                " or a kernel parameter", loc=size_var.loc
+            )
         const_val = var_prog.as_const()
         if const_val is None:
             if size_var.get_type() != ScalarTy(int32):
-                raise TileTypeError(f"Kernel parameter used as shared array size must be int32,"
-                                    f" got {size_var.get_type()}",
-                                    loc=size_var.loc)
+                raise TypeCheckingError(
+                    f"Kernel parameter used as shared array size must be int32,"
+                    f" got {size_var.get_type()}",
+                    loc=size_var.loc
+                )
             individual_size_programs.append(var_prog)
         else:
             constant_factor *= const_val

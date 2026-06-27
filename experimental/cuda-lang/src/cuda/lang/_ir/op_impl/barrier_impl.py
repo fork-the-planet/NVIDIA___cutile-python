@@ -11,13 +11,13 @@ from cuda.tile._ir.op_impl import (
     ImplRegistry,
     require_constant_bool,
 )
-from cuda.tile import TileTypeError
 from cuda.lang._ir.type_checking_helpers import (
     require_integral_scalar_type,
     require_boolean_scalar_type,
     optional_cast,
 )
 from cuda.lang._stub import barrier
+from cuda.lang._exception import TypeCheckingError
 
 _registry = ImplRegistry()
 impl = _registry.impl
@@ -29,7 +29,7 @@ def barrier_impl_registry() -> ImplRegistry:
 
 def _require_barrier_reduction_kind(op):
     if not op.is_constant():
-        raise TileTypeError("Expected BarrierReductionKind constant")
+        raise TypeCheckingError("Expected BarrierReductionKind constant")
     value = op.get_constant()
     if isinstance(value, barrier.BarrierReductionKind):
         return value
@@ -37,7 +37,7 @@ def _require_barrier_reduction_kind(op):
         return barrier.BarrierReductionKind(value)
     except (TypeError, ValueError):
         valid = ", ".join(kind.name for kind in barrier.BarrierReductionKind)
-        raise TileTypeError(f"Expected BarrierReductionKind to be one of {valid}")
+        raise TypeCheckingError(f"Expected BarrierReductionKind to be one of {valid}")
 
 
 @impl(barrier.barrier_reduce_block)

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import cuda.lang as cl
-from cuda.lang._exception import TileCompilerExecutionError
+from cuda.lang._exception import CompilerExecutionError
 from .util import compile_kernel, require_hopper_or_newer
 import pytest
 
@@ -19,7 +19,7 @@ def barrier_sync_block_cases():
                 yield number_of_threads, aligned, None, raises
             elif number_of_threads == 5:
                 raises = pytest.raises(
-                    TileCompilerExecutionError,
+                    CompilerExecutionError,
                     match=(
                         "Number of threads participating in barrier must be "
                         "in multiple of warp size"
@@ -58,7 +58,7 @@ def barrier_arrive_block_cases():
                 yield number_of_threads, aligned, None, raises
             elif number_of_threads == 5:
                 raises = pytest.raises(
-                    TileCompilerExecutionError,
+                    CompilerExecutionError,
                     match=(
                         "Number of threads participating in barrier must "
                         "be in multiple of warp size"
@@ -105,7 +105,7 @@ def barrier_reduce_block_cases():
                         yield op, predicate, number_of_threads, aligned, None, raises
                     elif number_of_threads == 5:
                         raises = pytest.raises(
-                            TileCompilerExecutionError,
+                            CompilerExecutionError,
                             match=(
                                 "Number of threads participating in barrier "
                                 "must be in multiple of warp size"

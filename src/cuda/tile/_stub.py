@@ -4288,7 +4288,7 @@ def static_assert(condition, message=None, /):
     If `condition` evaluates to ``False``, then the `message` expression is evaluated using
     the :py:func:`static_eval` semantics. If the result of the evaluation is None,
     it is replaced with an empty string. Otherwise, it is converted to a string using
-    the builtin ``str()`` function. Then, a :py:class:`TileStaticAssertionError` is raised
+    the builtin ``str()`` function. Then, a :py:class:`StaticAssertionError` is raised
     with the evaluated message string.
 
     Because `message` is evaluated using the :py:func:`static_eval` semantics,
@@ -4307,7 +4307,7 @@ def static_assert(condition, message=None, /):
 
         Traceback (most recent call last):
             ...
-        TileStaticAssertionError: ...Expected ... and ... to have same dtype.
+        StaticAssertionError: ...Expected ... and ... to have same dtype.
 
     Since the message is automatically converted to a string, one can use any object
     in its place, for example:
@@ -4323,7 +4323,7 @@ def static_assert(condition, message=None, /):
 
         Traceback (most recent call last):
             ...
-        TileStaticAssertionError: Static assertion failed: <tile[int32, (4,)]>
+        StaticAssertionError: Static assertion failed: <tile[int32, (4,)]>
 
     Despite being declared as a function, `static_assert()` is treated like a keyword:
     it skips the translation of the surrounded expressions according to the Tile semantics.

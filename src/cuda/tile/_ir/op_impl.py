@@ -16,7 +16,11 @@ from cuda.tile._datatype import (
     is_integral, is_float,
     is_boolean, is_signed, DType, PointerInfo, is_pointer_dtype)
 from cuda.tile._bytecode.version import BytecodeVersion
-from cuda.tile._exception import TileTypeError, TileUnsupportedFeatureError
+from cuda.tile._exception import (
+    TileTypeError,
+    TileUnsupportedFeatureError,
+    TypeCheckingError,
+)
 from cuda.tile._ir.ops_utils import get_dtype
 
 from .typing_support import datatype, get_signature
@@ -255,10 +259,14 @@ def is_scalar(ty: Type, dtype_predicate: Callable[[DType], bool] = lambda _: Tru
 
 def require_constant_int(var: Var) -> int:
     if not var.is_constant():
-        raise _make_type_error("Expected an integer constant, but given value is not constant", var)
+        raise make_type_checking_error(
+            "Expected an integer constant, but given value is not constant", var
+        )
     ty = var.get_type()
     if not is_scalar(ty, is_integral):
-        raise _make_type_error(f"Expected an integer constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected an integer constant, but given value has type {ty}", var
+        )
     return var.get_constant()
 
 
@@ -270,20 +278,27 @@ def require_optional_constant_int(var: Var) -> Optional[int]:
 
 def require_constant_bool(var: Var) -> bool:
     if not var.is_constant():
-        raise _make_type_error("Expected a boolean constant, but given value is not constant", var)
+        raise make_type_checking_error(
+            "Expected a boolean constant, but given value is not constant", var
+        )
     ty = var.get_type()
     if not is_scalar(ty, is_boolean):
-        raise _make_type_error(f"Expected a boolean constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a boolean constant, but given value has type {ty}", var
+        )
     return var.get_constant()
 
 
 def require_constant_scalar(var: Var) -> bool | int | float:
     ty = var.get_type()
     if not is_scalar(ty):
-        raise _make_type_error(f"Expected a scalar constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a scalar constant, but given value has type {ty}", var
+        )
     if not var.is_constant():
-        raise _make_type_error(f"Expected a constant, but given value has non-constant type {ty}",
-                               var)
+        raise make_type_checking_error(
+            f"Expected a constant, but given value has non-constant type {ty}", var
+        )
     ret = var.get_constant()
     assert isinstance(ret, bool | int | float)
     return ret
@@ -296,11 +311,15 @@ def require_constant_scalar_tuple(var: Var) -> tuple[bool | int | float, ...]:
     assert isinstance(tuple_val, TupleValue)
     for i, (item_ty, item) in enumerate(zip(ty.value_types, tuple_val.items, strict=True)):
         if not is_scalar(item_ty):
-            raise _make_type_error(f"Expected a tuple of scalar constants,"
-                                   f" but item at position #{i} has type {item_ty}", var)
+            raise make_type_checking_error(
+                f"Expected a tuple of scalar constants,"
+                f" but item at position #{i} has type {item_ty}", var
+            )
         if not item.is_constant():
-            raise _make_type_error(f"Expected a tuple of scalar constants,"
-                                   f" but item at position #{i} has non-constant type {ty}", var)
+            raise make_type_checking_error(
+                f"Expected a tuple of scalar constants,"
+                f" but item at position #{i} has non-constant type {ty}", var
+            )
         value = item.get_constant()
         assert isinstance(value, bool | int | float)
         ret.append(value)
@@ -315,10 +334,14 @@ def require_optional_constant_bool(var: Var) -> Optional[bool]:
 
 def require_constant_str(var: Var) -> str:
     if not var.is_constant():
-        raise _make_type_error("Expected a string constant, but given value is not constant", var)
+        raise make_type_checking_error(
+            "Expected a string constant, but given value is not constant", var
+        )
     ty = var.get_type()
     if not isinstance(ty, StringTy):
-        raise _make_type_error(f"Expected a string constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a string constant, but given value has type {ty}", var
+        )
     return ty.value
 
 
@@ -330,24 +353,32 @@ def require_optional_constant_str(var: Var) -> Optional[str]:
 
 def require_constant_slice(var: Var) -> slice:
     if not var.is_constant():
-        raise _make_type_error("Expected a slice constant, but given value is not constant", var)
+        raise make_type_checking_error(
+            "Expected a slice constant, but given value is not constant", var
+        )
     ty = var.get_type()
     if not isinstance(ty, SliceType):
-        raise _make_type_error(f"Expected a slice constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a slice constant, but given value has type {ty}", var
+        )
     return var.get_constant()
 
 
 def require_dtype_spec(var: Var) -> DType:
     ty = var.get_type()
     if not isinstance(ty, DTypeSpec):
-        raise _make_type_error(f"Expected a dtype constant, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a dtype constant, but given value has type {ty}", var
+        )
     return ty.dtype
 
 
 def require_constant_pointer_info(var: Var) -> PointerInfo:
     ty = var.get_type()
     if not isinstance(ty, PointerInfoTy):
-        raise _make_type_error(f"Expected a PointerInfo object, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a PointerInfo object, but given value has type {ty}", var
+        )
     assert var.is_constant()
     return ty.info
 
@@ -363,17 +394,23 @@ def require_optional_range_type(var: Var) -> RangeIterType | None:
         return None
     ty = var.get_type()
     if not isinstance(ty, RangeIterType):
-        raise _make_type_error(f"Expected a range object, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a range object, but given value has type {ty}", var
+        )
     return ty
 
 
 def require_constant_enum(var: Var, enum: EnumMeta):
     if not var.is_constant():
-        raise _make_type_error(f"Expected {enum.__name__} constant,"
-                               f" but given value is not constant", var)
+        raise make_type_checking_error(
+            f"Expected {enum.__name__} constant,"
+            f" but given value is not constant", var
+        )
     ty = var.get_type()
     if not isinstance(ty, EnumTy) or ty.enum_ty is not enum:
-        raise _make_type_error(f"Expected {enum.__name__}, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected {enum.__name__}, but given value has type {ty}", var
+        )
     return var.get_constant()
 
 
@@ -382,26 +419,30 @@ def normalize_axis(axis: int, ndim: int, var: Optional[Var] = None) -> int:
     if axis < 0:
         axis += ndim
     if axis < 0 or axis >= ndim:
-        raise _make_type_error(f"Axis {orig_axis} is out of range for rank {ndim}'", var)
+        raise make_type_checking_error(f"Axis {orig_axis} is out of range for rank {ndim}'", var)
     return axis
 
 
 def require_constant_int_tuple(var: Var, allow_single_int: bool = False) -> Tuple[int, ...]:
     if not var.is_constant():
-        raise _make_type_error("Expected a constant integer tuple,"
-                               " but given value is not constant", var)
+        raise make_type_checking_error(
+            "Expected a constant integer tuple,"
+            " but given value is not constant", var
+        )
 
     ty = var.get_type()
     if allow_single_int and is_scalar(ty):
         return require_constant_int(var),
 
     if not isinstance(ty, TupleTy):
-        raise _make_type_error(f"Expected a tuple, but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected a tuple, but given value has type {ty}", var)
 
     for i, item_ty in enumerate(ty.value_types):
         if not is_scalar(item_ty, is_integral):
-            raise _make_type_error(f"Expected a tuple of integers,"
-                                   f" but element #{i} has type {item_ty}", var)
+            raise make_type_checking_error(
+                f"Expected a tuple of integers,"
+                f" but element #{i} has type {item_ty}", var
+            )
 
     val = var.get_constant()
     assert isinstance(val, tuple)
@@ -419,15 +460,15 @@ def require_constant_shape(var: Var,
 
     if (expected_rank is not None and len(shape) != expected_rank
             and not (allow_0d_shape and len(shape) == 0)):
-        raise _make_type_error(
+        raise make_type_checking_error(
             f"Expected {var_name} length to be {expected_rank}, got {len(shape)}", var)
 
     for i, x in enumerate(shape):
         if x <= 0:
-            raise _make_type_error(
+            raise make_type_checking_error(
                 f"Dimension #{i} of {var_name} {tuple(shape)} is not positive", var)
         if not allow_non_power_of_two and x & (x - 1) != 0:
-            raise _make_type_error(
+            raise make_type_checking_error(
                 f"Dimension #{i} of {var_name} {tuple(shape)} is not a power of two", var)
 
     return shape
@@ -442,7 +483,7 @@ def require_constant_axis_order(var: Var, rank: int) -> Tuple[int, ...]:
     Returns a tuple that contains the "normalized" (i.e. non-negative) axis indices.
     """
     if not var.is_constant():
-        raise _make_type_error("Expected a constant string or integer tuple", var)
+        raise make_type_checking_error("Expected a constant string or integer tuple", var)
 
     value = var.get_constant()
     if value == "C":
@@ -450,11 +491,11 @@ def require_constant_axis_order(var: Var, rank: int) -> Tuple[int, ...]:
     elif value == "F":
         return tuple(range(rank - 1, -1, -1))
     elif isinstance(value, str):
-        raise _make_type_error(f"Expected 'C' or 'F', got '{value}'", var)
+        raise make_type_checking_error(f"Expected 'C' or 'F', got '{value}'", var)
 
     value = require_constant_int_tuple(var)
     if len(value) != rank:
-        raise _make_type_error(f"Expected tuple of length {rank}, got {len(value)}", var)
+        raise make_type_checking_error(f"Expected tuple of length {rank}, got {len(value)}", var)
 
     if len(value) == 0:
         return value
@@ -462,15 +503,19 @@ def require_constant_axis_order(var: Var, rank: int) -> Tuple[int, ...]:
     ret = tuple(normalize_axis(x, rank, var) for x in value)
     [(repeating_axis, repeat_count)] = Counter(ret).most_common(1)
     if repeat_count > 1:
-        raise _make_type_error(f"Axis order must be a permutation, but axis {repeating_axis}"
-                               f" is used at least twice", var)
+        raise make_type_checking_error(
+            f"Axis order must be a permutation, but axis {repeating_axis}"
+            f" is used at least twice", var
+        )
     return ret
 
 
 def ensure_tile(var: Var) -> Var[TileTy]:
     ty = var.get_type()
     if not isinstance(ty, TileTy):
-        raise _make_type_error(f"Expected a tile, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a tile, but given value has type {ty}", var
+        )
     return var
 
 
@@ -484,8 +529,9 @@ def require_tile_or_tile_tuple_type(var: Var) -> TileTy | TupleTy:
         return ty
     if isinstance(ty, TupleTy) and all(isinstance(x, TileTy) for x in ty.value_types):
         return ty
-    raise _make_type_error(f"Expected a tile or a tuple of tiles, but given value has type {ty}",
-                           var)
+    raise make_type_checking_error(
+        f"Expected a tile or a tuple of tiles, but given value has type {ty}", var
+    )
 
 
 def require_tile_maybe_loose_type(var: Var) \
@@ -499,15 +545,18 @@ def require_tile_maybe_loose_type(var: Var) \
 def require_0d_tile_type(var: Var) -> TileTy:
     ty = var.get_type()
     if not isinstance(ty, TileTy) or ty.ndim != 0:
-        raise _make_type_error(f"Expected a scalar or a 0D tile, but given value has type {ty}",
-                               var)
+        raise make_type_checking_error(
+            f"Expected a scalar or a 0D tile, but given value has type {ty}", var
+        )
     return ty
 
 
 def ensure_scalar(var: Var) -> Var[TensorLikeTy]:
     ty = var.get_type()
     if not isinstance(ty, TensorLikeTy) or ty.tensor_shape() != ():
-        raise _make_type_error(f"Expected a scalar value, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a scalar value, but given value has type {ty}", var
+        )
     return var
 
 
@@ -518,28 +567,30 @@ def require_scalar_type(var: Var) -> TensorLikeTy:
 def require_any_vector_type(var: Var) -> TileTy:
     ty = var.get_type()
     if not isinstance(ty, TileTy) or ty.ndim != 1:
-        raise _make_type_error(f"Expected a vector but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected a vector but given value has type {ty}", var)
     return ty
 
 
 def require_any_scalar_or_vector_type(var: Var) -> TileTy:
     ty = var.get_type()
     if not isinstance(ty, TileTy) or ty.ndim not in (0, 1):
-        raise _make_type_error(f"Expected a scalar or a vector but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a scalar or a vector but given value has type {ty}", var
+        )
     return ty
 
 
 def require_integer_0d_tile_type(var: Var) -> TileTy:
     ty = require_0d_tile_type(var)
     if not datatype.is_integral(ty.dtype):
-        raise _make_type_error(f"Expected an integer scalar, but got {ty}", var)
+        raise make_type_checking_error(f"Expected an integer scalar, but got {ty}", var)
     return ty
 
 
 def require_signed_integer_0d_tile_type(var: Var) -> TileTy:
     ty = require_0d_tile_type(var)
     if not datatype.is_integral(ty.dtype) or not datatype.is_signed(ty.dtype):
-        raise _make_type_error(f"Expected a signed integer scalar, but got {ty}", var)
+        raise make_type_checking_error(f"Expected a signed integer scalar, but got {ty}", var)
     return ty
 
 
@@ -547,7 +598,7 @@ def require_signed_integer_scalar_type(var: Var) -> TensorLikeTy:
     ty = require_scalar_type(var)
     dtype = ty.tensor_dtype()
     if not datatype.is_integral(dtype) or not datatype.is_signed(dtype):
-        raise _make_type_error(f"Expected a signed integer scalar, but got {ty}", var)
+        raise make_type_checking_error(f"Expected a signed integer scalar, but got {ty}", var)
     return ty
 
 
@@ -561,7 +612,7 @@ def require_pointer_tile_type(var: Var) -> TileTy:
 def require_bool_scalar_type(var: Var) -> TensorLikeTy:
     ty = var.get_type()
     if not is_scalar(ty, is_boolean):
-        raise _make_type_error(f"Expected a bool, but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected a bool, but given value has type {ty}", var)
     return ty
 
 
@@ -575,7 +626,7 @@ def require_0d_tile_maybe_loose_type(var: Var) -> TileTy | LooselyTypedScalar:
 def require_array_type(var: Var) -> ArrayTy:
     ty = var.get_type()
     if not isinstance(ty, ArrayTy):
-        raise _make_type_error(f"Expected an array, but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected an array, but given value has type {ty}", var)
     return ty
 
 
@@ -589,28 +640,32 @@ def require_tiled_view_type(var: Var) -> TiledViewTy:
 def require_raw_array_memory_type(var: Var) -> RawArrayMemoryTy:
     ty = var.get_type()
     if not isinstance(ty, RawArrayMemoryTy):
-        raise _make_type_error(f"Expected a RawArrayMemory, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a RawArrayMemory, but given value has type {ty}", var
+        )
     return ty
 
 
 def require_list_type(var: Var) -> ListTy:
     ty = var.get_type()
     if not isinstance(ty, ListTy):
-        raise _make_type_error(f"Expected a list, but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected a list, but given value has type {ty}", var)
     return ty
 
 
 def require_tuple_type(var: Var) -> TupleTy:
     ty = var.get_type()
     if not isinstance(ty, TupleTy):
-        raise _make_type_error(f"Expected a tuple, but given value has type {ty}", var)
+        raise make_type_checking_error(f"Expected a tuple, but given value has type {ty}", var)
     return ty
 
 
 def require_dataclass_type(var: Var) -> DataclassTy:
     ty = var.get_type()
     if not isinstance(ty, DataclassTy):
-        raise _make_type_error(f"Expected a dataclass instance, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a dataclass instance, but given value has type {ty}", var
+        )
     return ty
 
 
@@ -632,20 +687,25 @@ def require_index_or_index_tuple_type(var: Var,
             what = f"item #{i}" if isinstance(ty, TupleTy) else "given value"
             signed = "" if allow_unsigned else "signed "
             if allow_nd_tiles:
-                raise _make_type_error(f"Expected a tuple of {signed}integer scalars/tiles"
-                                       f" or a single {signed}integer scalar/tile,"
-                                       f" but {what} has type {item_ty}", var)
+                raise make_type_checking_error(
+                    f"Expected a tuple of {signed}integer scalars/tiles"
+                    f" or a single {signed}integer scalar/tile,"
+                    f" but {what} has type {item_ty}", var
+                )
             else:
-                raise _make_type_error(f"Expected a tuple of {signed}integers or a single"
-                                       f" {signed}integer scalar, but {what} has type {item_ty}",
-                                       var)
+                raise make_type_checking_error(
+                    f"Expected a tuple of {signed}integers or a single"
+                    f" {signed}integer scalar, but {what} has type {item_ty}", var
+                )
     return ty
 
 
 def require_callable_type(var: Var) -> FunctionTy | BoundMethodTy | ClosureTy | DTypeConstructor:
     ty = var.get_type()
     if not isinstance(ty, FunctionTy | BoundMethodTy | ClosureTy | DTypeConstructor):
-        raise _make_type_error(f"Expected a callable object, but given value has type {ty}", var)
+        raise make_type_checking_error(
+            f"Expected a callable object, but given value has type {ty}", var
+        )
     return ty
 
 
@@ -806,7 +866,7 @@ def _recover_error_context(var: Optional[Var]) -> Optional[_ErrorContext]:
     return None
 
 
-def _make_type_error(what: str, var: Optional[Var]) -> TileTypeError:
+def make_type_checking_error(what: str, var: Optional[Var] = None) -> TypeCheckingError:
     context = _recover_error_context(var)
     if context is None:
         context_str = ""
@@ -816,4 +876,4 @@ def _make_type_error(what: str, var: Optional[Var]) -> TileTypeError:
         else:
             arg_name = f'"{context.param_name_or_idx}"'
         context_str = f"Invalid argument {arg_name} of {context.function_name}(): "
-    return TileTypeError(context_str + what)
+    return TypeCheckingError(context_str + what)

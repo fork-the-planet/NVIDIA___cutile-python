@@ -6,7 +6,7 @@ import pytest
 
 import cuda.lang as cl
 from cuda.lang._compile import KernelSignature, get_compute_capability
-from cuda.lang._exception import TileTypeError, TileValueError, TileCompilerExecutionError
+from cuda.lang._exception import TypeCheckingError, InvalidValueError, CompilerExecutionError
 from test.util import make_symbolic_tensor, compile_kernel
 
 
@@ -78,7 +78,7 @@ def test_dealloc_requires_tensor_pointer():
         cl.tcgen05_deallocate(p3, 5)
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected pointer memory space to be MemorySpace.TENSOR "
         "but got MemorySpace.SHARED",
     ):
@@ -173,7 +173,7 @@ def test_store_rejects_wrong_value_dtype():
 
     compile_kernel(
         kernel,
-        raises=pytest.raises(TileTypeError, match="Expected scalar 32-bit integer"),
+        raises=pytest.raises(TypeCheckingError, match="Expected scalar 32-bit integer"),
     )
 
 
@@ -193,7 +193,7 @@ def test_store_rejects_invalid_register_count():
 
     compile_kernel(
         kernel,
-        raises=pytest.raises(TileValueError, match="Expected register count"),
+        raises=pytest.raises(InvalidValueError, match="Expected register count"),
     )
 
 
@@ -213,7 +213,7 @@ def test_store_offset_validation(shape, offset):
 
     compile_kernel(
         kernel,
-        raises=pytest.raises(TileTypeError, match="offset"),
+        raises=pytest.raises(TypeCheckingError, match="offset"),
     )
 
 
@@ -256,15 +256,15 @@ def test_copy(shape, cta_group, multicast, source_format):
     expect = None
     raises = None
     if cta_group not in tuple(cl.CTAGroup):
-        raises = pytest.raises(TileTypeError, match="Expected CTAGroup")
+        raises = pytest.raises(TypeCheckingError, match="Expected CTAGroup")
     elif shape not in tuple(cl.Tcgen05CopyShape):
-        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopyShape")
+        raises = pytest.raises(TypeCheckingError, match="Expected Tcgen05CopyShape")
     elif multicast not in (*tuple(cl.Tcgen05CopyMulticast), None):
-        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopyMulticast")
+        raises = pytest.raises(TypeCheckingError, match="Expected Tcgen05CopyMulticast")
     elif source_format not in (*tuple(cl.Tcgen05CopySourceFormat), None):
-        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopySourceFormat")
+        raises = pytest.raises(TypeCheckingError, match="Expected Tcgen05CopySourceFormat")
     elif multicast not in valid_multicasts[shape]:
-        raises = pytest.raises(TileCompilerExecutionError)
+        raises = pytest.raises(CompilerExecutionError)
     else:
         shape_str = shape.name.removeprefix("SHAPE_")
         group_str = "cta_group::" + str(1 if cta_group is cl.CTAGroup.CTA_1 else 2)
@@ -323,7 +323,7 @@ def test_load(shape, count, pack, offset):
     compile_kernel(
         kernel,
         assert_in_ptx=None if bad_args else ("tcgen05.ld.sync.aligned", shape.value),
-        raises=pytest.raises((TileTypeError, TileValueError)) if bad_args else None,
+        raises=pytest.raises((TypeCheckingError, InvalidValueError)) if bad_args else None,
     )
 
 
@@ -429,7 +429,7 @@ def test_mma_block_scale_valid_enum_combinations(
     else:
         compile_kernel(
             kernel,
-            raises=pytest.raises(TileValueError),
+            raises=pytest.raises(InvalidValueError),
         )
 
 
@@ -529,7 +529,8 @@ def test_mma_matrix_a_validation():
         "Expected a tensor memory pointer or a shared memory descriptor "
         "encoded as a 64 bit integer but got int32"
     )
-    compile_kernel(kernel, raises=pytest.raises(TileTypeError, match=match))
+
+    compile_kernel(kernel, raises=pytest.raises(TypeCheckingError, match=match))
 
 
 @pytest.mark.parametrize(

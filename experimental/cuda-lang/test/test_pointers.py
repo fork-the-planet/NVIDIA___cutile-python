@@ -8,7 +8,7 @@ import torch
 from typing import Any
 from cuda.tile import static_assert
 from cuda.lang._compile import compile_simt
-from cuda.lang._exception import TileError, TileTypeError
+from cuda.lang._exception import UnsupportedFeatureError, TypeCheckingError
 from cuda.lang.compilation import KernelSignature
 
 from .util import (
@@ -59,7 +59,7 @@ def test_atomic_store_missing_alignment():
         ptr = cl.shared_array(1, cl.int32).get_base_pointer()
         ptr.store(0, memory_order=cl.MemoryOrder.RELAXED)
 
-    with pytest.raises(TileTypeError, match="Expected explicit alignment on atomic"):
+    with pytest.raises(TypeCheckingError, match="Expected explicit alignment on atomic"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
 
 
@@ -69,7 +69,7 @@ def test_atomic_load_missing_alignment():
         ptr = cl.shared_array(1, cl.int32).get_base_pointer()
         ptr.load(memory_order=cl.MemoryOrder.RELAXED)
 
-    with pytest.raises(TileTypeError, match="Expected explicit alignment on atomic"):
+    with pytest.raises(TypeCheckingError, match="Expected explicit alignment on atomic"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
 
 
@@ -88,7 +88,7 @@ def test_atomic_ptr_load_invalid_ordering(ordering):
         out[0] = ptr.load(memory_order=ordering, alignment=16)
 
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
-    with pytest.raises(TileTypeError, match="Invalid memory order for Pointer.load"):
+    with pytest.raises(TypeCheckingError, match="Invalid memory order for Pointer.load"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
 
 
@@ -106,7 +106,7 @@ def test_atomic_ptr_store_invalid_ordering(ordering):
         ptr.store(cl.int32(0), memory_order=ordering, alignment=4)
 
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
-    with pytest.raises(TileTypeError, match="Invalid memory order for Pointer.store"):
+    with pytest.raises(TypeCheckingError, match="Invalid memory order for Pointer.store"):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
 
 
@@ -301,7 +301,7 @@ def test_device_allocation_invalid_alignment(allocator, alignment):
         if isinstance(alignment, bool)
         else "alignment must be a positive power of two"
     )
-    with pytest.raises(TileError, match=match):
+    with pytest.raises(TypeCheckingError, match=match):
         compile_for_arguments(kernel, ())
 
 
@@ -310,7 +310,7 @@ def test_device_allocation_alignment_must_be_constant(allocator):
     def kernel(alignment):
         allocator(shape=(1,), dtype=cl.int32, alignment=alignment)
 
-    with pytest.raises(TileError, match="Expected an integer constant"):
+    with pytest.raises(TypeCheckingError, match="Expected an integer constant"):
         compile_for_arguments(kernel, (make_symbolic_scalar(cl.int32),))
 
 
@@ -320,7 +320,7 @@ def test_allocate_shmem_in_runtime_conditional():
             cl.shared_array(shape=(1,), dtype=cl.int32)
 
     tensor_constraint = make_symbolic_tensor(shape=(2,), dtype=cl.float32)
-    with pytest.raises(TileError, match="Memory allocated in dynamic control flow"):
+    with pytest.raises(UnsupportedFeatureError, match="Memory allocated in dynamic control flow"):
         compile_for_arguments(kernel, (tensor_constraint,))
 
 
@@ -330,7 +330,7 @@ def test_allocate_shmem_in_runtime_loop():
             cl.shared_array(shape=(1,), dtype=cl.int32)
 
     tensor_constraint = make_symbolic_tensor(shape=(2,), dtype=cl.float32)
-    with pytest.raises(TileError, match="Memory allocated in dynamic control flow"):
+    with pytest.raises(UnsupportedFeatureError, match="Memory allocated in dynamic control flow"):
         compile_for_arguments(kernel, (tensor_constraint,))
 
 
@@ -401,7 +401,7 @@ def test_map_shared_to_leader_block_rejects_global_pointer():
     def kernel(out):
         cl.map_shared_to_leader_block(out.get_base_pointer())
 
-    with pytest.raises(TileTypeError, match="Expected pointer memory space"):
+    with pytest.raises(TypeCheckingError, match="Expected pointer memory space"):
         compile_simt(
             kernel,
             [KernelSignature([make_symbolic_tensor(1, cl.uint32)])],
@@ -416,7 +416,7 @@ def test_opaque_pointer_getitem():
         arr[0] += p[0]
 
     with pytest.raises(
-        TileTypeError, match="Expected concrete pointer type but got opaque_pointer"
+        TypeCheckingError, match="Expected concrete pointer type but got opaque_pointer"
     ):
         arr = torch.tensor([1], dtype=torch.int32).cuda()
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
@@ -430,7 +430,7 @@ def test_opaque_pointer_setitem():
         p[0] = 5
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected concrete pointer type but got opaque_pointer",
     ):
         arr = torch.tensor([1], dtype=torch.int32).cuda()
@@ -443,7 +443,7 @@ def test_pointer_access_2d_fails():
         arr.get_base_pointer()[0, 0] = 5
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected a scalar, but given value has type Tuple",
     ):
         arr = torch.tensor([1], dtype=torch.int32).cuda()

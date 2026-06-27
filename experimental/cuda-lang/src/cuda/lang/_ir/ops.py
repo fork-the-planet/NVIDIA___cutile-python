@@ -71,7 +71,7 @@ from cuda.tile._ir.control_flow_ops import (
     MakeDummy,
 )
 from cuda.tile._ir.ir import MemoryEffect, make_aggregate, add_operation_variadic
-from cuda.lang._exception import TileCompilerError, TileTypeError, TileValueError
+from cuda.lang._exception import InternalError, TypeCheckingError, InvalidValueError
 import cuda.lang._datatype as datatype
 from cuda.tile._datatype import (
     is_pointer_dtype,
@@ -188,7 +188,9 @@ def dtype_of_impl(value: Var):
     elif isinstance(ty, PointerTy):
         dtype = ty.pointer_dtype
     else:
-        raise TileTypeError(f"dtype_of() expects a scalar or a pointer as the argument, got {ty}")
+        raise TypeCheckingError(
+            f"dtype_of() expects a scalar or a pointer as the argument, got {ty}"
+        )
     return loosely_typed_const(dtype)
 
 
@@ -295,7 +297,7 @@ def atomic_cas_impl(
     val = astype(val, dtype)
     compare_ty = require_scalar_type(old)
     if dtype != compare_ty.dtype:
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected atomic compare value of type {dtype}, got {compare_ty.dtype}"
         )
     result_ty = ScalarTy(dtype)
@@ -321,7 +323,7 @@ async def add_impl(x: Var, y: Var) -> Var:
     if isinstance(xty, PointerTy):
         offset_dtype = require_scalar_type(y).dtype
         if not datatype.is_integral(offset_dtype):
-            raise TileTypeError(f"Expected integer pointer offset, got {offset_dtype}")
+            raise TypeCheckingError(f"Expected integer pointer offset, got {offset_dtype}")
         return pointer_with_offset(x, y)
     return binary_arithmetic_tensorlike("add", x, y)
 
@@ -332,13 +334,13 @@ async def sub_impl(x: Var, y: Var) -> Var:
     if isinstance(xty, PointerTy):
         offset_dtype = require_scalar_type(y).dtype
         if not datatype.is_integral(offset_dtype):
-            raise TileTypeError(f"Expected integer pointer offset, got {offset_dtype}")
+            raise TypeCheckingError(f"Expected integer pointer offset, got {offset_dtype}")
         y = astype(y, datatype.int64)
         c0 = loosely_typed_const(0)
         offset = binary_arithmetic_tensorlike('sub', c0, y)
         return pointer_with_offset(x, offset)
     if isinstance(yty, PointerTy):
-        raise TileTypeError('It is invalid to subtract a pointer from an integer')
+        raise TypeCheckingError('It is invalid to subtract a pointer from an integer')
     return binary_arithmetic_tensorlike("sub", x, y)
 
 
@@ -428,7 +430,7 @@ def local_array_impl(shape: Var, dtype: Var, alignment: Var) -> Var:
     alignment = require_optional_alignment(alignment)
     dtype_byte_width = _dtype_byte_width(dtype)
     if alignment is not None and alignment < dtype_byte_width:
-        raise TileTypeError(f"Requested {alignment=} is less than {dtype_byte_width}")
+        raise TypeCheckingError(f"Requested {alignment=} is less than {dtype_byte_width}")
 
     state = ContextManagerState()
     agg_ty = LocalArrayContextManagerTy(dtype, shape, alignment, state)
@@ -443,8 +445,10 @@ def enter_context_local_array_impl(manager: Var):
 
     dtype_byte_width = _dtype_byte_width(mgr_ty.dtype)
     if mgr_ty.alignment is not None and mgr_ty.alignment < dtype_byte_width:
-        raise TileTypeError(f"Requested alignment {mgr_ty.alignment}"
-                            f" is less than item size {dtype_byte_width}")
+        raise TypeCheckingError(
+            f"Requested alignment {mgr_ty.alignment}"
+            f" is less than item size {dtype_byte_width}"
+        )
     strides = contiguous_strides_from_shape(mgr_ty.shape)
     index_dtype = datatype.int32
     array_type = ArrayTy(
@@ -509,7 +513,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
     alignment = require_optional_alignment(alignment)
     dtype_byte_width = _dtype_byte_width(dtype)
     if alignment is not None and alignment < dtype_byte_width:
-        raise TileTypeError(f"Requested {alignment=} is less than {dtype_byte_width=}")
+        raise TypeCheckingError(f"Requested {alignment=} is less than {dtype_byte_width=}")
     index_dtype = datatype.int32
     size_ty = ScalarTy(index_dtype)
 
@@ -526,8 +530,10 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
         else:
             if size_var.get_type().dtype != index_dtype:
                 # TODO: allow implicit cast?
-                raise TileTypeError(f"Shared memory size must be {index_dtype},"
-                                    f" got {size_var.get_type().dtype}")
+                raise TypeCheckingError(
+                    f"Shared memory size must be {index_dtype},"
+                    f" got {size_var.get_type().dtype}"
+                )
             size = None
         ty_shape.append(size)
         shape_vars.append(size_var)
@@ -562,7 +568,7 @@ def shared_array_impl(shape: Var, dtype: Var, dynamic: Var, alignment: Var) -> O
                                  alignment=alignment)
     else:
         if total_size is None:
-            raise TileTypeError("Shape must be constant when `dynamic` is False")
+            raise TypeCheckingError("Shape must be constant when `dynamic` is False")
 
         base_ptr = add_operation(AllocStaticSharedMemory,
                                  array_base_pointer_type(array_type),
@@ -608,7 +614,7 @@ class InlinePTXOperand:
 def require_inline_ptx_pair(var: Var) -> tuple[Var, Var]:
     pair_ty = var.get_type()
     if not isinstance(pair_ty, TupleTy) or len(pair_ty.value_types) != 2:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "Expected constraint arguments to be pairs of constraint strings and values"
         )
     pair_val = var.get_aggregate()
@@ -644,7 +650,7 @@ def parse_inline_ptx_constraint(var: Var) -> tuple[str, InlinePTX.RMWMode, str]:
     constraint_str = require_constant_str(var)
 
     if len(constraint_str) not in (1, 2):
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Invalid inline_ptx constraint {constraint_str}, expected length 1 or 2"
         )
 
@@ -653,14 +659,14 @@ def parse_inline_ptx_constraint(var: Var) -> tuple[str, InlinePTX.RMWMode, str]:
 
     mode = _INLINE_PTX_MODE_FROM_PREFIX.get(prefix)
     if mode is None:
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Unknown constraint rmw modifier {prefix!r}, expected "
             "'' (meaning readonly), '+' (meaning readwrite), or '=' (meaning writeonly)"
         )
 
     if type_char not in _INLINE_PTX_TYPECODES:
         expected = ", ".join(_INLINE_PTX_TYPECODES)
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Unknown constraint dtype {type_char!r}, expected one of {expected}"
         )
 
@@ -674,12 +680,12 @@ def validate_inline_ptx_operand(
         if type_char == "C":
             # write-only arguments require specifying the output data type, but we don't
             # expose a dtype for pointers. Disallow this for now.
-            raise TileTypeError("Write-only pointer outputs are not supported for inline_ptx")
+            raise TypeCheckingError("Write-only pointer outputs are not supported for inline_ptx")
 
         actual_dtype = require_dtype_spec(value)
         expected_dtype = _INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE[type_char]
         if actual_dtype != expected_dtype:
-            raise TileTypeError(
+            raise TypeCheckingError(
                 f"Expected dtype {expected_dtype} for constraint "
                 f"{constraint_str}, got {actual_dtype}"
             )
@@ -692,7 +698,7 @@ def validate_inline_ptx_operand(
     actual_dtype = require_scalar_type(value).dtype
     expected_dtype = _INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE[type_char]
     if actual_dtype != expected_dtype:
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected value of type {expected_dtype} for "
             f"constraint {constraint_str}, got {actual_dtype}"
         )
@@ -713,7 +719,7 @@ _INLINE_PTX_PLACEHOLDER_RE = re.compile(r"%(?P<index>[0-9]+)")
 
 def require_inline_ptx_constraint_pairs(ptx_code: str, constraint_pairs: tuple) -> tuple:
     if not isinstance(constraint_pairs, tuple):
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected a tuple of constraint pairs, but got {type(constraint_pairs)}"
         )
 
@@ -741,7 +747,7 @@ def require_inline_ptx_constraint_pairs(ptx_code: str, constraint_pairs: tuple) 
     def rewrite(match: re.Match[str]) -> str:
         index = int(match.group("index"))
         if index >= len(ptx_interpolation_replacements):
-            raise TileTypeError(
+            raise TypeCheckingError(
                 f"inline_ptx placeholder %{index} is out of range "
                 f"for {len(ptx_interpolation_replacements)} operands"
             )
@@ -802,7 +808,9 @@ def shfl_sync_impl(mode: str, mask: Var, value: Var, operand: Var, width: Var) -
     operand = astype(operand, datatype.int32)
     width = require_constant_int(width)
     if width not in (1, 2, 4, 8, 16, 32):
-        raise TileTypeError(f"Expected shuffle width to be a power of two in [1, 32], got {width}")
+        raise TypeCheckingError(
+            f"Expected shuffle width to be a power of two in [1, 32], got {width}"
+        )
 
     WARP_SIZE = 32
     clamp = 0 if mode == 'up' else 0x1F
@@ -913,7 +921,7 @@ def tcgen05_shared_memory_descriptor_encode_impl(self: Var) -> Var:
         SwizzleMode.SWIZZLE_32B: 6,
     }
     if swizzle_mode not in swizzle_encoding:
-        raise TileValueError(
+        raise InvalidValueError(
             f"Swizzle mode {swizzle_mode.name} is not supported by "
             "tcgen05 shared-memory descriptors"
         )
@@ -948,18 +956,18 @@ def tcgen05_shared_memory_descriptor_encode_impl(self: Var) -> Var:
 
 def require_constant_result_dtype(dtype: Var) -> Type:
     if not dtype.is_constant():
-        raise TileTypeError(f"Expected a dtype constructor but got {dtype}")
+        raise TypeCheckingError(f"Expected a dtype constructor but got {dtype}")
 
     const_dtype = dtype.get_constant()
     if isinstance(const_dtype, datatype.OpaquePointerSpec):
         if const_dtype == datatype.any_opaque_ptr:
-            raise TileTypeError("Result type cannot have no memory space")
+            raise TypeCheckingError("Result type cannot have no memory space")
         memory_space = datatype.MemorySpace(const_dtype.value)
         return PointerTy(opaque_pointer_dtype(memory_space=memory_space))
     elif isinstance(const_dtype, datatype.DType):
         return PointerTy(const_dtype) if is_pointer_dtype(const_dtype) else ScalarTy(const_dtype)
     else:
-        raise TileTypeError(f"Expected a type spec but got {dtype}")
+        raise TypeCheckingError(f"Expected a type spec but got {dtype}")
 
 
 def require_constant_result_dtypes(result_dtypes: Var) -> tuple[Type, ...]:
@@ -979,7 +987,7 @@ def clusterlaunchcontrol_try_cancel_impl(addr: Var, mbar: Var, multicast: Var) -
         or addr_info.pointee_dtype is not datatype.clusterlaunchcontrol_token
         or addr_info.memory_space is not MemorySpace.SHARED
     ):
-        raise TileTypeError(
+        raise TypeCheckingError(
             "Expected a pointer to a cluster launch control "
             f"token in shared memory, got {addr.get_type()}"
         )
@@ -989,7 +997,7 @@ def clusterlaunchcontrol_try_cancel_impl(addr: Var, mbar: Var, multicast: Var) -
         or mbar_info.pointee_dtype is not datatype.mbarrier
         or mbar_info.memory_space is not MemorySpace.SHARED
     ):
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected a pointer to an mbarrier in shared memory, got {mbar.get_type()}"
         )
 
@@ -1021,12 +1029,12 @@ def clusterlaunchcontrol_is_canceled_impl(token: Var) -> Var:
 def clusterlaunchcontrol_get_first_block_index_impl(token: Var, axis: Var) -> Var:
     require_clusterlaunchcontrol_token_type(token)
     if not axis.is_constant():
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected axis to be constant int or None, but got {axis=}"
         )
     axis = axis.get_constant()
     if type(axis) not in (int, None):
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Expected axis to be constant int or None, but got {axis=}"
         )
     cta_ids = tuple(
@@ -1094,7 +1102,7 @@ def _mbar_space_scope_suffix(scope: MbarrierScope, space: MemorySpace) -> str:
         case MemorySpace.SHARED_CLUSTER:
             space_str = 'cluster'
         case _:
-            raise TileCompilerError(f"Unexpected {space=}")
+            raise InternalError(f"Unexpected {space=}")
     return (
         ".scope."
         + scope.value
@@ -1110,7 +1118,7 @@ def require_mbarrier_ordering(
     ordering = require_constant_enum(ordering_var, MemoryOrder)
     if ordering not in valid_orderings:
         formatted = ", ".join(str(o) for o in valid_orderings)
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Invalid mbarrier memory order {ordering}, expected one of {formatted}"
         )
     return ordering
@@ -1344,12 +1352,12 @@ def bitcast(x: Var[ScalarTy | PointerTy | VectorTy], dtype: datatype.DType):
     x_dtype = x_ty.tensor_dtype()
     if isinstance(dtype, VectorTy):
         # dead code for now - users have no way to construct vector dtypes
-        raise TileTypeError("bitcast to vector is not supported")
+        raise TypeCheckingError("bitcast to vector is not supported")
     if datatype.bool_ in (dtype, x_dtype):
-        raise TileTypeError("bitcast to or from bool is not supported")
+        raise TypeCheckingError("bitcast to or from bool is not supported")
     x_bitwidth = type_bitwidth(x_ty)
     if x_bitwidth != dtype.bitwidth:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "bitcast requires input value's type and output type to have the "
             f"same bitwidth, but input type is {x_bitwidth} bits and output "
             f"dtype has {dtype.bitwidth} bits"

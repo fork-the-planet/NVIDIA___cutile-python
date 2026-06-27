@@ -9,7 +9,7 @@ from cuda.tile._ir.op_impl import require_constant_enum
 from cuda.tile._memory_model import MemoryOrder, MemoryScope
 
 import cuda.lang._datatype as datatype
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from .ir import Var
 from .type import PointerTy, ScalarTy
 from .type_checking_helpers import require_scalar_type
@@ -115,7 +115,7 @@ def require_atomic_dtype(
     op_name: str, dtype: datatype.DType, supported_dtypes: tuple[datatype.DType, ...]
 ):
     if dtype not in supported_dtypes:
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"{op_name} does not support dtype {dtype}; supported dtypes are "
             f"{format_supported_dtypes(supported_dtypes)}"
         )
@@ -129,14 +129,14 @@ def require_atomic_memory_order_and_scope(
 
     if memory_order not in ATOMIC_VALID_MEMORY_ORDERS:
         expected = ", ".join(str(order) for order in ATOMIC_VALID_MEMORY_ORDERS)
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Invalid memory order for {op_name}. "
             f"Got {memory_order}, expected one of {expected}"
         )
 
     if memory_scope not in ATOMIC_VALID_MEMORY_SCOPES:
         expected = ", ".join(str(scope) for scope in ATOMIC_VALID_MEMORY_SCOPES)
-        raise TileTypeError(
+        raise TypeCheckingError(
             f"Invalid memory scope for {op_name}. "
             f"Got {memory_scope}, expected one of {expected}"
         )

@@ -18,7 +18,7 @@ from cuda.lang._stub._nvvm_support import (
     _IntrinsicDTypeAnnotation,
     _IntrinsicPredicateAnnotation,
 )
-from cuda.tile import TileTypeError, TileValueError
+from cuda.lang._exception import TypeCheckingError, InvalidValueError
 from cuda.tile._ir.op_impl import (
     require_constant_bool,
     require_constant_enum,
@@ -64,14 +64,14 @@ class AliasedEnumAttr:
             if enum_val == cl_val:
                 return mlir_val
         valid = ", ".join(str(value) for value, _ in self.value_map)
-        raise TileValueError(f"Expected one of {valid}, got {enum_val}")
+        raise InvalidValueError(f"Expected one of {valid}, got {enum_val}")
 
     def mlir2cl(self, enum_val) -> Any:
         for cl_val, mlir_val in self.value_map:
             if enum_val == mlir_val:
                 return cl_val
         valid = ", ".join(str(value) for _, value in self.value_map)
-        raise TileValueError(f"Expected one of {valid}, got {enum_val}")
+        raise InvalidValueError(f"Expected one of {valid}, got {enum_val}")
 
 
 SharedSpaceAttr = AliasedEnumAttr(
@@ -150,14 +150,14 @@ def cast_operand(spec: ArgSpec, arg: Var) -> Var:
             for target in target_type:
                 try:
                     return implicit_cast(arg, target.dtype, ctx)
-                except (TileTypeError, TileValueError):
+                except (TypeCheckingError, InvalidValueError):
                     pass
             options = ", ".join([str(t) for t in target_type])
-            raise TileTypeError(
+            raise TypeCheckingError(
                 f"Could not cast arg of type {src_type} to any of {options}"
             )
         case _:
-            raise TileTypeError("Expected a predicate, a dtype, or a tuple of dtypes")
+            raise TypeCheckingError("Expected a predicate, a dtype, or a tuple of dtypes")
 
 
 def make_mlir_attribute(spec: ArgSpec, arg: Var) -> tuple[str, mlir.Attribute] | None:
@@ -187,7 +187,7 @@ def make_mlir_attribute(spec: ArgSpec, arg: Var) -> tuple[str, mlir.Attribute] |
         attr = mlir.IntegerAttr.make(ty, int(arg))
         return spec.name, attr
 
-    raise TileTypeError(f"Cannot convert argument into attribute: {spec}")
+    raise TypeCheckingError(f"Cannot convert argument into attribute: {spec}")
 
 
 def get_raw_mlir_parts(

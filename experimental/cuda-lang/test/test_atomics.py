@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import cuda.lang as cl
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang._ir.ops import AtomicCAS, AtomicExchange, AtomicRMW
 
 from .util import compile_for_arguments, get_ir, make_symbolic_tensor
@@ -191,7 +191,7 @@ def test_atomic_unsupported_dtypes(op, dtype):
         else:
             atomic(ptr, A[0])
 
-    with pytest.raises(TileTypeError, match=f"{op} does not support dtype {dtype}"):
+    with pytest.raises(TypeCheckingError, match=f"{op} does not support dtype {dtype}"):
         compile_for_arguments(kernel, (make_symbolic_tensor(shape=(1,), dtype=cl_dtype),))
 
 
@@ -203,5 +203,5 @@ def test_atomic_unsupported_memory_order_scope(order, scope, msg):
         ptr = A.get_element_pointer(0)
         cl.atomic_add(ptr, A[0], memory_order=order, memory_scope=scope)
 
-    with pytest.raises(TileTypeError, match=msg):
+    with pytest.raises(TypeCheckingError, match=msg):
         get_ir(kernel, [make_symbolic_tensor(shape=(1,), dtype=cl.int32)])

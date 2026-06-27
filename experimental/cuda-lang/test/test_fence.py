@@ -8,8 +8,8 @@ import cuda.lang as cl
 from cuda.lang._compile import KernelSignature, get_compute_capability
 from cuda.lang._enums import MemoryScope, MemorySpace, MemoryOrder
 from cuda.lang._exception import (
-    TileCompilerExecutionError,
-    TileValueError,
+    CompilerExecutionError,
+    InvalidValueError,
 )
 from cuda.lang._stub.fence import FenceProxyKind
 from test.util import make_symbolic_tensor, compile_kernel
@@ -27,23 +27,23 @@ MEMORY_SCOPE_TO_PTX_REPR = {
 }
 
 FENCE_SYNC_RESTRICT_RAISES = pytest.raises(
-    TileCompilerExecutionError,
+    CompilerExecutionError,
     match="only acquire and release semantics are supported|"
     r"attribute 'order' failed to satisfy constraint: .*\{acquire, release\}",
 )
 INVALID_SHARED_SPACE_RAISES = pytest.raises(
-    TileValueError,
+    InvalidValueError,
     match="Expected one of MemorySpace.SHARED, MemorySpace.SHARED_CLUSTER",
 )
 NVVM_COMPILER_PROXY_RAISES = pytest.raises(
-    TileCompilerExecutionError,
+    CompilerExecutionError,
     match="'nvvm.fence.*' op",
 )
 MISSING_SHARED_SPACE_RAISES = pytest.raises(
-    TileCompilerExecutionError, match="requires space attribute"
+    CompilerExecutionError, match="requires space attribute"
 )
 INVALID_SCOPE_RAISES = pytest.raises(
-    TileValueError, match="Expected one of MemoryScope"
+    InvalidValueError, match="Expected one of MemoryScope"
 )
 
 

@@ -8,7 +8,7 @@ import cuda.lang as cl
 import pytest
 import torch
 
-from cuda.lang._exception import TileCompilerExecutionError, TileTypeError
+from cuda.lang._exception import CompilerExecutionError, TypeCheckingError
 from cuda.lang.compilation import KernelSignature
 from .util import filecheck, make_symbolic_tensor, require_hopper_or_newer
 
@@ -73,7 +73,7 @@ def test_bitcast_pointer_vector(mspace, fail):
 
     if fail:
         match = "bitcast requires input value's type and output type to have the same bitwidth"
-        cm = pytest.raises(TileTypeError, match=match)
+        cm = pytest.raises(TypeCheckingError, match=match)
     else:
         cm = contextlib.nullcontext()
 
@@ -97,7 +97,7 @@ def test_bitcast_pointer_float(mspace, float_dtype):
         cm = contextlib.nullcontext()
     else:
         match = "bitcast requires input value's type and output type to have the same bitwidth"
-        cm = pytest.raises(TileTypeError, match=match)
+        cm = pytest.raises(TypeCheckingError, match=match)
 
     with cm:
         sig = KernelSignature([make_symbolic_tensor(1, float_dtype)])
@@ -144,12 +144,12 @@ def test_pointer_address_space_bitcast_compile_only(from_mspace, to_mspace):
             f"the same bitwidth, but input type is {from_bw} bits and output "
             f"dtype has {to_bw} bits"
         )
-        cm = pytest.raises(TileTypeError, match=match)
+        cm = pytest.raises(TypeCheckingError, match=match)
     elif [from_mspace, to_mspace].count(cl.MemorySpace.TENSOR) == 1:
         # if bitwidth IS the same but one address is in tensor memory, we'll
         # get an error from codegen
         cm = pytest.raises(
-            TileCompilerExecutionError, match="Bad address space in addrspacecast"
+            CompilerExecutionError, match="Bad address space in addrspacecast"
         )
     else:
         # otherwise we should be able to compile
@@ -171,7 +171,7 @@ def test_bitcast_to_bool():
     def kernel(out):
         out[0] = cl.bitcast(0, cl.bool_)
 
-    with pytest.raises(TileTypeError, match="bitcast to or from bool is not supported"):
+    with pytest.raises(TypeCheckingError, match="bitcast to or from bool is not supported"):
         cl.compile_simt(kernel, [KernelSignature([make_symbolic_tensor(1, cl.int8)])])
 
 
@@ -180,7 +180,7 @@ def test_bitcast_from_bool():
     def kernel(out):
         out[0] = cl.bitcast(True, cl.int8)
 
-    with pytest.raises(TileTypeError, match="bitcast to or from bool is not supported"):
+    with pytest.raises(TypeCheckingError, match="bitcast to or from bool is not supported"):
         cl.compile_simt(kernel, [KernelSignature([make_symbolic_tensor(1, cl.bool_)])])
 
 

@@ -9,9 +9,9 @@ import cuda.lang._mlir as mlir
 from cuda.lang._compile import mlir2cubin
 import cuda.lang as cl
 from cuda.lang._compile import get_compute_capability
+from cuda.lang._exception import CompilerExecutionError
 from cuda.tile import _cext
 from cuda.tile._annotated_function import LeafAnnotationNode
-from cuda.tile._exception import TileCompilerExecutionError
 
 
 class _HackKernel(_cext.TileDispatcher):
@@ -259,5 +259,5 @@ def test_cond_br():
 
 
 def test_mlir2cubin_error():
-    with pytest.raises(TileCompilerExecutionError, match="Failed to parse"):
+    with pytest.raises(CompilerExecutionError, match="Failed to parse"):
         mlir2cubin("invalid", gpu_name="sm_80", arch="compute_80")

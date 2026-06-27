@@ -9,7 +9,6 @@ from typing_extensions import override
 from cuda.lang._ir.ir import LocalArrayContextManagerValue
 from cuda.lang._enums import SwizzleMode
 from cuda.lang._stub.types import Scalar, Pointer, Vector
-from cuda.tile import TileValueError
 from cuda.tile._ir.type import (
     Type,
     TupleTy,
@@ -33,7 +32,7 @@ from cuda.tile._ir.type import (
 import cuda.tile._datatype as datatype
 from cuda.tile._datatype import DType, PointerInfo
 from cuda.tile._ir.ir import Var, AggregateValue, TypingHooks
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError, InvalidValueError
 
 
 @dataclass(frozen=True)
@@ -65,20 +64,28 @@ class SymbolicScalar(Symbol, Scalar):
         Symbol.__init__(self, var)
 
     def __bool__(self):
-        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
-                             " to boolean")
+        raise InvalidValueError(
+            "Symbolic scalar has no concrete value and thus cannot be converted"
+            " to boolean"
+        )
 
     def __int__(self):
-        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
-                             " to an integer")
+        raise InvalidValueError(
+            "Symbolic scalar has no concrete value and thus cannot be converted"
+            " to an integer"
+        )
 
     def __float__(self):
-        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
-                             " to a float")
+        raise InvalidValueError(
+            "Symbolic scalar has no concrete value and thus cannot be converted"
+            " to a float"
+        )
 
     def __index__(self):
-        raise TileValueError("Symbolic scalar has no concrete value and thus cannot be converted"
-                             " to an integer")
+        raise InvalidValueError(
+            "Symbolic scalar has no concrete value and thus cannot be converted"
+            " to an integer"
+        )
 
     def __repr__(self):
         return f"<Scalar[{self._var.get_type().dtype}]>"
@@ -132,11 +139,11 @@ class VectorTy(TensorLikeTy):
 
     def __post_init__(self):
         if not isinstance(self.length, int):
-            raise TileTypeError(
+            raise TypeCheckingError(
                 f"Expected vector length to be an int, got {type(self.length).__name__}"
             )
         if self.length <= 0:
-            raise TileTypeError(f"Expected vector length to be positive, got {self.length}")
+            raise TypeCheckingError(f"Expected vector length to be positive, got {self.length}")
 
     @override
     def tensor_dtype(self) -> "DType":
@@ -209,7 +216,7 @@ def dtype_to_tensor_map_type(dtype: datatype.DType) -> str:
         case datatype.bfloat16: return "CU_TENSOR_MAP_DATA_TYPE_BFLOAT16"
         case datatype.tfloat32: return "CU_TENSOR_MAP_DATA_TYPE_TFLOAT32"
         case _:
-            raise TileTypeError(f"Data type {dtype} is not supported by tensor map")
+            raise TypeCheckingError(f"Data type {dtype} is not supported by tensor map")
 
 
 @dataclass(frozen=True)
@@ -245,7 +252,7 @@ def type_bitwidth(x: Type):
             return st.dtype.bitwidth
         case VectorTy() as vt:
             return vt.element_dtype.bitwidth * vt.length
-    raise TileTypeError(f"Cannot access bitwidth of type '{x}'")
+    raise TypeCheckingError(f"Cannot access bitwidth of type '{x}'")
 
 
 __all__ = (

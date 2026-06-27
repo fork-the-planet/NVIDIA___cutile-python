@@ -15,7 +15,7 @@ import pytest
 from cuda.lang import compile_simt
 from cuda.lang._stub import math as device_math
 from cuda.lang.compilation import KernelSignature
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang._fp_utils import _FLOAT_SMALLEST_NORMAL, isnormal
 from .util import filecheck, make_symbolic_tensor
 
@@ -143,7 +143,7 @@ def test_isnormal_non_arithmetic_float():
         device_math.isnormal(cl.float8_e4m3fn(float("inf")))
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected scalar or vector to satisfy constraint is_unrestricted_float",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
@@ -740,7 +740,7 @@ def test_type_error():
         device_math.sin(cl.int32(5.0))
 
     with pytest.raises(
-        TileTypeError,
+        TypeCheckingError,
         match="Expected scalar or vector to satisfy constraint is_float but got int32",
     ):
         cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())

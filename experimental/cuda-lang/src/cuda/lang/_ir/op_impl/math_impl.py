@@ -7,7 +7,7 @@ import operator
 from cuda.tile._ir.ops_utils import promote_dtypes
 
 import cuda.lang._datatype as datatype
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang._ir.ir import Var, add_operation
 from .vector_impl import vector_elementwise_apply
 from cuda.lang._ir.type import (
@@ -72,7 +72,7 @@ def get_libdevice_fmod_function(dtype):
         case datatype.float64:
             entrypoint = "__nv_fmod"
         case _:
-            raise TileTypeError(f"mod is not valid for dtype {dtype}")
+            raise TypeCheckingError(f"mod is not valid for dtype {dtype}")
     return lambda x, y: add_operation(
         ForeignFunction,
         ScalarTy(dtype),
@@ -214,7 +214,7 @@ def get_libdevice_pow_function(base_dt, exp_dt):
         case datatype.float64, datatype.int32:
             entrypoint = "__nv_powi"
         case _:
-            raise TileTypeError(
+            raise TypeCheckingError(
                 f"pow is not valid for the given datatypes: {base_dt=} {exp_dt=}"
             )
     return lambda x, y: add_operation(
@@ -304,7 +304,7 @@ def math_minmax_impl(kind: str, x: Var, y: Var, propagate_nan: Var) -> Var:
         else:
             op_name = "arith.maxui" if kind == "max" else "arith.minui"
     else:
-        raise TileTypeError(f"{kind}() expects arithmetic operands, got {ty}")
+        raise TypeCheckingError(f"{kind}() expects arithmetic operands, got {ty}")
 
     return add_operation(
         RawMLIROperation,
@@ -326,7 +326,7 @@ def abs_impl(x: Var) -> Var:
             return x
         op_name = "math.absi"
     else:
-        raise TileTypeError(f"abs() expects an arithmetic scalar, got {x_ty}")
+        raise TypeCheckingError(f"abs() expects an arithmetic scalar, got {x_ty}")
     return add_operation(
         RawMLIROperation,
         x_ty,

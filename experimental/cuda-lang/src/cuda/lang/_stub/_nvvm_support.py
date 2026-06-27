@@ -8,7 +8,8 @@ from typing import Callable, Any, Annotated, NamedTuple
 
 from cuda.lang._execution import stub
 from cuda.lang._ir.type_checking_helpers import require_pointer_type, require_vector_type
-from cuda.tile import DType, TileValueError, TileTypeError
+from cuda.lang._exception import TypeCheckingError, InvalidValueError
+from cuda.tile import DType
 from cuda.tile._datatype import is_pointer_dtype
 from cuda.tile._ir.op_impl import require_integer_0d_tile_type, \
     require_scalar_type, require_any_vector_type, \
@@ -103,7 +104,7 @@ def _prepare_common(stub, args: tuple[Var, ...]):
 def _implicit_cast_with_fallback(src: Var, target_dtype: DType, error_context: str) -> Var:
     try:
         return implicit_cast(src, target_dtype, error_context)
-    except (TileTypeError, TileValueError):
+    except (TypeCheckingError, InvalidValueError):
         if not (datatype.is_integral(src.get_type().dtype) and datatype.is_integral(target_dtype)):
             raise
 

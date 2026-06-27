@@ -18,13 +18,13 @@ from cuda.lang._enums import (
     Tcgen05CopyShape,
     Tcgen05CopySourceFormat,
 )
+from cuda.lang._exception import TypeCheckingError, InvalidValueError
 from cuda.lang._ir.type import PointerTy
 from cuda.lang._stub import tcgen05 as tcgen05_stub
 from cuda.lang._ir.ir import Var
 from cuda.lang._ir.ops import (
     MemorySpace,
     ScalarTy,
-    TileTypeError,
     VectorTy,
     add_operation_variadic,
     astype,
@@ -42,7 +42,6 @@ from cuda.lang._ir.type_checking_helpers import (
     require_pointer_in_memory_space,
     require_vector_type,
 )
-from cuda.tile._exception import TileValueError
 from cuda.tile._ir.op_impl import (
     ImplRegistry,
     require_constant_bool,
@@ -216,7 +215,7 @@ def tcgen05_store_impl(
             "Expected scalar 32-bit integer or vector of 32-bit integers "
             f"but got {count=} and {dtype=}"
         )
-        raise TileTypeError(message)
+        raise TypeCheckingError(message)
 
     match value_type:
         case ScalarTy() as st:
@@ -228,14 +227,14 @@ def tcgen05_store_impl(
             if vt.element_dtype != datatype.int32:
                 type_error(vt.element_dtype, count)
         case _:
-            raise TileTypeError("Expected scalar or vector with datatype int32")
+            raise TypeCheckingError("Expected scalar or vector with datatype int32")
 
     valid_register_counts = tuple(
         valid_count * registers_per_count for valid_count in valid_counts
     )
     if count not in valid_register_counts:
         valid = ", ".join(str(count) for count in valid_register_counts)
-        raise TileValueError(
+        raise InvalidValueError(
             f"Expected register count for {shape_value.name} to be one of "
             f"{valid}, got {count}"
         )
@@ -244,7 +243,7 @@ def tcgen05_store_impl(
     needs_offset = shape_value == Tcgen05LoadStoreShape.SHAPE_16X32BX2
     has_offset = offset is not None
     if needs_offset != has_offset:
-        raise TileTypeError(
+        raise TypeCheckingError(
             "offset parameter is only valid with shape "
             "Tcgen05LoadStoreShape.SHAPE_16X32BX2"
         )
@@ -278,16 +277,16 @@ def tcgen05_load_impl(
     valid_counts = TCGEN05_VALID_COUNTS_BY_SHAPE[shape_value]
     if count_value not in valid_counts:
         valid = ", ".join(str(value) for value in valid_counts)
-        raise TileValueError(
+        raise InvalidValueError(
             f"Expected count for {shape_value.name} to be one of {valid}, got {count_value}"
         )
 
     has_offset = not is_none(offset)
     uses_offset = shape_value is Tcgen05LoadStoreShape.SHAPE_16X32BX2
     if uses_offset and not has_offset:
-        raise TileTypeError("tcgen05_load with SHAPE_16X32BX2 requires offset")
+        raise TypeCheckingError("tcgen05_load with SHAPE_16X32BX2 requires offset")
     if has_offset and not uses_offset:
-        raise TileTypeError("tcgen05_load offset is only valid with SHAPE_16X32BX2")
+        raise TypeCheckingError("tcgen05_load offset is only valid with SHAPE_16X32BX2")
 
     operands = [tensor_memory_address]
     if has_offset:
@@ -527,12 +526,12 @@ def tcgen05_mma_impl(
     has_scale_input_d = not is_none(scale_input_d)
     if has_scale_input_d:
         if kind_value not in (Tcgen05MMAKind.F16, Tcgen05MMAKind.TF32):
-            raise TileValueError(
+            raise InvalidValueError(
                 "scale_input_d is only supported for F16 and TF32 MMA kinds"
             )
         scale_value = require_constant_int(scale_input_d)
         if scale_value < 0 or scale_value > 15:
-            raise TileValueError("scale_input_d must be an immediate in [0, 15]")
+            raise InvalidValueError("scale_input_d must be an immediate in [0, 15]")
         operands.append(astype(scale_input_d, datatype.int64))
 
     has_disable_output_lane = not is_none(disable_output_lane)
@@ -550,7 +549,7 @@ def tcgen05_mma_impl(
             Tcgen05MMACollectorOp.FILL,
             Tcgen05MMACollectorOp.USE,
         ):
-            raise TileValueError(
+            raise InvalidValueError(
                 "a_shift cannot be combined with collector operation FILL or USE"
             )
 
@@ -604,7 +603,7 @@ def tcgen05_mma_block_scale_impl(
         kind_value,
         scale_vector_size_value,
     ) not in TCGEN05_VALID_BLOCK_SCALE_COMBINATIONS:
-        raise TileValueError(
+        raise InvalidValueError(
             "Invalid tcgen05 block-scale kind and scale-vector-size combination: "
             f"{kind_value.name}, {scale_vector_size_value.name}"
         )

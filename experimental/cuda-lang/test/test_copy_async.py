@@ -5,7 +5,7 @@
 import pytest
 
 import cuda.lang as cl
-from cuda.lang._exception import TileTypeError
+from cuda.lang._exception import TypeCheckingError
 from cuda.lang.compilation import KernelSignature
 
 from .util import (
@@ -139,7 +139,7 @@ class TestG2S(CopyAsyncPtxTestBase):
             "Expected pointer memory space to be MemorySpace.SHARED "
             "but got MemorySpace.SHARED_CLUSTER"
         )
-        with pytest.raises(TileTypeError, match=match):
+        with pytest.raises(TypeCheckingError, match=match):
             self.check_ptx_source(kernel)
 
     def test_unsupported_kwargs_for_cta_mode(self, subtests):
@@ -191,7 +191,7 @@ class TestG2S(CopyAsyncPtxTestBase):
                 "predicate, multicast mask, and cta_group arguments are invalid."
             )
             with pytest.raises(
-                TileTypeError,
+                TypeCheckingError,
                 match=match,
             ):
                 self.check_ptx_source(kernel)
@@ -221,7 +221,7 @@ class TestG2S(CopyAsyncPtxTestBase):
             )
 
         with pytest.raises(
-            TileTypeError, match="TILE mode does not accept im2col_offsets"
+            TypeCheckingError, match="TILE mode does not accept im2col_offsets"
         ):
             self.check_ptx_source(kernel)
 
@@ -272,7 +272,7 @@ class TestG2S(CopyAsyncPtxTestBase):
             )
 
         with pytest.raises(
-            TileTypeError, match=f"{mode.name} mode requires im2col_offsets"
+            TypeCheckingError, match=f"{mode.name} mode requires im2col_offsets"
         ):
             self.check_ptx_source(kernel)
 
@@ -339,7 +339,7 @@ class TestG2S(CopyAsyncPtxTestBase):
             )
 
         with pytest.raises(
-            TileTypeError, match="TILE_GATHER4 mode does not accept im2col_offsets"
+            TypeCheckingError, match="TILE_GATHER4 mode does not accept im2col_offsets"
         ):
             self.check_ptx_source(kernel)
 
@@ -357,7 +357,7 @@ class TestG2S(CopyAsyncPtxTestBase):
             )
 
         with pytest.raises(
-            TileTypeError,
+            TypeCheckingError,
             match="Expected tensor map or opaque tensor map pointer",
         ):
             self.check_ptx_source(kernel)
