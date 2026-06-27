@@ -1,1 +1,0 @@
-- Fix a bug in automatic propagation of divisibility when an assumed variable created in a block is used outside of the block

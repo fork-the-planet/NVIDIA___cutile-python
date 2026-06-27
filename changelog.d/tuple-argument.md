@@ -1,1 +1,0 @@
-- Added support for passing Python `tuple` objects as kernel arguments. Tuple elements may be tensors, scalars, lists, or nested tuples. Per-element annotations are supported: `ct.Constant[tuple[int, float]]` marks a whole tuple as compile-time constant; `tuple[ct.Constant[int], float]` marks individual elements as constant.

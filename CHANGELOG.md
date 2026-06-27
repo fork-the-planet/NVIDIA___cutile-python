@@ -1,8 +1,79 @@
-<!--- SPDX-FileCopyrightText: Copyright (c) <2025> NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!--- SPDX-FileCopyrightText: Copyright (c) <2026> NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!--- SPDX-License-Identifier: Apache-2.0 -->
 
 Release Notes
 =============
+
+{#release-1-5-0}
+1.5.0 (2026-07-08)
+------------------
+
+This release adds finer control over kernel specialization by making selected
+array shape dimensions compile-time constants and declaring scalar divisibility
+assumptions. Autotuning is faster and can isolate hanging kernels.
+The supported Python subset now includes tuple comprehensions,
+tuple-valued kernel arguments, enums, dictionaries, and variadic keyword
+parameters.
+
+### Features
+- Add {py:func}`ct.assume_divisible_by(x, divisor) <cuda.tile.assume_divisible_by>`,
+  a compiler hint that declares an integer scalar to be divisible by a constant.
+  The compiler propagates this fact through arithmetic, which can prove the
+  alignment of derived indices and pointer offsets and enable wider memory
+  operations.
+- Add support for specializing array shape dimensions to their launch-time
+  values, making them compile-time constants inside the kernel. Use
+  {py:class}`ct.ArrayAnnotation <cuda.tile.ArrayAnnotation>` as `Annotated`
+  metadata and list the dimensions to specialize, for example,
+  `Annotated[ct.Array, ct.ArrayAnnotation(static_shape_dims=(0, -1))]`.
+- Add the `single_run_timeout_sec` argument to
+  {py:func}`ct.tune.exhaustive_search()
+  <cuda.tile.tune.exhaustive_search>` to prevent a hanging kernel from stalling
+  the entire search.
+- Add support for passing Python tuples as kernel arguments. Elements may be
+  arrays, scalars, lists, or nested tuples. Annotations may apply to the entire
+  tuple or individual elements: `ct.Constant[tuple[int, float]]` makes the
+  whole tuple compile-time constant, while `tuple[ct.Constant[int], float]`
+  makes only the first element constant.
+
+### Python features
+- Add support for tuple comprehensions.
+- Add support for the `in` and `not in` operators on tuples.
+- Add limited support for dictionaries, variadic keyword parameters in
+  user-defined functions (for example, `def foo(**kwargs)`), and dictionary
+  unpacking (for example, `foo(x, **y)`).
+- Add comparison and constructor support for Python `enum.Enum` inside kernels.
+  Enum members can be compared with `==` and `!=` and constructed from a
+  constant value, such as `Color(0)`.
+- Add support for printing dataclass instances.
+- Allow frozen dataclass instances to be used as globals in device code.
+
+### Bug Fixes
+- Fix a bug in automatic propagation of divisibility when an assumed variable
+  created in a block is used outside that block.
+- Fix a bug where strictly typed numeric constants
+  (for example, `ct.uint32(-3)`, `ct.int8(300)`, and `ct.float16(0.2)`) were not
+  converted according to their dtype. Out-of-range integers are now wrapped to
+  the dtype's range, and floating-point values are rounded or clamped according
+  to the dtype's precision and range.
+- Honor wrappers installed on user-defined functions, including wrappers added
+  by decorators that use `functools.wraps()`.
+- Reject repeated axes in the `order` arguments of `load()`, `store()`, and
+  `num_tiles()`.
+
+### Enhancements
+- Extend {py:func}`ct.arange() <cuda.tile.arange>` with optional `start` and
+  `step` arguments: `ct.arange(size, start=0, step=1, dtype=...)`. `size` must
+  be a constant integer, while `start` and `step` may be dynamic values. For
+  example, `ct.arange(8, start=7, step=-1, dtype=ct.int32)`
+  creates a reversed range.
+- Improve exhaustive search performance by stopping early for slow
+  configurations.
+
+### ABI Changes
+- Introduce {py:class}`calling convention v2
+  <cuda.tile.compilation.CallingConvention>` for kernels with static shape
+  annotations or tuple arguments.
 
 {#release-1-4-0}
 1.4.0 (2026-05-26)

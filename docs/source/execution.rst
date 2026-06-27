@@ -165,8 +165,15 @@ If a |kernel| parameter is *constant embedded*, then:
 - Every use of the parameter behaves as if replaced by its literal value.
 - A distinct |machine representation| of the |kernel| is generated for each unique value of the parameter. Note: The |kernel| is compiled once per unique value, even if JIT caching is enabled.
 
-Constant Type Hints
-~~~~~~~~~~~~~~~~~~~
+Type Annotations
+----------------
+
+Kernel parameter type annotations use ``typing.Annotated`` metadata to control
+constant embedding, array shape and index metadata, the integer dtype of scalar
+parameters, and list element types.
+
+Constant Annotations
+~~~~~~~~~~~~~~~~~~~~
 
 .. literalinclude:: ../../test/test_constant.py
    :language: python
@@ -184,6 +191,19 @@ Constant Type Hints
 
 .. autodata:: cuda.tile.Constant
 
+Array Annotations
+~~~~~~~~~~~~~~~~~
+
+.. autoclass:: cuda.tile.ArrayAnnotation
+
 .. autodata:: cuda.tile.IndexedWithInt64
 
+Scalar Annotations
+~~~~~~~~~~~~~~~~~~
+
 .. autodata:: cuda.tile.ScalarInt64
+
+List Annotations
+~~~~~~~~~~~~~~~~
+
+.. autoclass:: cuda.tile.ListAnnotation
