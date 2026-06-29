@@ -11,6 +11,7 @@
 
 #ifdef _WIN32
 extern "C" int _fltused = 0;
+extern "C" int __cdecl _purecall() { CHECK(false); }
 #endif
 
 

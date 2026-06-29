@@ -148,10 +148,7 @@ def get_function_ir(
     parameter_annotations: Sequence[ParameterAnnotationNode] | None = None,
 ) -> ir.Block:
     if parameter_annotations is None:
-        parameter_annotations = [
-            LeafAnnotationNode(constant=False, int64_index=False, int64_scalar=False,
-                               static_shape=())
-        ] * len(signature.parameters)
+        parameter_annotations = [LeafAnnotationNode(constant=False)] * len(signature.parameters)
     parameter_names = function.signature.parameters.keys()
     with ir.TileBuilder(ctx, function.body.loc) as builder, cuda_lang_impl_registry.as_current():
         params = _create_kernel_parameters(

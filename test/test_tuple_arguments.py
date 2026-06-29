@@ -415,7 +415,8 @@ def test_tuple_more_than_annotation_size():
         ct.scatter(out, (0,), addends[0] + addends[1])
 
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
-    with pytest.raises(TypeError, match=r"annotation expects 2 tuple elements but got 3"):
+    with pytest.raises(TypeError, match=r"Received a tuple of length 3"
+                                        r" for a parameter annotated as a tuple of length 2"):
         ct.launch(torch.cuda.current_stream(), (1,), k, (out, ((1, 2, 3))))
 
 
@@ -425,7 +426,8 @@ def test_tuple_fewer_than_annotation_size():
         ct.scatter(out, (0,), addends[0] + addends[1])
 
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
-    with pytest.raises(TypeError, match=r"annotation expects 2 tuple elements but got 1"):
+    with pytest.raises(TypeError, match=r"Received a tuple of length 1"
+                                        r" for a parameter annotated as a tuple of length 2"):
         ct.launch(torch.cuda.current_stream(), (1,), k, (out, ((1, ))))
 
 
@@ -435,7 +437,8 @@ def test_nested_tuple_wrong_annotation_size():
         ct.scatter(out, (0,), addends[0][1] + addends[1])
 
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
-    with pytest.raises(TypeError, match=r"annotation expects 2 tuple elements but got 3"):
+    with pytest.raises(TypeError, match=r"Received a tuple of length 3"
+                                        r" for a parameter annotated as a tuple of length 2"):
         ct.launch(torch.cuda.current_stream(), (1,), k, (out, ((1, 2, 3), 4)))
 
 

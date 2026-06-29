@@ -151,7 +151,7 @@ def cutile_call(grid: tuple[int, ...],
         )
 
     # The JAX/FFI integration is one-arg-one-role and treats every annotation as a flat
-    # leaf (it reads `.constant`/`.int64_index`/`.int64_scalar` directly). Tuple parameters
+    # leaf (it reads `.constant`/`.array`/`.scalar` directly). Tuple parameters
     # produce non-leaf annotation nodes, which it cannot flatten into buffers/constraints.
     for i, ann_node in enumerate(annotations):
         if not isinstance(ann_node, LeafAnnotationNode):
@@ -308,7 +308,8 @@ def _cutile_call_ffi_p_lower(
 
     ni, no, nc, ns = 0, 0, 0, 0
     for pos, role in enumerate(roles):
-        is_i64_index = annotations[pos].int64_index
+        is_i64_index = (annotations[pos].array is not None
+                        and annotations[pos].array.index_dtype == ct.int64)
         idx_dtype = ct.int64 if is_i64_index else ct.int32
         if role == 'i':
             buffer_ids.append(ni)
@@ -331,7 +332,8 @@ def _cutile_call_ffi_p_lower(
             buffer_ids.append(ns + num_inputs + num_outputs)
             index_bitwidths.append(0)  # unused for scalar slot
             dtype, packed = pack_scalar(scalars[ns],
-                                        want_int64=annotations[pos].int64_scalar)
+                                        want_int64=(annotations[pos].scalar is not None
+                                                    and annotations[pos].scalar.dtype == ct.int64))
             constraints.append(ScalarConstraint(dtype))
             scalar_packed.append(packed)
             ns += 1

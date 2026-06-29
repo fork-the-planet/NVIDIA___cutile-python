@@ -262,8 +262,12 @@ def _resolve_static_shape_axes(node: ParameterAnnotationNode, ndim: int, name: s
         raise ValueError(
             f"Parameter `{name}` is annotated as a tuple, but a single array or list was "
             f"provided.")
+
     axes: set[int] = set()
-    for axis in node.static_shape:
+    if node.array is None:
+        return axes
+
+    for axis in node.array.static_shape_dims:
         if not -ndim <= axis < ndim:
             raise ValueError(
                 f"Parameter `{name}` has `static_shape_dims` axis {axis}, which is out of "

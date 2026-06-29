@@ -512,17 +512,12 @@ static Result<PythonArgKind> classify_arg(PyObject* arg) {
     return raise(PyExc_TypeError, "Unsupported argument type %s", Py_TYPE(arg)->tp_name);
 }
 
-struct LeafFlags {
-    bool constant    = false;
-    bool int64_index = false;
-    bool int64_param = false;
-    Vec<int64_t> static_shape_dims;  // array shape dims specialized to launch-time values.
-};
+struct LeafAnnotationNode;
 
 struct PythonArgProfile {
     RefPtr<KernelFamily> family;
     Vec<PythonArgKind> arg_kinds;
-    Vec<LeafFlags> flat_flags;
+    Vec<RefPtr<LeafAnnotationNode>> flat_param_annotations;
 };
 
 // Concatenate values of two chars in a single unsigned integer
@@ -1228,12 +1223,31 @@ static Result<ArrayRepr> arrayrepr_dlpack(PyObject* pyobj, unsigned index_bitwid
     return arrayrepr_dlpack_common(dlpack_capsule.get(), index_bitwidth, arena);
 }
 
+
+struct ScalarAnnotation {
+    bool specified = false; // To disambiguate between a specified ScalarAnnotation
+                            // with a default value and no ScalarAnnotation
+
+    unsigned bitwidth = 32;
+};
+
+struct ArrayAnnotation {
+    bool specified = false; // To disambiguate between a specified ArrayAnnotation
+                            // with a default value and no ArrayAnnotation
+
+    unsigned index_bitwidth = 32;
+    Vec<int64_t> static_shape_dims; // array shape dims specialized to launch-time values.
+};
+
+
 typedef Result<ArrayRepr> (*ArrayReprFunc)(PyObject*, unsigned, Arena&);
 
+
 template <ArrayReprFunc F>
-static Status extract_array(const DriverApi* driver, PyObject* pyobj, unsigned index_bitwidth,
-                            const Vec<int64_t>& static_shape_dims, LaunchHelper& helper) {
-    Result<ArrayRepr> ar = F(pyobj, index_bitwidth, helper.arena);
+static Status extract_array(const DriverApi* driver, PyObject* pyobj,
+                            const ArrayAnnotation& array_ann,
+                            LaunchHelper& helper) {
+    Result<ArrayRepr> ar = F(pyobj, array_ann.index_bitwidth, helper.arena);
     if (!ar.is_ok()) return ErrorRaised;
 
     size_t num_words = 1 + 2 * ar->arrty.ndim;
@@ -1242,8 +1256,8 @@ static Status extract_array(const DriverApi* driver, PyObject* pyobj, unsigned i
         helper.cuarg_offsets.push_back(ar->repr + i);
 
     ArrayTypeConstantBuilder builder;
-    if (!builder.update(helper.arena, *ar, static_shape_dims)) return ErrorRaised;
-    builder.finalize(driver, ar->arrty, static_shape_dims, helper);
+    if (!builder.update(helper.arena, *ar, array_ann.static_shape_dims)) return ErrorRaised;
+    builder.finalize(driver, ar->arrty, array_ann.static_shape_dims, helper);
     return OK;
 }
 
@@ -1290,7 +1304,7 @@ static PyPtr parse_pybool_constraint(ConstantCursor& cursor, bool is_constant) {
     }
 }
 
-static inline Status extract_py_long(PyObject* pyobj, bool is_constant, bool use_i64,
+static inline Status extract_py_long(PyObject* pyobj, bool is_constant, unsigned bitwidth,
                                      LaunchHelper& helper) {
     if (is_constant) {
         int overflow;
@@ -1307,11 +1321,12 @@ static inline Status extract_py_long(PyObject* pyobj, bool is_constant, bool use
             helper.constants.push_back(value);
         }
     } else {
-        if (use_i64) {
+        if (bitwidth == 64) {
             int64_t value = pylong_as<int64_t>(pyobj);
             if (PyErr_Occurred()) return ErrorRaised;
             push_single_word_cuarg(helper, {.i64 = value});
         } else {
+            CHECK(bitwidth == 32);
             int32_t value = pylong_as<int32_t>(pyobj);
             if (PyErr_Occurred()) return ErrorRaised;
             push_single_word_cuarg(helper, {.i32 = value});
@@ -1320,7 +1335,7 @@ static inline Status extract_py_long(PyObject* pyobj, bool is_constant, bool use
     return OK;
 }
 
-static PyPtr parse_pylong_constraint(ConstantCursor& cursor, bool is_constant, bool use_i64) {
+static PyPtr parse_pylong_constraint(ConstantCursor& cursor, bool is_constant, unsigned bitwidth) {
     if (is_constant) {
         int64_t format = cursor.next();
         PyPtr value;
@@ -1334,9 +1349,7 @@ static PyPtr parse_pylong_constraint(ConstantCursor& cursor, bool is_constant, b
         if (!value) return {};
         return make_constant_constraint(value.get());
     } else {
-        return make_scalar_constraint(
-            DLDataType{kDLInt, static_cast<uint8_t>(use_i64 ? 64 : 32), 1}
-        );
+        return make_scalar_constraint(DLDataType{kDLInt, static_cast<uint8_t>(bitwidth), 1});
     }
 }
 
@@ -1378,8 +1391,8 @@ static Result<ArrayRepr> get_array_repr(PythonArgKind kind, PyObject* pyobj,
     }
 }
 
-static Status extract_py_list(const DriverApi* driver, PyObject* pyobj, unsigned index_bitwidth,
-                              const Vec<int64_t>& static_shape_dims, LaunchHelper& helper) {
+static Status extract_py_list(const DriverApi* driver, PyObject* pyobj,
+                              const ArrayAnnotation& array_ann, LaunchHelper& helper) {
     size_t len = PyList_GET_SIZE(pyobj);
     if (len > INT32_MAX)
         return raise(PyExc_TypeError, "List is too long");
@@ -1402,8 +1415,8 @@ static Status extract_py_list(const DriverApi* driver, PyObject* pyobj, unsigned
     PythonArgKind first_arg_kind = *first_item_res;
     PyTypeObject* first_item_type = first_item->ob_type;
 
-    Result<ArrayRepr> first_repr_res = get_array_repr(first_arg_kind, first_item, index_bitwidth,
-                                                      helper.arena);
+    Result<ArrayRepr> first_repr_res = get_array_repr(first_arg_kind, first_item,
+                                                      array_ann.index_bitwidth, helper.arena);
     if (!first_repr_res.is_ok()) return ErrorRaised;
 
     helper.array_ptr_arena_offsets.push_back(first_repr_res->repr);
@@ -1424,7 +1437,8 @@ static Status extract_py_list(const DriverApi* driver, PyObject* pyobj, unsigned
     helper.arena[item_offsets].arena_offset = first_repr_res->repr;
 
     ArrayTypeConstantBuilder builder;
-    if (!builder.update(helper.arena, *first_repr_res, static_shape_dims)) return ErrorRaised;
+    if (!builder.update(helper.arena, *first_repr_res, array_ann.static_shape_dims))
+        return ErrorRaised;
 
     // Handle the rest of the list
     for (size_t i = 1; i < len; ++i) {
@@ -1438,7 +1452,8 @@ static Status extract_py_list(const DriverApi* driver, PyObject* pyobj, unsigned
              kind = *res;
         }
 
-        Result<ArrayRepr> repr_res = get_array_repr(kind, item, index_bitwidth, helper.arena);
+        Result<ArrayRepr> repr_res = get_array_repr(kind, item, array_ann.index_bitwidth,
+                                                    helper.arena);
         if (!repr_res.is_ok()) return ErrorRaised;
         helper.array_ptr_arena_offsets.push_back(repr_res->repr);
         helper.arena[item_offsets + i].arena_offset = repr_res->repr;
@@ -1449,12 +1464,13 @@ static Status extract_py_list(const DriverApi* driver, PyObject* pyobj, unsigned
         if (first_repr_res->arrty.ndim != repr_res->arrty.ndim)
             return raise(PyExc_TypeError, "Arrays in list vary in rank");
 
-        if (!builder.update(helper.arena, *repr_res, static_shape_dims)) return ErrorRaised;
+        if (!builder.update(helper.arena, *repr_res, array_ann.static_shape_dims))
+            return ErrorRaised;
     }
 
     // TODO: If we accept lists of things other than arrays, then to disambiguate,
     //       we need to push another constant here that specifies the type of the list element .
-    builder.finalize(driver, first_repr_res->arrty, static_shape_dims, helper);
+    builder.finalize(driver, first_repr_res->arrty, array_ann.static_shape_dims, helper);
     return OK;
 }
 
@@ -1482,91 +1498,153 @@ static PyPtr parse_list_constraint(ConstantCursor& cursor, const Vec<int64_t>& s
     return steal(PyObject_Call(constraint_class.get(), args.get(), kwargs.get()));
 }
 
-struct FlagNode {
-    bool constant    = false;
-    bool int64_index = false;
-    bool int64_param = false;
-    bool wildcard    = false;
-    Vec<int64_t> static_shape;  // array shape dims specialized to launch-time values.
-    Vec<FlagNode> children;
+struct ParameterAnnotationNode : SimpleRefcount<ParameterAnnotationNode> {
+    enum Kind { Leaf, HomogeneousTuple, HeterogeneousTuple };
+    virtual Kind kind() const = 0;
+    virtual Status flatten_tuple(const PythonArgKind** cursor,
+                                 Vec<RefPtr<LeafAnnotationNode>>* out) = 0;
+    virtual ~ParameterAnnotationNode() {}
+};
 
-    const FlagNode& child_at(size_t idx) const {
-        if (!wildcard) return children[idx];
-        return children.empty() ? *this : children[0];
+
+static Status flatten_parameter_annotation_node(ParameterAnnotationNode* node,
+                                                const PythonArgKind** cursor,
+                                                Vec<RefPtr<LeafAnnotationNode>>* out);
+
+
+struct LeafAnnotationNode : ParameterAnnotationNode {
+    bool constant = false;
+    ScalarAnnotation scalar;
+    ArrayAnnotation array;
+
+    virtual Kind kind() const { return Leaf; }
+
+    virtual Status flatten_tuple(const PythonArgKind** cursor,
+                                 Vec<RefPtr<LeafAnnotationNode>>* out) override {
+        if (array.specified)
+            return raise(PyExc_TypeError,
+                    "IndexWithInt64/ArrayAnnotation cannot be applied to a tuple kernel argument");
+        if (scalar.specified)
+            return raise(PyExc_TypeError,
+                    "ScalarInt64 annotation cannot be applied to a tuple kernel argument");
+
+        for (size_t item_idx = 0; **cursor != PythonArgKind::PyTupleEnd; ++item_idx) {
+            if (!flatten_parameter_annotation_node(this, cursor, out))
+                return ErrorRaised;
+        }
+        return OK;
     }
 };
 
-static Status flatten_flag_node(const FlagNode& node, const Vec<PythonArgKind>& arg_kinds,
-                                size_t& idx, Vec<LeafFlags>& out) {
-    PythonArgKind kind = arg_kinds[idx++];
-    if (kind == PythonArgKind::PyTupleBegin) {
-        out.push_back({});  // PyTupleBegin marker
-        size_t child_idx = 0;
-        while (arg_kinds[idx] != PythonArgKind::PyTupleEnd) {
-            if (!node.wildcard && child_idx >= node.children.size()){
-                // will raise error below
-                ++child_idx;
-                ++idx;
-                continue;
-            }
-            if (!flatten_flag_node(node.child_at(child_idx), arg_kinds, idx, out))
+
+struct HomogeneousTupleNode : ParameterAnnotationNode {
+    RefPtr<ParameterAnnotationNode> each;
+
+    virtual Kind kind() const { return HomogeneousTuple; }
+
+    virtual Status flatten_tuple(const PythonArgKind** cursor,
+                                 Vec<RefPtr<LeafAnnotationNode>>* out) override {
+        for (size_t item_idx = 0; **cursor != PythonArgKind::PyTupleEnd; ++item_idx) {
+            if (!flatten_parameter_annotation_node(each.get(), cursor, out))
                 return ErrorRaised;
-            ++child_idx;
         }
-        if (!node.wildcard && child_idx != node.children.size())
-            return raise(PyExc_TypeError,
-                "annotation expects %zu tuple elements but got %zu",
-                node.children.size(), child_idx);
-        out.push_back({});  // PyTupleEnd marker
-        ++idx;  // consume PyTupleEnd
         return OK;
     }
-    if (!node.wildcard || !node.children.empty())
-        return raise(PyExc_TypeError, "annotation expects a tuple argument but got a leaf");
-    out.push_back({node.constant, node.int64_index, node.int64_param, node.static_shape});
+};
+
+
+struct HeterogeneousTupleNode : ParameterAnnotationNode {
+    Vec<RefPtr<ParameterAnnotationNode>> items;
+
+    virtual Kind kind() const { return HeterogeneousTuple; }
+
+    virtual Status flatten_tuple(const PythonArgKind** cursor,
+                                 Vec<RefPtr<LeafAnnotationNode>>* out) override {
+        LeafAnnotationNode default_node;
+
+        size_t item_idx = 0;
+        while (**cursor != PythonArgKind::PyTupleEnd) {
+            ParameterAnnotationNode* item_node;
+            if (item_idx < items.size()) {
+                item_node = items[item_idx].get();
+            } else {
+                // Use a dummy node to keep going so that at the end, we generate an error
+                // message with the correct tuple length.
+                item_node = &default_node;
+            }
+            ++item_idx;
+            if (!flatten_parameter_annotation_node(item_node, cursor, out))
+                return ErrorRaised;
+        }
+        if (item_idx != items.size())
+            return raise(PyExc_TypeError,
+                         "Received a tuple of length %zu"
+                         " for a parameter annotated as a tuple of length %zu",
+                         item_idx, items.size());
+        return OK;
+    }
+};
+
+static Status flatten_parameter_annotation_node(ParameterAnnotationNode* node,
+                                                const PythonArgKind** cursor,
+                                                Vec<RefPtr<LeafAnnotationNode>>* out) {
+    PythonArgKind kind = **cursor;
+    ++*cursor;
+    if (kind == PythonArgKind::PyTupleBegin) {
+        out->push_back({});  // PyTupleBegin marker
+        if (!node->flatten_tuple(cursor, out))
+            return ErrorRaised;
+        out->push_back({});  // PyTupleEnd marker
+        ++*cursor;  // consume PyTupleEnd
+    } else {
+        if (node->kind() != ParameterAnnotationNode::Leaf)
+            return raise(PyExc_TypeError,
+                         "Received a non-tuple argument for a parameter annotated as a tuple");
+        out->push_back(newref(static_cast<LeafAnnotationNode*>(node)));
+    }
     return OK;
 }
 
-static Status flatten_flags(const Vec<FlagNode>& flags, const Vec<PythonArgKind>& arg_kinds,
-                            Vec<LeafFlags>& out) {
-    out.clear();
-    out.reserve(arg_kinds.size());
-    size_t idx = 0;
-    for (const FlagNode& node : flags) {
-        if (!flatten_flag_node(node, arg_kinds, idx, out))
+static Result<Vec<RefPtr<LeafAnnotationNode>>>
+flatten_parameter_annotation_nodes(const Vec<RefPtr<ParameterAnnotationNode>>& nodes,
+                                   const Vec<PythonArgKind>& arg_kinds) {
+    Vec<RefPtr<LeafAnnotationNode>> ret;
+    ret.reserve(arg_kinds.size());
+    const PythonArgKind* cursor = arg_kinds.data();
+    for (const RefPtr<ParameterAnnotationNode>& node : nodes) {
+        if (!flatten_parameter_annotation_node(node.get(), &cursor, &ret))
             return ErrorRaised;
     }
-    return OK;
+    return ret;
 }
 
 static Status extract_leaf(const DriverApi* driver, PyObject* obj, PythonArgKind kind,
-                           const LeafFlags& flags, LaunchHelper& helper) {
-    unsigned idx_bits = flags.int64_index ? 64 : 32;
+                           LeafAnnotationNode* annotation, LaunchHelper& helper) {
     switch (kind) {
     case PythonArgKind::TorchTensorDlpack:
     case PythonArgKind::DlpackArray:
     case PythonArgKind::CudaArray:
-        // TODO: apply flags.constant to array args?
-        if (flags.constant)
+        // TODO: apply annotation->constant to array args?
+        if (annotation->constant)
             return raise(PyExc_TypeError,
                          "ct.Constant[tuple] does not support array elements");
         if (kind == PythonArgKind::TorchTensorDlpack)
             return extract_array<arrayrepr_torch_tensor_dlpack>(
-                    driver, obj, idx_bits, flags.static_shape_dims, helper);
+                    driver, obj, annotation->array, helper);
         if (kind == PythonArgKind::DlpackArray)
             return extract_array<arrayrepr_dlpack>(
-                    driver, obj, idx_bits, flags.static_shape_dims, helper);
+                    driver, obj, annotation->array, helper);
         return extract_array<arrayrepr_cuda_array_iface>(
-                driver, obj, idx_bits, flags.static_shape_dims, helper);
+                driver, obj, annotation->array, helper);
     case PythonArgKind::PyBool:
-        return extract_py_bool(obj, flags.constant, helper);
+        return extract_py_bool(obj, annotation->constant, helper);
     case PythonArgKind::PyLong:
-        return extract_py_long(obj, flags.constant, flags.int64_param, helper);
+        return extract_py_long(obj, annotation->constant, annotation->scalar.bitwidth, helper);
     case PythonArgKind::PyFloat:
-        extract_py_float(obj, flags.constant, helper);
+        extract_py_float(obj, annotation->constant, helper);
         return OK;
     case PythonArgKind::PyList:
-        return extract_py_list(driver, obj, idx_bits, flags.static_shape_dims, helper);
+        return extract_py_list(driver, obj, annotation->array, helper);
     case PythonArgKind::PyTupleBegin:  // structure markers carry no data (filtered by caller)
     case PythonArgKind::PyTupleEnd:
         break;
@@ -1580,10 +1658,10 @@ static Status extract_leaf(const DriverApi* driver, PyObject* obj, PythonArgKind
 static Status extract_cuda_args(const DriverApi* driver,
                                 const Vec<PyObject*>& pyarg_objs,
                                 const Vec<PythonArgKind>& arg_kinds,
-                                const Vec<LeafFlags>& flat_flags,
+                                const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations,
                                 LaunchHelper& helper) {
     CHECK(pyarg_objs.size() == arg_kinds.size());
-    CHECK(flat_flags.size() == arg_kinds.size());
+    CHECK(flat_param_annotations.size() == arg_kinds.size());
     helper.arena.clear();
     helper.cuarg_offsets.clear();
     helper.array_ptr_arena_offsets.clear();
@@ -1594,25 +1672,25 @@ static Status extract_cuda_args(const DriverApi* driver,
         PythonArgKind kind = arg_kinds[i];
         if (kind == PythonArgKind::PyTupleBegin || kind == PythonArgKind::PyTupleEnd)
             continue;
-        if (!extract_leaf(driver, pyarg_objs[i], kind, flat_flags[i], helper))
+        if (!extract_leaf(driver, pyarg_objs[i], kind, flat_param_annotations[i].get(), helper))
             return ErrorRaised;
     }
     return OK;
 }
 
 static PyPtr parse_element_constraint(ConstantCursor& cursor, ParameterKind kind,
-                                      const LeafFlags& flags) {
+                                      const LeafAnnotationNode& annotation) {
     switch (kind) {
     case ParameterKind::Array:
-        return parse_array_constraint(cursor, flags.static_shape_dims);
+        return parse_array_constraint(cursor, annotation.array.static_shape_dims);
     case ParameterKind::Boolean:
-        return parse_pybool_constraint(cursor, flags.constant);
+        return parse_pybool_constraint(cursor, annotation.constant);
     case ParameterKind::Integer:
-        return parse_pylong_constraint(cursor, flags.constant, flags.int64_param);
+        return parse_pylong_constraint(cursor, annotation.constant, annotation.scalar.bitwidth);
     case ParameterKind::Float:
-        return parse_pyfloat_constraint(cursor, flags.constant);
+        return parse_pyfloat_constraint(cursor, annotation.constant);
     case ParameterKind::List:
-        return parse_list_constraint(cursor, flags.static_shape_dims);
+        return parse_list_constraint(cursor, annotation.array.static_shape_dims);
     case ParameterKind::TupleBegin:
     case ParameterKind::TupleEnd:
         CHECK(false);  // Should be handled before parse_element_constraint
@@ -1624,17 +1702,17 @@ static PyPtr parse_element_constraint(ConstantCursor& cursor, ParameterKind kind
 
 static PyPtr parse_param_constraint(ConstantCursor& cursor,
                                     const Vec<ParameterKind>& param_kinds,
-                                    const Vec<LeafFlags>& flat_flags,
+                                    const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations,
                                     size_t& idx);
 
 static PyPtr parse_tuple_constraint(ConstantCursor& cursor,
                                     const Vec<ParameterKind>& param_kinds,
-                                    const Vec<LeafFlags>& flat_flags,
+                                    const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations,
                                     size_t& idx) {
     PyPtr elements_list = steal(PyList_New(0));
     if (!elements_list) return {};
     while (param_kinds[idx] != ParameterKind::TupleEnd) {
-        PyPtr elem = parse_param_constraint(cursor, param_kinds, flat_flags, idx);
+        PyPtr elem = parse_param_constraint(cursor, param_kinds, flat_param_annotations, idx);
         if (!elem) return {};
         if (PyList_Append(elements_list.get(), elem.get()) < 0) return {};
     }
@@ -1648,25 +1726,26 @@ static PyPtr parse_tuple_constraint(ConstantCursor& cursor,
 
 static PyPtr parse_param_constraint(ConstantCursor& cursor,
                                     const Vec<ParameterKind>& param_kinds,
-                                    const Vec<LeafFlags>& flat_flags,
+                                    const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations,
                                     size_t& idx) {
     ParameterKind pk = param_kinds[idx];
     size_t pos = idx++;
     if (pk == ParameterKind::TupleBegin)
-        return parse_tuple_constraint(cursor, param_kinds, flat_flags, idx);
-    return parse_element_constraint(cursor, pk, flat_flags[pos]);
+        return parse_tuple_constraint(cursor, param_kinds, flat_param_annotations, idx);
+    return parse_element_constraint(cursor, pk, *flat_param_annotations[pos]);
 }
 
-static PyPtr parse_parameter_constraints(const Vec<int64_t>& constants,
-                                         const Vec<ParameterKind>& param_kinds,
-                                         const Vec<LeafFlags>& flat_flags) {
-    CHECK(param_kinds.size() == flat_flags.size());
+static PyPtr parse_parameter_constraints(
+        const Vec<int64_t>& constants,
+        const Vec<ParameterKind>& param_kinds,
+        const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations) {
+    CHECK(param_kinds.size() == flat_param_annotations.size());
     ConstantCursor cursor = {constants.data(), constants.size()};
     PyPtr param_constraints = steal(PyList_New(0));
     if (!param_constraints) return {};
     size_t idx = 0;
     while (idx < param_kinds.size()) {
-        PyPtr constraint = parse_param_constraint(cursor, param_kinds, flat_flags, idx);
+        PyPtr constraint = parse_param_constraint(cursor, param_kinds, flat_param_annotations, idx);
         if (!constraint) return {};
         if (PyList_Append(param_constraints.get(), constraint.get()))
             return {};
@@ -1675,14 +1754,15 @@ static PyPtr parse_parameter_constraints(const Vec<int64_t>& constants,
     return param_constraints;
 }
 
-static CallConvVersion minimum_calling_convention(const Vec<ParameterKind>& param_kinds,
-                                                  const Vec<LeafFlags>& flat_flags) {
+static CallConvVersion minimum_calling_convention(
+        const Vec<ParameterKind>& param_kinds,
+        const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations) {
     for (ParameterKind pk : param_kinds) {
         if (pk == ParameterKind::TupleBegin)
             return CallConvVersion::CutilePython_V2;
     }
-    for (const LeafFlags& f : flat_flags) {
-        if (!f.static_shape_dims.empty())
+    for (const RefPtr<LeafAnnotationNode>& f : flat_param_annotations) {
+        if (!f->array.static_shape_dims.empty())
             return CallConvVersion::CutilePython_V2;
     }
     return CallConvVersion::CutilePython_V1;
@@ -1690,9 +1770,9 @@ static CallConvVersion minimum_calling_convention(const Vec<ParameterKind>& para
 
 static PyPtr make_signature(const Vec<int64_t>& constants,
                             const Vec<ParameterKind>& param_kinds,
-                            const Vec<LeafFlags>& flat_flags,
+                            const Vec<RefPtr<LeafAnnotationNode>>& flat_param_annotations,
                             const PyPtr& calling_convention) {
-    PyPtr parameters = parse_parameter_constraints(constants, param_kinds, flat_flags);
+    PyPtr parameters = parse_parameter_constraints(constants, param_kinds, flat_param_annotations);
     if (!parameters) return {};
 
     PyObject* signature_module = get_signature_module();
@@ -2017,7 +2097,7 @@ static Status hoisted_tensor_map_encode(const DriverApi& driver,
 
 
 namespace { struct TileDispatcher {
-    Vec<FlagNode> flags;
+    Vec<RefPtr<ParameterAnnotationNode>> param_annotations;
     TileContextDispatcher default_context_dispatcher;
 
     static PyTypeObject pytype;
@@ -2405,9 +2485,9 @@ static Result<PreparedLaunch> prepare_launch(
     ProfileMap::Item* profile_item = ctx_dispatcher.arg_profiles.find(helper->pyarg_types);
     if (!profile_item) {
         // Slower path
-        if (static_cast<size_t>(num_pyargs) != dispatcher.flags.size()) {
+        if (static_cast<size_t>(num_pyargs) != dispatcher.param_annotations.size()) {
             return raise(PyExc_TypeError, "Kernel expects %zu arguments but %zd %s given",
-                    dispatcher.flags.size(), num_pyargs,
+                    dispatcher.param_annotations.size(), num_pyargs,
                     num_pyargs == 1 ? "was" : "were");
         }
 
@@ -2429,9 +2509,10 @@ static Result<PreparedLaunch> prepare_launch(
                     std::move(param_kinds), std::move(new_family));
         }
 
-        // Flatten the annotation flags against this argument structure.
-        Vec<LeafFlags> flat_flags;
-        if (!flatten_flags(dispatcher.flags, arg_kinds, flat_flags))
+        // Flatten the parameter annotations against this argument structure.
+        Result<Vec<RefPtr<LeafAnnotationNode>>> flat_param_annotations
+               = flatten_parameter_annotation_nodes(dispatcher.param_annotations, arg_kinds);
+        if (!flat_param_annotations.is_ok())
             return ErrorRaised;
 
         Vec<PyPtr> typeobj_refs;
@@ -2447,11 +2528,11 @@ static Result<PreparedLaunch> prepare_launch(
         profile_item = ctx_dispatcher.arg_profiles.insert(
                     std::move(typeobj_refs),
                     PythonArgProfile{family_item->value, std::move(arg_kinds),
-                                     std::move(flat_flags)});
+                                     std::move(*flat_param_annotations)});
     }
 
     if (!extract_cuda_args(driver, helper->pyarg_objs, profile_item->value.arg_kinds,
-                           profile_item->value.flat_flags, *helper)) {
+                           profile_item->value.flat_param_annotations, *helper)) {
         return ErrorRaised;
     }
 
@@ -2463,12 +2544,12 @@ static Result<PreparedLaunch> prepare_launch(
         for (PythonArgKind k : profile_item->value.arg_kinds)
             param_kinds.push_back(param_kind_from_pyarg_kind(k));
 
-        PyPtr cconv = get_cconv(
-                minimum_calling_convention(param_kinds, profile_item->value.flat_flags));
+        PyPtr cconv = get_cconv(minimum_calling_convention(
+                    param_kinds, profile_item->value.flat_param_annotations));
         if (!cconv) return ErrorRaised;
 
         PyPtr signature = make_signature(
-                helper->constants, param_kinds, profile_item->value.flat_flags, cconv);
+                helper->constants, param_kinds, profile_item->value.flat_param_annotations, cconv);
         if (!signature) return ErrorRaised;
 
         KernelImage* image = capture_kernel_image ? &kernel_image.emplace() : nullptr;
@@ -2686,72 +2767,144 @@ static Result<double> benchmark(const DriverApi* driver,
     return total_us;
 }
 
-// Parse one Python ParameterAnnotationNode into a FlagNode.
-static Result<FlagNode> parse_flag_node(PyObject* obj) {
-    PyPtr kind = getattr(obj, "KIND");
-    FlagNode node;
-    if (!kind) return ErrorRaised;
-    if (!PyUnicode_CompareWithASCIIString(kind.get(), "leaf")) {
-        PyPtr constant     = getattr(obj, "constant");
-        PyPtr int64_index  = getattr(obj, "int64_index");
-        PyPtr int64_scalar = getattr(obj, "int64_scalar");
-        PyPtr static_shape = getattr(obj, "static_shape");
-        if (!constant || !int64_index || !int64_scalar || !static_shape) return ErrorRaised;
-        node.constant    = (constant.get() == Py_True);
-        node.int64_index = (int64_index.get() == Py_True);
-        node.int64_param = (int64_scalar.get() == Py_True);
-        if (!PyTuple_Check(static_shape.get()))
-            return raise(PyExc_TypeError, "leaf `static_shape` must be a tuple, got %s",
-                         Py_TYPE(static_shape.get())->tp_name);
-        Py_ssize_t nd = PyTuple_GET_SIZE(static_shape.get());
-        node.static_shape.reserve(nd);
-        for (Py_ssize_t i = 0; i < nd; ++i)
-            node.static_shape.push_back(
-                    pylong_as<int64_t>(PyTuple_GET_ITEM(static_shape.get(), i)));
-        node.wildcard    = true;
-        return node;
-    }
-    if (!PyUnicode_CompareWithASCIIString(kind.get(), "homogeneous_tuple")) {
-        PyPtr each = getattr(obj, "each");
-        if (!each) return ErrorRaised;
-        Result<FlagNode> elem = parse_flag_node(each.get());
-        if (!elem.is_ok()) return ErrorRaised;
-        node.wildcard = true;
-        node.children.push_back(std::move(*elem));
-        return node;
-    }
-    if (!PyUnicode_CompareWithASCIIString(kind.get(), "heterogeneous_tuple")) {
-        PyPtr items = getattr(obj, "items");
-        if (!items) return ErrorRaised;
-        if (!PyTuple_Check(items.get()))
-            return raise(PyExc_TypeError, "heterogeneous_tuple `items` must be a tuple, got %s",
-                         Py_TYPE(items.get())->tp_name);
-        Py_ssize_t n = PyTuple_GET_SIZE(items.get());
-        node.wildcard = false;
-        node.children.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            Result<FlagNode> child = parse_flag_node(PyTuple_GET_ITEM(items.get(), i));
-            if (!child.is_ok()) return ErrorRaised;
-            node.children.push_back(std::move(*child));
-        }
-        return node;
-    }
-    return raise(PyExc_TypeError,
-                 "expected a ParameterAnnotationNode (leaf/homogeneous_tuple/heterogeneous_tuple),"
-                 " got KIND=%R", kind.get());
+static Result<unsigned> parse_int32_or_int64_dtype_as_bitwidth(PyObject* py_dtype) {
+    PyPtr dtype_name = getattr(py_dtype, "name");
+    if (!dtype_name) return ErrorRaised;
+
+    if (!PyUnicode_Check(dtype_name.get()))
+        return raise(PyExc_TypeError, "DType.name must be a string");
+
+    if (!PyUnicode_CompareWithASCIIString(dtype_name.get(), "int32"))
+        return 32;
+    if (!PyUnicode_CompareWithASCIIString(dtype_name.get(), "int64"))
+        return 64;
+    return raise(PyExc_ValueError, "Expected int32 or int64 dtype");
 }
 
-// Parse a Python sequence of per-parameter ParameterAnnotationNode trees into FlagNode trees.
-static Result<Vec<FlagNode>> parse_flag_nodes_seq(PyObject* nodes_seq) {
+// Parse a Python ScalarAnnotation into its C++ equivalent.
+static Status parse_scalar_annotation(PyObject* py_scalar_annotation, ScalarAnnotation* dst) {
+    if (py_scalar_annotation == Py_None)
+        return OK;
+
+    dst->specified = true;
+
+    PyPtr dtype = getattr(py_scalar_annotation, "dtype");
+    if (!dtype) return ErrorRaised;
+
+    Result<unsigned> bitwidth_res = parse_int32_or_int64_dtype_as_bitwidth(dtype.get());
+    if (!bitwidth_res.is_ok()) return ErrorRaised;
+
+    dst->bitwidth = *bitwidth_res;
+    return OK;
+}
+
+
+// Parse a Python ArrayAnnotation into its C++ equivalent.
+static Status parse_array_annotation(PyObject* py_array_annotation, ArrayAnnotation* dst) {
+    if (py_array_annotation == Py_None)
+        return OK;
+
+    dst->specified = true;
+
+    PyPtr index_dtype = getattr(py_array_annotation, "index_dtype");
+    if (!index_dtype) return ErrorRaised;
+
+    Result<unsigned> index_bitwidth_res = parse_int32_or_int64_dtype_as_bitwidth(index_dtype.get());
+    if (!index_bitwidth_res.is_ok()) return ErrorRaised;
+
+    dst->index_bitwidth = *index_bitwidth_res;
+
+    PyPtr static_shape_dims = getattr(py_array_annotation, "static_shape_dims");
+    if (!static_shape_dims) return ErrorRaised;
+
+    if (!PyTuple_Check(static_shape_dims.get()))
+        return raise(PyExc_TypeError, "`ArrayAnnotation.static_shape_dims` must be a tuple, got %s",
+                     Py_TYPE(static_shape_dims.get())->tp_name);
+    Py_ssize_t nd = PyTuple_GET_SIZE(static_shape_dims.get());
+
+    dst->static_shape_dims.reserve(nd);
+    for (Py_ssize_t i = 0; i < nd; ++i) {
+        dst->static_shape_dims.push_back(
+                pylong_as<int64_t>(PyTuple_GET_ITEM(static_shape_dims.get(), i)));
+        if (PyErr_Occurred()) return ErrorRaised;
+    }
+
+    return OK;
+}
+
+// Parse one Python ParameterAnnotationNode into its C++ equivalent.
+static RefPtr<ParameterAnnotationNode> parse_parameter_annotation_node(PyObject* obj) {
+    PyPtr kind = getattr(obj, "KIND");
+    if (!kind) return {};
+    if (!PyUnicode_Check(kind.get())) {
+        raise(PyExc_TypeError, "KIND must be a string");
+        return {};
+    }
+
+    if (!PyUnicode_CompareWithASCIIString(kind.get(), "leaf")) {
+        PyPtr constant = getattr(obj, "constant");
+        PyPtr scalar = getattr(obj, "scalar");
+        PyPtr array = getattr(obj, "array");
+        if (!constant || !scalar || !array) return {};
+
+        RefPtr<LeafAnnotationNode> node = steal(new LeafAnnotationNode);
+        node->constant = (constant.get() == Py_True);
+
+        if (!parse_scalar_annotation(scalar.get(), &node->scalar))
+            return {};
+        if (!parse_array_annotation(array.get(), &node->array))
+            return {};
+
+        return node;
+    } else if (!PyUnicode_CompareWithASCIIString(kind.get(), "homogeneous_tuple")) {
+        PyPtr py_each = getattr(obj, "each");
+        if (!py_each) return {};
+
+        RefPtr<ParameterAnnotationNode> each = parse_parameter_annotation_node(py_each.get());
+        if (!each) return {};
+
+        RefPtr<HomogeneousTupleNode> node = steal(new HomogeneousTupleNode);
+        node->each = std::move(each);
+        return node;
+    } else if (!PyUnicode_CompareWithASCIIString(kind.get(), "heterogeneous_tuple")) {
+        PyPtr items = getattr(obj, "items");
+        if (!items) return {};
+        if (!PyTuple_Check(items.get())) {
+            raise(PyExc_TypeError, "heterogeneous_tuple `items` must be a tuple, got %s",
+                  Py_TYPE(items.get())->tp_name);
+            return {};
+        }
+        Py_ssize_t n = PyTuple_GET_SIZE(items.get());
+        RefPtr<HeterogeneousTupleNode> node = steal(new HeterogeneousTupleNode);
+        node->items.reserve(n);
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            RefPtr<ParameterAnnotationNode> item = parse_parameter_annotation_node(
+                    PyTuple_GET_ITEM(items.get(), i));
+            if (!item) return {};
+            node->items.push_back(std::move(item));
+        }
+        return node;
+    } else {
+        raise(PyExc_TypeError,
+              "expected a ParameterAnnotationNode (leaf/homogeneous_tuple/heterogeneous_tuple),"
+              " got KIND=%R", kind.get());
+        return {};
+    }
+}
+
+// Parse a Python sequence of per-parameter ParameterAnnotationNode trees.
+static Result<Vec<RefPtr<ParameterAnnotationNode>>>
+parse_parameter_annotation_nodes_seq(PyObject* nodes_seq) {
     if (!PyTuple_Check(nodes_seq))
         return raise(PyExc_TypeError, "expected a tuple of parameter annotation nodes");
     Py_ssize_t n = PyTuple_GET_SIZE(nodes_seq);
-    Vec<FlagNode> result;
+    Vec<RefPtr<ParameterAnnotationNode>> result;
     result.reserve(n);
     for (Py_ssize_t i = 0; i < n; ++i) {
-        Result<FlagNode> node = parse_flag_node(PyTuple_GET_ITEM(nodes_seq, i));
-        if (!node.is_ok()) return ErrorRaised;
-        result.push_back(std::move(*node));
+        RefPtr<ParameterAnnotationNode> node = parse_parameter_annotation_node(
+                PyTuple_GET_ITEM(nodes_seq, i));
+        if (!node) return ErrorRaised;
+        result.push_back(std::move(node));
     }
     return result;
 }
@@ -2832,11 +2985,12 @@ static int TileDispatcher_init(PyObject* self, PyObject* args, PyObject* kwargs)
                                      &py_parameter_annotations))
         return -1;
 
-    Result<Vec<FlagNode>> flags = parse_flag_nodes_seq(py_parameter_annotations);
-    if (!flags.is_ok()) return -1;
+    Result<Vec<RefPtr<ParameterAnnotationNode>>> param_annotations
+            = parse_parameter_annotation_nodes_seq(py_parameter_annotations);
+    if (!param_annotations.is_ok()) return -1;
 
     TileDispatcher& dispatcher = py_unwrap<TileDispatcher>(self);
-    dispatcher.flags = std::move(*flags);
+    dispatcher.param_annotations = std::move(*param_annotations);
     return 0;
 }
 
@@ -2887,16 +3041,18 @@ static PyObject* get_parameter_constraints_from_pyargs(PyObject* self, PyObject*
     Result<const DriverApi*> driver = get_driver_api();
     if (!driver.is_ok()) return nullptr;
 
-    Vec<LeafFlags> flat_flags;
-    if (!flatten_flags(dispatcher.flags, arg_kinds, flat_flags))
+    Result<Vec<RefPtr<LeafAnnotationNode>>> flat_param_annotations
+        = flatten_parameter_annotation_nodes(dispatcher.param_annotations, arg_kinds);
+    if (!flat_param_annotations.is_ok())
         return nullptr;
 
-    if (!extract_cuda_args(*driver, helper->pyarg_objs, arg_kinds, flat_flags, *helper)) {
+    if (!extract_cuda_args(*driver, helper->pyarg_objs, arg_kinds, *flat_param_annotations,
+                           *helper)) {
         return nullptr;
     }
 
     return parse_parameter_constraints(
-            helper->constants, param_kinds, flat_flags).release();
+            helper->constants, param_kinds, *flat_param_annotations).release();
 }
 
 static Result<Grid> parse_grid(PyObject* tuple) {

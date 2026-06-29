@@ -9,17 +9,15 @@ from types import FunctionType
 from typing import (get_origin, get_args, Annotated, Any, Sequence)
 
 from cuda.tile._stub import ConstantAnnotation, ArrayAnnotation, ScalarAnnotation, ListAnnotation
-from cuda.tile._datatype import int64
 
 
 @dataclass(frozen=True)
 class LeafAnnotationNode:
     KIND = "leaf"
 
-    constant: bool                 # ct.Constant: compile-time constant parameter.
-    int64_index: bool              # 64-bit array index dtype.
-    int64_scalar: bool             # int64 scalar parameter.
-    static_shape: tuple[int, ...]  # array shape dims specialized to launch-time values.
+    constant: bool  # ct.Constant: compile-time constant parameter.
+    scalar: ScalarAnnotation | None = None
+    array: ArrayAnnotation | None = None
 
 
 @dataclass(frozen=True)
@@ -73,28 +71,27 @@ def _build_annotation_node(annotation: Any,
         if get_origin(inner) is tuple:
             return _build_tuple_node(inner, is_constant)
         return LeafAnnotationNode(constant=is_constant,
-                                  int64_index=_has_int64_index_annotation(metadata),
-                                  int64_scalar=_has_int64_scalar_annotation(metadata),
-                                  static_shape=_get_static_shape_annotation(metadata))
+                                  array=_get_array_annotation(metadata),
+                                  scalar=_get_scalar_annotation(metadata))
     if get_origin(annotation) is tuple:
         return _build_tuple_node(annotation, outer_constant)
-    return LeafAnnotationNode(constant=outer_constant, int64_index=False,
-                              int64_scalar=False, static_shape=())
+    return LeafAnnotationNode(constant=outer_constant)
 
 
-def _has_int64_index_annotation(metadata: Sequence[Any]) -> bool:
+def _get_array_annotation(metadata: Sequence[Any]) -> ArrayAnnotation | None:
     for m in metadata:
-        if isinstance(m, ArrayAnnotation) and m.index_dtype is int64:
-            return True
-        if (isinstance(m, ListAnnotation)
-                and isinstance(m.element, ArrayAnnotation)
-                and m.element.index_dtype is int64):
-            return True
-    return False
+        if isinstance(m, ArrayAnnotation):
+            return m
+        if isinstance(m, ListAnnotation) and isinstance(m.element, ArrayAnnotation):
+            return m.element
+    return None
 
 
-def _has_int64_scalar_annotation(metadata: Sequence[Any]) -> bool:
-    return any(isinstance(m, ScalarAnnotation) and m.dtype is int64 for m in metadata)
+def _get_scalar_annotation(metadata: Sequence[Any]) -> ScalarAnnotation | None:
+    for m in metadata:
+        if isinstance(m, ScalarAnnotation):
+            return m
+    return None
 
 
 def _get_static_shape_annotation(metadata: Sequence[Any]) -> tuple[int, ...]:

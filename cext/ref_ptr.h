@@ -42,6 +42,16 @@ public:
         that.ptr_ = nullptr;
     }
 
+    template <typename T2>
+    RefPtr(const RefPtr<T2>& that) : ptr_(that.ptr_) {
+        if (ptr_) reference_add(*ptr_);
+    }
+
+    template <typename Y>
+    RefPtr(RefPtr<Y>&& that) : ptr_(that.ptr_) {
+        that.ptr_ = nullptr;
+    }
+
     RefPtr& operator= (const RefPtr& that) {
         if (this != &that) {
             if (that.ptr_) reference_add(*that.ptr_);
@@ -52,6 +62,16 @@ public:
     }
 
     RefPtr& operator= (RefPtr&& that) {
+        if (this != &that) {
+            if (ptr_) reference_remove(*ptr_);
+            ptr_ = that.ptr_;
+            that.ptr_ = nullptr;
+        }
+        return *this;
+    }
+
+    template <typename T2>
+    RefPtr& operator= (RefPtr<T2>&& that) {
         if (this != &that) {
             if (ptr_) reference_remove(*ptr_);
             ptr_ = that.ptr_;
@@ -102,6 +122,7 @@ private:
 
     template <typename T2> friend RefPtr<T2> steal(T2* ptr);
     template <typename T2> friend RefPtr<T2> newref(T2* ptr);
+    template <typename T2> friend class RefPtr;
 };
 
 template <typename T>
