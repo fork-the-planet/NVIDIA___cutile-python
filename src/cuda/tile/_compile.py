@@ -23,6 +23,7 @@ from types import FunctionType
 from typing import Optional, Sequence
 import zipfile
 
+from cuda.tile import ArrayAnnotation
 from cuda.tile._annotated_function import (
     AnnotatedFunction, HeterogeneousTupleNode, HomogeneousTupleNode, LeafAnnotationNode,
     ParameterAnnotationNode, get_annotated_function)
@@ -38,8 +39,8 @@ from cuda.tile._exception import (
 from cuda.tile._ir import ir, hir
 from cuda.tile._ir.ir import TypingHooks
 from cuda.tile._ir.aggregate_support import flatten_block_parameters
-from cuda.tile._ir.ops import loosely_typed_const, tile_impl_registry, sym2var, build_tuple
-from cuda.tile._ir.type import TileTy, ArrayTy, ListTy, TupleTy
+from cuda.tile._ir.ops import loosely_typed_const, tile_impl_registry, build_tuple
+from cuda.tile._ir.type import TileTy, ArrayTy, ListTy
 from cuda.tile._passes.ast2hir import get_function_hir
 from cuda.tile._passes.code_motion import hoist_loop_invariants
 from cuda.tile._passes.unhoist_partition_views import unhoist_partition_views
@@ -125,187 +126,167 @@ class _KernelParameters:
     nonconstant_flat_vars: Sequence[tuple[tuple[ir.Var, ...], ParameterConstraint]]
 
 
-def _all_const(node: ParameterAnnotationNode) -> bool:
-    if isinstance(node, LeafAnnotationNode):
-        return node.constant
-    if isinstance(node, HomogeneousTupleNode):
-        return _all_const(node.each)
-    return all(_all_const(item) for item in node.items)
-
-
-def _any_const(node: ParameterAnnotationNode) -> bool:
-    if isinstance(node, LeafAnnotationNode):
-        return node.constant
-    if isinstance(node, HomogeneousTupleNode):
-        return _any_const(node.each)
-    return any(_any_const(item) for item in node.items)
-
-
-def _make_nonconstant_var(
-        constraint: ParameterConstraint, node: ParameterAnnotationNode, name: str, loc,
-        ir_ctx: ir.IRContext, nonconstant_flat_vars: list) -> ir.Var:
-    if isinstance(constraint, ConstantConstraint):
-        raise TypeError(
-            f"Internal error: cannot make a non-constant var for ConstantConstraint `{name}`")
-    v = ir_ctx.make_var(name, loc)
-    v.set_type(_constraint_to_ty(constraint, node, name, ir_ctx.typing_hooks))
-    [flat_vars] = flatten_block_parameters([v])
-    nonconstant_flat_vars.append((flat_vars, constraint))
-    return v
-
-
-def _tuple_child_node(node: ParameterAnnotationNode, i: int) -> ParameterAnnotationNode:
-    if isinstance(node, HeterogeneousTupleNode):
-        return node.items[i]
-    if isinstance(node, HomogeneousTupleNode):
-        return node.each
-    return node
-
-
-def _check_tuple_node_arity(node: ParameterAnnotationNode, num_elements: int, name: str):
-    if isinstance(node, HeterogeneousTupleNode) and len(node.items) != num_elements:
-        raise ValueError(
-            f"Parameter `{name}` is annotated as a tuple of {len(node.items)} element(s), "
-            f"but a tuple of {num_elements} element(s) was provided.")
-
-
-def _build_partial_const_var(constraint: ParameterConstraint,
-                             node: ParameterAnnotationNode,
-                             name: str, loc,
-                             ir_ctx: ir.IRContext,
-                             nonconstant_flat_vars: list) -> ir.Var:
-    """Build an IR var for a parameter that may have mixed constant/non-constant elements.
-    node is a leaf (wildcard) or a tuple node (one child per element of the tuple)."""
-    if isinstance(constraint, TupleConstraint):
-        _check_tuple_node_arity(node, len(constraint.elements), name)
-        if _all_const(node):
-            return sym2var(_tuple_constraint_to_value(constraint), constant_only=True)
-        elem_vars = []
-        for i, elem in enumerate(constraint.elements):
-            child_node = _tuple_child_node(node, i)
-            ev = _build_partial_const_var(elem, child_node, f"{name}_{i}", loc,
-                                          ir_ctx, nonconstant_flat_vars)
-            elem_vars.append(ev)
-        return build_tuple(tuple(elem_vars))
-    if _all_const(node):
-        if not isinstance(constraint, ConstantConstraint):
-            raise TypeError(
-                f"Expected a ConstantConstraint for constant element `{name}`,"
-                f" got '{type(constraint).__name__}'")
-        return loosely_typed_const(constraint.value, name=name)
-    return _make_nonconstant_var(constraint, node, name, loc, ir_ctx, nonconstant_flat_vars)
-
-
 def _create_kernel_parameters(parameter_constraints: Sequence[ParameterConstraint],
                               parameter_annotations: Sequence[ParameterAnnotationNode],
                               parameter_names: Sequence[str],
                               parameter_locations: Sequence[Loc],
                               ir_ctx: ir.IRContext) -> _KernelParameters:
-    aggregate_vars = []
     nonconstant_flat_vars = []
-    for pos, (constraint, node, name, loc) in enumerate(
+    parameter_vars = tuple(ir_ctx.make_var(name, loc)
+                           for name, loc in zip(parameter_names, parameter_locations, strict=True))
+
+    for pos, (constraint, annotation, name, var) in enumerate(
             zip(parameter_constraints, parameter_annotations,
-                parameter_names, parameter_locations, strict=True)):
-        if _all_const(node):
-            if isinstance(constraint, ConstantConstraint):
-                var = loosely_typed_const(constraint.value, name=name)
-            elif isinstance(constraint, TupleConstraint):
-                var = sym2var(_tuple_constraint_to_value(constraint), constant_only=True)
-            else:
-                raise TypeError(f"Expected a constant for parameter `{name}` at position {pos},"
-                                f" got '{type(constraint).__name__}'")
-        elif _any_const(node):
-            var = _build_partial_const_var(constraint, node, name, loc,
-                                           ir_ctx, nonconstant_flat_vars)
+                parameter_names, parameter_vars, strict=True)):
+        path = ParameterPath(name, ())
+        _create_parameter(constraint, annotation, path, var, nonconstant_flat_vars)
+    return _KernelParameters(parameter_vars, nonconstant_flat_vars)
+
+
+@dataclass
+class ParameterPath:
+    name: str
+    tuple_indices: tuple[int, ...]
+
+    def tuple_item(self, index: int) -> "ParameterPath":
+        return ParameterPath(self.name, self.tuple_indices + (index,))
+
+
+def _create_parameter(
+        constraint: ParameterConstraint,
+        annotation: ParameterAnnotationNode,
+        path: ParameterPath,
+        var: ir.Var,
+        nonconstant_flat_vars: list[tuple[tuple[ir.Var, ...], ParameterConstraint]]
+):
+    if isinstance(annotation, LeafAnnotationNode):
+        annotation.validate()
+
+        if (annotation.array is not None
+                and not isinstance(constraint, ArrayConstraint)
+                and not (isinstance(constraint, ListConstraint)
+                         and isinstance(constraint.element, ArrayConstraint))):
+            raise _make_constraint_error("ArrayAnnotation/IndexedWithInt64 can only be applied"
+                                         " to an array or a list-of-array parameter.", path)
+
+        if annotation.scalar is not None and not isinstance(constraint, ScalarConstraint):
+            raise _make_constraint_error(
+                "ScalarAnnotation/ScalarInt64 can only be applied"
+                " to a non-constant scalar parameter.", path)
+
+    if isinstance(constraint, TupleConstraint):
+        if isinstance(annotation, LeafAnnotationNode):
+            item_nodes = [annotation] * len(constraint.elements)
+        elif isinstance(annotation, HomogeneousTupleNode):
+            item_nodes = [annotation.each] * len(constraint.elements)
+        elif isinstance(annotation, HeterogeneousTupleNode):
+            if len(annotation.items) != len(constraint.elements):
+                raise _make_constraint_error(
+                        f"Received a tuple of length {len(constraint.elements)}"
+                        f" but the annotation implies length {len(annotation.items)}.",
+                        path)
+            item_nodes = annotation.items
         else:
-            var = _make_nonconstant_var(constraint, node, name, loc, ir_ctx,
-                                        nonconstant_flat_vars)
-        aggregate_vars.append(var)
-    return _KernelParameters(aggregate_vars, nonconstant_flat_vars)
+            assert False
 
+        item_vars = []
+        for i, (item, node) in enumerate(zip(constraint.elements, item_nodes, strict=True)):
+            item_var = var.ctx.make_var(var.name + f"_{i}", var.loc)
+            _create_parameter(item, node, path.tuple_item(i), item_var, nonconstant_flat_vars)
+            item_vars.append(item_var)
+        build_tuple(item_vars, result_var=var)
+        return
 
-def _constraint_to_ty(
-        constraint: "ScalarConstraint | ArrayConstraint | TupleConstraint | ListConstraint",
-        node: ParameterAnnotationNode,
-        name: str,
-        typing_hooks: TypingHooks):
+    if not isinstance(annotation, LeafAnnotationNode):
+        raise _make_constraint_error("Non-tuple parameter is annotated as a tuple.", path)
+
+    if annotation.constant and not isinstance(constraint, ConstantConstraint):
+        raise _make_constraint_error("Expected a scalar/tuple constant,"
+                                     " as implied by the Constant annotation.", path)
+
+    if isinstance(constraint, ConstantConstraint):
+        if not annotation.constant:
+            raise _make_constraint_error("ConstantConstraint is only valid for parameters"
+                                         " annotated as Constant.", path)
+
+        loosely_typed_const(constraint.value, result_var=var)
+        return
+
     if isinstance(constraint, ScalarConstraint):
-        return typing_hooks.get_tensor_like_type(constraint.dtype, ())
+        if annotation.scalar is not None and annotation.scalar.dtype != constraint.dtype:
+            raise _make_constraint_error(f"ScalarConstraint.dtype {constraint.dtype} does not match"
+                                         f" the annotated dtype {annotation.scalar.dtype}.", path)
+        ty = var.ctx.typing_hooks.get_tensor_like_type(constraint.dtype, ())
     elif isinstance(constraint, ArrayConstraint):
-        return _get_array_ty(constraint, node, name, typing_hooks)
-    elif isinstance(constraint, TupleConstraint):
-        _check_tuple_node_arity(node, len(constraint.elements), name)
-        return TupleTy([_constraint_to_ty(e, _tuple_child_node(node, i), f"{name}_{i}",
-                                          typing_hooks)
-                        for i, e in enumerate(constraint.elements)])
+        ty = _get_array_ty(constraint, annotation.array, path, var.ctx.typing_hooks)
     elif isinstance(constraint, ListConstraint):
-        return ListTy(_get_array_ty(constraint.element, node, name, typing_hooks))
+        assert isinstance(constraint.element, ArrayConstraint)
+        array_ty = _get_array_ty(constraint.element, annotation.array, path, var.ctx.typing_hooks)
+        ty = ListTy(array_ty)
     else:
-        raise TypeError(f"Unsupported constraint type: {type(constraint).__name__}")
+        raise _make_constraint_error(f"Unsupported constraint type"
+                                     f" '{type(constraint).__name__}'.", path)
+
+    var.set_type(ty)
+    [flat_vars] = flatten_block_parameters([var])
+    nonconstant_flat_vars.append((flat_vars, constraint))
 
 
-def _tuple_constraint_to_value(constraint: "TupleConstraint") -> tuple:
-    result = []
-    for e in constraint.elements:
-        if isinstance(e, ConstantConstraint):
-            result.append(e.value)
-        elif isinstance(e, TupleConstraint):
-            result.append(_tuple_constraint_to_value(e))
-        else:
-            raise TypeError(
-                f"Expected a ConstantConstraint in a Constant[tuple], got {type(e).__name__}")
-    return tuple(result)
+def _make_constraint_error(message: str, path: ParameterPath):
+    what = f"kernel parameter '{path.name}'"
+    for tuple_index in path.tuple_indices:
+        what = f"item #{tuple_index} of {what}"
+    return TypeError(f"Invalid {what}: {message}")
 
 
-def _resolve_static_shape_axes(node: ParameterAnnotationNode, ndim: int, name: str) -> set[int]:
-    if not isinstance(node, LeafAnnotationNode):
-        raise ValueError(
-            f"Parameter `{name}` is annotated as a tuple, but a single array or list was "
-            f"provided.")
-
-    axes: set[int] = set()
-    if node.array is None:
-        return axes
-
-    for axis in node.array.static_shape_dims:
+def _resolve_static_shape_axes(array_ann: ArrayAnnotation,
+                               ndim: int,
+                               path: ParameterPath) -> list[bool]:
+    static_shape_mask: list[bool] = [False] * ndim
+    for axis in array_ann.static_shape_dims:
         if not -ndim <= axis < ndim:
-            raise ValueError(
-                f"Parameter `{name}` has `static_shape_dims` axis {axis}, which is out of "
-                f"range for an array of rank {ndim}.")
+            raise _make_constraint_error(f"Axis {axis} found in `static_shape_dims`"
+                                         f" is out of range for an array of rank {ndim}.", path)
         normalized = axis + ndim if axis < 0 else axis
-        if normalized in axes:
-            raise ValueError(
-                f"Parameter `{name}` lists axis {axis} more than once in `static_shape_dims`.")
-        axes.add(normalized)
-    return axes
+        if static_shape_mask[normalized]:
+            raise _make_constraint_error(
+                    f"Axis {axis} appears more than once in `static_shape_dims`.", path)
+        static_shape_mask[normalized] = True
+    return static_shape_mask
 
 
-def _get_array_ty(param: ArrayConstraint, node: ParameterAnnotationNode,
-                  name: str, typing_hooks: TypingHooks):
+def _get_array_ty(param: ArrayConstraint,
+                  array_ann: ArrayAnnotation | None,
+                  path: ParameterPath,
+                  typing_hooks: TypingHooks):
+    if array_ann is None:
+        array_ann = ArrayAnnotation()
+
     for static_stride, bound in zip(param.stride_constant, param.stride_lower_bound_incl,
                                     strict=True):
         if static_stride is not None:
             continue
         if bound is None or bound < 0:
-            raise NotImplementedError("Negative strides are currently not supported:"
-                                      " please specify stride_lower_bound_incl=0")
+            raise _make_constraint_error("Negative strides are currently not supported:"
+                                         " please specify stride_lower_bound_incl=0", path)
 
-    static_shape_dims = _resolve_static_shape_axes(node, param.ndim, name)
-
-    def _get_static_shape(axis: int) -> int:
-        static_shape = param.shape_constant[axis]
-        if static_shape is None:
-            raise ValueError(
-                f"Parameter `{name}` is annotated as static-shaped on axis {axis}, but no "
-                "constant shape value is available there.")
-        return static_shape
-    shape = tuple(_get_static_shape(i) if i in static_shape_dims else None
-                  for i in range(param.ndim))
+    static_shape_mask = _resolve_static_shape_axes(array_ann, param.ndim, path)
+    array_ty_shape = []
+    for axis, (annotated_as_static, constraint_size) in enumerate(
+            zip(static_shape_mask, param.shape_constant, strict=True)):
+        if annotated_as_static:
+            if constraint_size is None:
+                raise _make_constraint_error(
+                    f"Axis {axis} is annotated as static, but no "
+                    "constant shape value is available there.", path)
+            array_ty_shape.append(constraint_size)
+        else:
+            array_ty_shape.append(None)
 
     # TODO: `strides` still leaks the dispatcher's stride specialization into the user-visible
     # type.
     return ArrayTy(param.dtype,
-                   shape=shape,
+                   shape=tuple(array_ty_shape),
                    strides=param.stride_constant,
                    index_dtype=param.index_dtype,
                    typing_hooks=typing_hooks)

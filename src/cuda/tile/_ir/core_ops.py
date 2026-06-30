@@ -6,7 +6,7 @@ import functools
 import operator
 from dataclasses import dataclass
 from types import MethodType, FunctionType, BuiltinFunctionType, MappingProxyType
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from typing_extensions import override
 
@@ -207,7 +207,7 @@ class TypedConst(Operation, opcode="typed_const"):
 def loosely_typed_const(value: Any,
                         ty: Optional[Type] = None,
                         loose_ty: Optional[Type] = None,
-                        name: str | None = None) -> Var:
+                        result_var: Var | None = None) -> Var:
     builder = Builder.get_current()
     if ty is None:
         ty = type_of_constant_python_value(value, builder.ir_ctx.typing_hooks)
@@ -217,15 +217,15 @@ def loosely_typed_const(value: Any,
     if isinstance(ty, DTypeSpec):
         value = ty.dtype
 
-    ret = _strictly_typed_const_inner(builder, value, ty, name=name)
+    ret = _strictly_typed_const_inner(builder, value, ty, result_var=result_var)
     if loose_ty is None:
         loose_ty = loose_type_of_constant_python_value(value, builder.ir_ctx.typing_hooks)
     ret.set_loose_type(loose_ty)
     return ret
 
 
-def strictly_typed_const(value: Any, ty: Type, name: str | None = None) -> Var:
-    return _strictly_typed_const_inner(Builder.get_current(), value, ty, name)
+def strictly_typed_const(value: Any, ty: Type) -> Var:
+    return _strictly_typed_const_inner(Builder.get_current(), value, ty)
 
 
 def _map_nested_tuple(func, value):
@@ -234,7 +234,7 @@ def _map_nested_tuple(func, value):
 
 
 def _strictly_typed_const_inner(builder: Builder,
-                                value: Any, ty: Type, name: str | None = None) -> Var:
+                                value: Any, ty: Type, result_var: Var | None = None) -> Var:
     if isinstance(ty, TensorLikeTy):
         dtype = ty.tensor_dtype()
         if is_integral(dtype):
@@ -263,8 +263,7 @@ def _strictly_typed_const_inner(builder: Builder,
 
             value = _map_nested_tuple(round_float, value)
 
-    result = None if name is None else builder.ir_ctx.make_var(name, builder.loc)
-    ret = builder.add_operation(TypedConst, ty, dict(value=value), result=result)
+    ret = builder.add_operation(TypedConst, ty, dict(value=value), result=result_var)
     if not isinstance(ty, TensorLikeTy) or ty.tensor_shape() == ():
         # We currently don't have a way to represent an N-dimensional tile constant
         ret.set_constant(value)
@@ -289,14 +288,20 @@ def builtin_numeric_ctor_impl(ctor_obj: Any, x: Var) -> Var:
 # Tuple
 # ===========================================================================================
 
-@impl(hir_stubs.build_tuple)
-def build_tuple(items: tuple[Var, ...]) -> Var:
+def build_tuple(items: Sequence[Var], result_var: Var | None = None) -> Var:
+    items = tuple(items)
     ty = TupleTy(tuple(x.get_type() for x in items))
     loose_ty = TupleTy(tuple(x.get_loose_type() for x in items))
-    res = make_aggregate(TupleValue(items), ty, loose_ty)
+    res = Builder.get_current().make_aggregate(TupleValue(items), ty, loose_ty,
+                                               result_var=result_var)
     if all(x.is_constant() for x in items):
         res.set_constant(tuple(x.get_constant() for x in items))
     return res
+
+
+@impl(hir_stubs.build_tuple)
+def build_tuple_impl(items: tuple[Var, ...]) -> Var:
+    return build_tuple(items)
 
 
 def tuple_item(tup: TupleValue, index: int) -> Var:

@@ -1234,16 +1234,10 @@ static Result<ArrayRepr> arrayrepr_dlpack(PyObject* pyobj, unsigned index_bitwid
 
 
 struct ScalarAnnotation {
-    bool specified = false; // To disambiguate between a specified ScalarAnnotation
-                            // with a default value and no ScalarAnnotation
-
     unsigned bitwidth = 32;
 };
 
 struct ArrayAnnotation {
-    bool specified = false; // To disambiguate between a specified ArrayAnnotation
-                            // with a default value and no ArrayAnnotation
-
     unsigned index_bitwidth = 32;
     Vec<int64_t> static_shape_dims; // array shape dims specialized to launch-time values.
 };
@@ -1530,13 +1524,6 @@ struct LeafAnnotationNode : ParameterAnnotationNode {
 
     virtual Status flatten_tuple(Cursor<ParameterKind>* cursor,
                                  Vec<RefPtr<LeafAnnotationNode>>* out) override {
-        if (array.specified)
-            return raise(PyExc_TypeError,
-                    "IndexWithInt64/ArrayAnnotation cannot be applied to a tuple kernel argument");
-        if (scalar.specified)
-            return raise(PyExc_TypeError,
-                    "ScalarInt64 annotation cannot be applied to a tuple kernel argument");
-
         for (size_t item_idx = 0; cursor->peek() != ParameterKind::TupleEnd; ++item_idx) {
             if (!flatten_parameter_annotation_node(this, cursor, out))
                 return ErrorRaised;
@@ -2780,8 +2767,6 @@ static Status parse_scalar_annotation(PyObject* py_scalar_annotation, ScalarAnno
     if (py_scalar_annotation == Py_None)
         return OK;
 
-    dst->specified = true;
-
     PyPtr dtype = getattr(py_scalar_annotation, "dtype");
     if (!dtype) return ErrorRaised;
 
@@ -2797,8 +2782,6 @@ static Status parse_scalar_annotation(PyObject* py_scalar_annotation, ScalarAnno
 static Status parse_array_annotation(PyObject* py_array_annotation, ArrayAnnotation* dst) {
     if (py_array_annotation == Py_None)
         return OK;
-
-    dst->specified = true;
 
     PyPtr index_dtype = getattr(py_array_annotation, "index_dtype");
     if (!index_dtype) return ErrorRaised;

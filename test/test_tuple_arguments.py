@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) <2026> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+import re
+
 import pytest
 from unittest.mock import patch
 
@@ -132,9 +134,12 @@ def test_constant_i64_scalar_tuple_arg():
     i32_val = 5
     a = torch.zeros(8, dtype=torch.int64, device="cuda")
     out = torch.zeros(8, dtype=torch.int64, device="cuda")
-    ct.launch(torch.cuda.current_stream(), (1,), kernel_constant_i64_scalar_tuple,
-              (a, out, (i64_val, i32_val)))
-    assert_equal(out, torch.full((8,), i64_val - i32_val, dtype=torch.int64, device="cuda"))
+
+    expected_message = re.escape(
+            "Constant annotation cannot be combined with ScalarAnnotation/ScalarInt64")
+    with pytest.raises(TypeError, match=expected_message):
+        ct.launch(torch.cuda.current_stream(), (1,), kernel_constant_i64_scalar_tuple,
+                  (a, out, (i64_val, i32_val)))
 
 
 @ct.kernel
@@ -398,8 +403,6 @@ def test_variable_length_tuple_structured_element():
 
 
 def test_constant_tuple_array_element_rejected():
-    pytest.xfail("To be fixed in a follow-up")
-
     @ct.kernel
     def k(a, out, c: ct.Constant[tuple]):
         t = ct.load(a, (0,), (8,))
@@ -407,7 +410,11 @@ def test_constant_tuple_array_element_rejected():
 
     a = torch.zeros(8, dtype=torch.float32, device="cuda")
     out = torch.zeros(8, dtype=torch.float32, device="cuda")
-    with pytest.raises(TypeError, match="does not support array elements"):
+    expected_message = re.escape(
+        "Invalid item #0 of kernel parameter 'c':"
+        " Expected a scalar/tuple constant, as implied by the Constant annotation."
+    )
+    with pytest.raises(TypeError, match=expected_message):
         ct.launch(torch.cuda.current_stream(), (1,), k, (a, out, (a, 1)))
 
 

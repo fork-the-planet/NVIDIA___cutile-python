@@ -19,6 +19,19 @@ class LeafAnnotationNode:
     scalar: ScalarAnnotation | None = None
     array: ArrayAnnotation | None = None
 
+    def validate(self):
+        if self.constant:
+            if self.scalar is not None:
+                raise TypeError("Constant annotation cannot be combined"
+                                " with ScalarAnnotation/ScalarInt64")
+            if self.array is not None:
+                raise TypeError("Constant annotation cannot be combined"
+                                " with ArrayAnnotation/IndexedWithInt64")
+
+        if self.scalar is not None and self.array is not None:
+            raise TypeError("ScalarAnnotation/ScalarInt64 cannot be combined"
+                            " with ArrayAnnotation/IndexedWithInt64")
+
 
 @dataclass(frozen=True)
 class HomogeneousTupleNode:
