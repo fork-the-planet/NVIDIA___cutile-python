@@ -11,8 +11,10 @@ from cuda.lang._enums import (
     Tcgen05LdStShape,
     Tcgen05MMACollectorOp,
     CTAGroup,
+    Tcgen05CopyMulticast,
+    Tcgen05CopyShape,
+    Tcgen05CopySourceFormat,
 )
-from cuda.lang._exception import TileInternalError
 from cuda.lang._ir.type import PointerTy
 from cuda.lang._stub import tcgen05 as tcgen05_stub
 from cuda.lang._ir.ir import Var
@@ -28,6 +30,7 @@ from cuda.lang._ir.ops import (
 )
 from cuda.lang._ir.op_defs import RawNVVMIntrinsic
 from .raw_mlir_operation_utils import RawMLIROperationBuilder
+from cuda.lang._ir.enum_to_mlir import cl_enum_to_mlir_attribute
 from cuda.lang._ir.type_checking_helpers import (
     is_none,
     make_type_checking_error,
@@ -44,7 +47,7 @@ from cuda.tile._ir.op_impl import (
     require_constant_int,
     require_optional_constant_enum,
 )
-import cuda.lang._mlir.nvvm as mlir
+import cuda.lang._mlir as mlir
 
 
 _registry = ImplRegistry()
@@ -131,6 +134,55 @@ def tcgen05_commit_impl(
         intrinsic=intrinsic,
         operands_=tuple(operands),
     )
+
+
+@impl(tcgen05_stub.tcgen05_copy)
+def tcgen05_copy_impl(
+    address,
+    shared_memory_descriptor,
+    shape,
+    cta_group,
+    multicast,
+    source_format,
+):
+    require_pointer_in_memory_space(address, (MemorySpace.TENSOR,))
+    require_scalar_type(
+        shared_memory_descriptor,
+        lambda x: x == datatype.int64,
+        "Expected shared memory descriptor to be encoded as a 64-bit integer.",
+    )
+
+    group_value = require_constant_enum(cta_group, CTAGroup)
+    group_attribute = cl_enum_to_mlir_attribute(group_value)
+
+    shape_value = require_constant_enum(shape, Tcgen05CopyShape)
+    shape_attribute = cl_enum_to_mlir_attribute(shape_value)
+
+    builder = (
+        RawMLIROperationBuilder(name="nvvm.tcgen05.cp")
+        .add_operand(address)
+        .add_operand(shared_memory_descriptor)
+        .add_attribute("group", group_attribute)
+        .add_attribute("shape", shape_attribute)
+    )
+
+    if is_none(multicast):
+        value = mlir.nvvm.Tcgen05CpMulticast.NONE
+        multicast_attribute = mlir.nvvm.Tcgen05CpMulticastAttr(value=value)
+    else:
+        multicast_value = require_constant_enum(multicast, Tcgen05CopyMulticast)
+        multicast_attribute = cl_enum_to_mlir_attribute(multicast_value)
+
+    builder = builder.add_attribute("multicast", multicast_attribute)
+
+    if not is_none(source_format):
+        source_format_value = require_constant_enum(
+            source_format, Tcgen05CopySourceFormat
+        )
+        source_format_attribute = cl_enum_to_mlir_attribute(source_format_value)
+        builder = builder.add_attribute("srcFormat", source_format_attribute)
+
+    builder.emit()
 
 
 @impl(tcgen05_stub.tcgen05_store)
@@ -262,29 +314,6 @@ def tcgen05_load_impl(
     return result
 
 
-def optional_enum_to_mlir_attribute(cl_enum_value, mlir_enum):
-    if cl_enum_value is None:
-        return None
-    return enum_to_mlir_attribute(cl_enum_value, mlir_enum)
-
-
-def enum_to_mlir_attribute(cl_enum_value, mlir_enum):
-    mlir_attribute_class = mlir_enum.__name__ + "Attr"
-    mlir_attribute = getattr(mlir, mlir_attribute_class, None)
-    if mlir_attribute is None:
-        raise TileInternalError(
-            f"Expected mlir module to have class {mlir_attribute_class} "
-            "but it could not be found"
-        )
-    mlir_enum_value = getattr(mlir_enum, cl_enum_value.name, None)
-    if mlir_enum_value is None:
-        raise TileInternalError(
-            f"Expected enum {type(cl_enum_value)} to have corresponding "
-            "enum in mlir bindings but it could not be found"
-        )
-    return mlir_attribute(value=mlir_enum_value)
-
-
 def _require_tcgen05_mma_matrix_a(var: Var):
 
     ty = var.get_type()
@@ -339,16 +368,9 @@ def tcgen05_mma_impl(
 
     builder = (
         RawMLIROperationBuilder(name="nvvm.tcgen05.mma")
-        .add_attribute(
-            "mmaKind", enum_to_mlir_attribute(kind_value, mlir.Tcgen05MMAKind)
-        )
-        .add_attribute(
-            "ctaGroup", enum_to_mlir_attribute(cta_group_value, mlir.CTAGroupKind)
-        )
-        .add_attribute(
-            "collectorOp",
-            enum_to_mlir_attribute(collector_op_value, mlir.Tcgen05MMACollectorOp),
-        )
+        .add_attribute("mmaKind", cl_enum_to_mlir_attribute(kind_value))
+        .add_attribute("ctaGroup", cl_enum_to_mlir_attribute(cta_group_value))
+        .add_attribute("collectorOp", cl_enum_to_mlir_attribute(collector_op_value))
         .add_operand(matrix_d)
         .add_operand(matrix_a)
         .add_operand(matrix_b)

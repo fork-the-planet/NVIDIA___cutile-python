@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from cuda.tile._ir.ir import add_operation_variadic
-
 from cuda.lang._ir.ir import Var
 from cuda.lang._ir.op_defs import RawMLIROperation
 from cuda.lang._ir.type import Type

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from cuda.tile._exception import TileCompilerExecutionError
 import pytest
 
 import cuda.lang as cl
@@ -43,10 +44,7 @@ def test_commit(log_ptx, mc_mask, cta_group, expect):
         mbar = cl.shared_array(1, cl.mbarrier).get_base_pointer()
         cl.tcgen05_commit(mbar, multicast_mask=mc_mask, cta_group=cta_group)
 
-    compiled = cl.compile_simt(kernel, [KernelSignature([])])
-    ptx = compiled.ptx
-    assert ptx is not None
-    assert expect in ptx
+    compile_kernel(kernel, assert_in_ptx=expect)
 
 
 @pytest.mark.parametrize(
@@ -218,6 +216,75 @@ def test_store_offset_validation(shape, offset):
         kernel,
         raises=pytest.raises(TileTypeError, match="offset"),
     )
+
+
+@pytest.mark.parametrize("shape", (*tuple(cl.Tcgen05CopyShape), None))
+@pytest.mark.parametrize("cta_group", (*tuple(cl.CTAGroup), None))
+@pytest.mark.parametrize("multicast", (*tuple(cl.Tcgen05CopyMulticast), None, 5))
+@pytest.mark.parametrize("source_format", (*tuple(cl.Tcgen05CopySourceFormat), None, 5))
+def test_copy(shape, cta_group, multicast, source_format):
+    allocation_group = (
+        cta_group if isinstance(cta_group, cl.CTAGroup) else cl.CTAGroup.CTA_1
+    )
+
+    def kernel():
+        tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
+        smem = cl.shared_array(1, tmem_dtype, alignment=4)
+        cl.tcgen05_alloc(smem.get_base_pointer(), 128, cta_group=allocation_group)
+        tmem_ptr = smem[0]
+        descriptor = cl.int64(0xDEADBEEF)
+        cl.tcgen05_copy(
+            tmem_ptr,
+            descriptor,
+            cta_group=cta_group,
+            shape=shape,
+            multicast=multicast,
+            source_format=source_format,
+        )
+        cl.tcgen05_dealloc(tmem_ptr, 128, cta_group=allocation_group)
+
+    valid_multicasts = {
+        cl.Tcgen05CopyShape.SHAPE_128x256b: (None,),
+        cl.Tcgen05CopyShape.SHAPE_4x256b: (None,),
+        cl.Tcgen05CopyShape.SHAPE_128x128b: (None,),
+        cl.Tcgen05CopyShape.SHAPE_64x128b: (
+            cl.Tcgen05CopyMulticast.WARPX2_02_13,
+            cl.Tcgen05CopyMulticast.WARPX2_01_23,
+        ),
+        cl.Tcgen05CopyShape.SHAPE_32x128b: (cl.Tcgen05CopyMulticast.WARPX4,),
+    }
+
+    expect = None
+    raises = None
+    if cta_group not in tuple(cl.CTAGroup):
+        raises = pytest.raises(TileTypeError, match="Expected CTAGroup")
+    elif shape not in tuple(cl.Tcgen05CopyShape):
+        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopyShape")
+    elif multicast not in (*tuple(cl.Tcgen05CopyMulticast), None):
+        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopyMulticast")
+    elif source_format not in (*tuple(cl.Tcgen05CopySourceFormat), None):
+        raises = pytest.raises(TileTypeError, match="Expected Tcgen05CopySourceFormat")
+    elif multicast not in valid_multicasts[shape]:
+        raises = pytest.raises(TileCompilerExecutionError)
+    else:
+        shape_str = shape.name.removeprefix("SHAPE_")
+        group_str = "cta_group::" + str(1 if cta_group is cl.CTAGroup.CTA_1 else 2)
+        multicast_str = {
+            None: "",
+            cl.Tcgen05CopyMulticast.WARPX2_02_13: ".warpx2::02_13",
+            cl.Tcgen05CopyMulticast.WARPX2_01_23: ".warpx2::01_23",
+            cl.Tcgen05CopyMulticast.WARPX4: ".warpx4",
+        }[multicast]
+        source_format_str = {
+            None: "",
+            cl.Tcgen05CopySourceFormat.B6x16_P32: ".b8x16.b6x16_p32",
+            cl.Tcgen05CopySourceFormat.B4x16_P64: ".b8x16.b4x16_p64",
+        }[source_format]
+        expect = (
+            f"tcgen05.cp.{group_str}.{shape_str}" + multicast_str + source_format_str
+        )
+
+    compile_kernel(kernel, assert_in_ptx=expect, raises=raises)
 
 
 @pytest.mark.parametrize("shape", tuple(cl.Tcgen05LdStShape))

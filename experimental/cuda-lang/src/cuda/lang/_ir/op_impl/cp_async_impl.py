@@ -5,6 +5,7 @@
 from cuda.tile._ir.op_impl import ImplRegistry
 from cuda.tile._ir.ops import implicit_cast
 import cuda.lang._datatype as datatype
+from cuda.lang._ir.enum_to_mlir import cl_enum_to_mlir_attribute
 from cuda.lang._mlir import BoolAttr
 from cuda.lang._enums import MemorySpace
 from cuda.lang._stub import cp_async
@@ -21,7 +22,6 @@ from ..type_checking_helpers import (
     tensor_map_descriptor_like,
 )
 from cuda.tile._ir.op_impl import require_constant_enum, require_optional_constant_enum
-import cuda.lang._mlir.nvvm as mlir
 
 
 _registry = ImplRegistry()
@@ -73,7 +73,7 @@ def cp_async_bulk_tensor_global_to_shared_impl(
     require_mbarrier_ptr(mbarrier, (MemorySpace.SHARED,))
     mode = require_constant_enum(mode, cp_async.TMALoadMode)
     validate_g2s_mode(mode, len(im2col_offset_vars))
-    mode = getattr(mlir.TMALoadMode, mode.name)
+    mode_attribute = cl_enum_to_mlir_attribute(mode)
     dst_ty = require_pointer_in_memory_space(
         dst_memory,
         (MemorySpace.SHARED, MemorySpace.SHARED_CLUSTER),
@@ -107,16 +107,14 @@ def cp_async_bulk_tensor_global_to_shared_impl(
         group_attr = (
             None
             if group_value is None
-            else mlir.CTAGroupKindAttr(
-                value=getattr(mlir.CTAGroupKind, group_value.name)
-            )
+            else cl_enum_to_mlir_attribute(group_value)
         )
 
     builder = (
         RawMLIROperationBuilder(
             name="nvvm.cp.async.bulk.tensor.shared.cluster.global"
         )
-        .add_attribute("mode", mlir.TMALoadModeAttr(value=mode))
+        .add_attribute("mode", mode_attribute)
         .add_attribute("isCTAOnly", BoolAttr(value=is_cta_only))
     )
     if not is_cta_only and group_attr is not None:
@@ -148,7 +146,7 @@ def cp_async_bulk_tensor_shared_to_global_impl(
     tensor_map = tensor_map_descriptor_like(dst_tensor_map_descriptor)
     dst_coordinate_vars = require_uniform_int_tuple_type(dst_coordinates)
     mode = require_constant_enum(mode, cp_async.TMAStoreMode)
-    mode = getattr(mlir.TMAStoreMode, mode.name)
+    mode_attribute = cl_enum_to_mlir_attribute(mode)
     dst_coordinates = tuple(
         implicit_cast(coord, datatype.int32, "TMA coordinates")
         for coord in dst_coordinate_vars
@@ -157,7 +155,7 @@ def cp_async_bulk_tensor_shared_to_global_impl(
     predicate = optional_cast(predicate, datatype.bool_, "TMA predicate")
     builder = (
         RawMLIROperationBuilder(name="nvvm.cp.async.bulk.tensor.global.shared.cta")
-        .add_attribute("mode", mlir.TMAStoreModeAttr(value=mode))
+        .add_attribute("mode", mode_attribute)
         .add_operand(tensor_map)
         .add_operand(src_memory)
         .add_variadic_operand(dst_coordinates)

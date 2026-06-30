@@ -10,6 +10,7 @@ from cuda.tile._datatype import is_pointer_dtype
 from cuda.tile._memory_model import MemoryOrder, MemoryScope, MemorySpace
 import cuda.lang._datatype as datatype
 from cuda.lang._execution import stub
+from cuda.lang._ir.enum_to_mlir import cl_enum_to_mlir_attribute
 import cuda.lang._mlir as mlir
 from cuda.lang._enums import FenceProxyKind
 from cuda.lang._mlir.nvvm import MemScopeKind, MemOrderKind, ProxyKind, SharedSpace
@@ -165,8 +166,7 @@ def make_mlir_attribute(spec: ArgSpec, arg: Var) -> tuple[str, mlir.Attribute] |
 
     if isinstance(spec.type, AliasedEnumAttr):
         arg = require_constant_enum(arg, spec.type.cl_enum)
-        mapped = spec.type.cl2mlir(arg)
-        return spec.name, make_enum_attr(spec.type.mlir_enum, mapped)
+        return spec.name, cl_enum_to_mlir_attribute(arg)
 
     if is_enum_type(spec.type):
         arg = require_constant_enum(arg, spec.type)

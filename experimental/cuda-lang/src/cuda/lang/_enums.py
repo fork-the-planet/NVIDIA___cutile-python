@@ -79,6 +79,25 @@ class Tcgen05WaitKind(Enum):
     STORE = 1
 
 
+class Tcgen05CopyMulticast(Enum):
+    WARPX2_02_13 = 1
+    WARPX2_01_23 = 2
+    WARPX4 = 3
+
+
+class Tcgen05CopyShape(Enum):
+    SHAPE_128x256b = 0
+    SHAPE_4x256b = 1
+    SHAPE_128x128b = 2
+    SHAPE_64x128b = 3
+    SHAPE_32x128b = 4
+
+
+class Tcgen05CopySourceFormat(Enum):
+    B6x16_P32 = 0
+    B4x16_P64 = 1
+
+
 class FenceProxyKind(Enum):
     ALIAS = "alias"
     ASYNC = "async"
@@ -106,6 +125,9 @@ __all__ = (
     "Tcgen05MMAKind",
     "Tcgen05MMACollectorOp",
     "Tcgen05LdStShape",
+    "Tcgen05CopyMulticast",
+    "Tcgen05CopyShape",
+    "Tcgen05CopySourceFormat",
     "Tcgen05WaitKind",
     "FenceProxyKind",
     "BarrierReductionKind",

@@ -17,6 +17,9 @@ from .._enums import (
     Tcgen05MMAKind,
     Tcgen05MMACollectorOp,
     Tcgen05LdStShape,
+    Tcgen05CopyMulticast,
+    Tcgen05CopyShape,
+    Tcgen05CopySourceFormat,
 )
 from cuda.tile import static_assert
 
@@ -50,25 +53,25 @@ def tcgen05_fence_after_thread_sync() -> None:
 
 
 @function
-def tcgen05_relinquish_allocation_permit(group: CTAGroup = CTAGroup.CTA_1) -> None:
-    static_assert(group in (CTAGroup.CTA_1, CTAGroup.CTA_2))
-    if group == CTAGroup.CTA_1:
+def tcgen05_relinquish_allocation_permit(cta_group: CTAGroup = CTAGroup.CTA_1) -> None:
+    static_assert(cta_group in (CTAGroup.CTA_1, CTAGroup.CTA_2))
+    if cta_group == CTAGroup.CTA_1:
         _nvvm.tcgen05_relinq_alloc_permit_cg1()
     else:
         _nvvm.tcgen05_relinq_alloc_permit_cg2()
 
 
 @function
-def tcgen05_shift_down(address, group: CTAGroup = CTAGroup.CTA_1) -> None:
+def tcgen05_shift_down(address, cta_group: CTAGroup = CTAGroup.CTA_1) -> None:
     """
     Asynchronously shift down the rows of the matrix in the Tensor Memory for a warp.
 
     Args:
-        address: pointer in address space 6
-        group: cta group 1 or 2
+        address: pointer in tensor memory
+        cta_group: cta group 1 or 2
     """
-    static_assert(group in (CTAGroup.CTA_1, CTAGroup.CTA_2))
-    if group == CTAGroup.CTA_1:
+    static_assert(cta_group in (CTAGroup.CTA_1, CTAGroup.CTA_2))
+    if cta_group == CTAGroup.CTA_1:
         _nvvm.tcgen05_shift_down_cg1(address)
     else:
         _nvvm.tcgen05_shift_down_cg2(address)
@@ -118,6 +121,31 @@ def tcgen05_load(
 ) -> Any:
     """Load registers from tensor memory using a tcgen05 load shape."""
     ...
+
+
+@stub
+def tcgen05_copy(
+    address,
+    shared_memory_descriptor,
+    *,
+    shape: Tcgen05CopyShape,
+    cta_group: CTAGroup = CTAGroup.CTA_1,
+    multicast: Tcgen05CopyMulticast | None = None,
+    source_format: Tcgen05CopySourceFormat | None = None,
+):
+    """
+    Initiates an asynchronous copy operation from shared memory to the
+    location specified by ``address``.
+
+    Args:
+        address: Pointer in tensor memory allocated by tcgen05_alloc.
+        shared_memory_descriptor: Shared memory descriptor encoded
+            as a 64-bit integer.
+        cta_group:
+        shape:
+        multicast:
+        source_format:
+    """
 
 
 @stub
@@ -373,6 +401,9 @@ __all__ = (
     "Tcgen05MMAKind",
     "Tcgen05MMACollectorOp",
     "Tcgen05LdStShape",
+    "Tcgen05CopyMulticast",
+    "Tcgen05CopyShape",
+    "Tcgen05CopySourceFormat",
     "Tcgen05InstructionDescriptor",
     "Tcgen05Mxf8f6f4InstructionDescriptor",
     "Tcgen05Mxf4InstructionDescriptor",
@@ -381,6 +412,7 @@ __all__ = (
     "tcgen05_dealloc",
     "tcgen05_commit",
     "tcgen05_load",
+    "tcgen05_copy",
     "tcgen05_store",
     "tcgen05_mma",
     "tcgen05_wait_load",
