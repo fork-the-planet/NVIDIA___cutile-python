@@ -23,7 +23,7 @@ def test_mbar_manager():
 
         cl.barrier_sync_block()
         if cl.elect_sync():
-            cl.cp_async_bulk_tensor_global_to_shared(
+            cl.copy_async_bulk_tensor_global_to_shared(
                 x_tm, (j, i), smem.get_base_pointer(), mbar
             )
             tok = cl.mbarrier_arrive_expect_tx(mbar, W * H * 4)
@@ -63,7 +63,7 @@ def test_tensor_map_tiled():
 
         cl.barrier_sync_block()
         if cl.elect_sync():
-            cl.cp_async_bulk_tensor_global_to_shared(
+            cl.copy_async_bulk_tensor_global_to_shared(
                 x_tm,
                 (j, i),
                 smem.get_base_pointer(),

@@ -7,7 +7,7 @@ from .._enums import TMALoadMode, TMAStoreMode, CTAGroup
 
 
 @stub
-def cp_async_bulk_tensor_global_to_shared(
+def copy_async_bulk_tensor_global_to_shared(
     src_tensor_map_descriptor,
     src_coordinates,
     dst_memory,
@@ -18,7 +18,7 @@ def cp_async_bulk_tensor_global_to_shared(
     multicast_mask=None,
     l2_cache_hint=None,
     mode=TMALoadMode.TILE,
-    group=None,
+    cta_group=None,
     predicate=None,
 ):
     """
@@ -31,13 +31,13 @@ def cp_async_bulk_tensor_global_to_shared(
         multicast_mask (int | None):
         l2_cache_hint (int | None):
         mode (TMALoadMode):
-        group (CTAGroup | None):
+        cta_group (CTAGroup | None):
         predicate (bool | None):
     """
 
 
 @stub
-def cp_async_bulk_tensor_shared_to_global(
+def copy_async_bulk_tensor_shared_to_global(
     src_memory,
     dst_tensor_map_descriptor,
     dst_coordinates,
@@ -62,6 +62,6 @@ __all__ = (
     "TMALoadMode",
     "TMAStoreMode",
     "CTAGroup",
-    "cp_async_bulk_tensor_global_to_shared",
-    "cp_async_bulk_tensor_shared_to_global",
+    "copy_async_bulk_tensor_global_to_shared",
+    "copy_async_bulk_tensor_shared_to_global",
 )

@@ -159,7 +159,7 @@ from .op_impl.pointer_impl import (
     contiguous_strides_from_shape,
     pointer_impl_registry,
 )
-from .op_impl.cp_async_impl import cp_async_impl_registry
+from .op_impl.copy_async_impl import copy_async_impl_registry
 from .op_impl.barrier_impl import barrier_impl_registry
 
 cuda_lang_impl_registry = ImplRegistry()
@@ -174,7 +174,7 @@ cuda_lang_impl_registry.update(core_api_impl_registry())
 cuda_lang_impl_registry.update(math_impl_registry())
 cuda_lang_impl_registry.update(vector_impl_registry())
 cuda_lang_impl_registry.update(pointer_impl_registry())
-cuda_lang_impl_registry.update(cp_async_impl_registry())
+cuda_lang_impl_registry.update(copy_async_impl_registry())
 cuda_lang_impl_registry.update(barrier_impl_registry())
 
 impl = cuda_lang_impl_registry.impl

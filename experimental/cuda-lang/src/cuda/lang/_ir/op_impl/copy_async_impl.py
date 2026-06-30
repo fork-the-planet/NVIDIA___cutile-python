@@ -8,7 +8,7 @@ import cuda.lang._datatype as datatype
 from cuda.lang._ir.enum_to_mlir import cl_enum_to_mlir_attribute
 from cuda.lang._mlir import BoolAttr
 from cuda.lang._enums import MemorySpace
-from cuda.lang._stub import cp_async
+from cuda.lang._stub import copy_async
 from .raw_mlir_operation_utils import RawMLIROperationBuilder
 from ..type_checking_helpers import (
     optional_cast,
@@ -28,22 +28,22 @@ _registry = ImplRegistry()
 impl = _registry.impl
 
 
-def cp_async_impl_registry() -> ImplRegistry:
+def copy_async_impl_registry() -> ImplRegistry:
     return _registry
 
 
-def validate_g2s_mode(mode: cp_async.TMALoadMode, im2col_count: int) -> None:
+def validate_g2s_mode(mode: copy_async.TMALoadMode, im2col_count: int) -> None:
     match mode:
-        case cp_async.TMALoadMode.TILE | cp_async.TMALoadMode.TILE_GATHER4:
+        case copy_async.TMALoadMode.TILE | copy_async.TMALoadMode.TILE_GATHER4:
             if im2col_count != 0:
                 raise make_type_checking_error(
                     f"{mode.name} mode does not accept im2col_offsets"
                 )
 
         case (
-            cp_async.TMALoadMode.IM2COL
-            | cp_async.TMALoadMode.IM2COL_W
-            | cp_async.TMALoadMode.IM2COL_W_128
+            copy_async.TMALoadMode.IM2COL
+            | copy_async.TMALoadMode.IM2COL_W
+            | copy_async.TMALoadMode.IM2COL_W_128
         ):
             if im2col_count == 0:
                 raise make_type_checking_error(
@@ -54,8 +54,8 @@ def validate_g2s_mode(mode: cp_async.TMALoadMode, im2col_count: int) -> None:
             raise make_type_checking_error(f"Unsupported TMA load mode {mode}")
 
 
-@impl(cp_async.cp_async_bulk_tensor_global_to_shared)
-def cp_async_bulk_tensor_global_to_shared_impl(
+@impl(copy_async.copy_async_bulk_tensor_global_to_shared)
+def copy_async_bulk_tensor_global_to_shared_impl(
     src_tensor_map_descriptor,
     src_coordinates,
     dst_memory,
@@ -64,14 +64,14 @@ def cp_async_bulk_tensor_global_to_shared_impl(
     multicast_mask,
     l2_cache_hint,
     mode,
-    group,
+    cta_group,
     predicate,
 ):
     tensor_map = tensor_map_descriptor_like(src_tensor_map_descriptor)
     src_coordinate_vars = require_uniform_int_tuple_type(src_coordinates)
     im2col_offset_vars = require_uniform_int_tuple_type(im2col_offsets)
     require_mbarrier_ptr(mbarrier, (MemorySpace.SHARED,))
-    mode = require_constant_enum(mode, cp_async.TMALoadMode)
+    mode = require_constant_enum(mode, copy_async.TMALoadMode)
     validate_g2s_mode(mode, len(im2col_offset_vars))
     mode_attribute = cl_enum_to_mlir_attribute(mode)
     dst_ty = require_pointer_in_memory_space(
@@ -93,21 +93,23 @@ def cp_async_bulk_tensor_global_to_shared_impl(
     if is_cta_only:
         message = (
             "When the destination memory is in shared memory, the "
-            "predicate, multicast mask, and group arguments are invalid."
+            "predicate, multicast mask, and cta_group arguments are invalid."
         )
         require_none(predicate, message)
         require_none(multicast_mask, message)
-        require_none(group, message)
+        require_none(cta_group, message)
     else:
         multicast_mask = optional_cast(
             multicast_mask, datatype.int16, "TMA multicast mask"
         )
         require_optional(predicate, require_boolean_scalar_type)
-        group_value = require_optional_constant_enum(group, cp_async.CTAGroup)
+        cta_group_value = require_optional_constant_enum(
+            cta_group, copy_async.CTAGroup
+        )
         group_attr = (
             None
-            if group_value is None
-            else cl_enum_to_mlir_attribute(group_value)
+            if cta_group_value is None
+            else cl_enum_to_mlir_attribute(cta_group_value)
         )
 
     builder = (
@@ -133,8 +135,8 @@ def cp_async_bulk_tensor_global_to_shared_impl(
     builder.emit()
 
 
-@impl(cp_async.cp_async_bulk_tensor_shared_to_global)
-def cp_async_bulk_tensor_shared_to_global_impl(
+@impl(copy_async.copy_async_bulk_tensor_shared_to_global)
+def copy_async_bulk_tensor_shared_to_global_impl(
     src_memory,
     dst_tensor_map_descriptor,
     dst_coordinates,
@@ -145,7 +147,7 @@ def cp_async_bulk_tensor_shared_to_global_impl(
     require_pointer_in_memory_space(src_memory, (MemorySpace.SHARED,))
     tensor_map = tensor_map_descriptor_like(dst_tensor_map_descriptor)
     dst_coordinate_vars = require_uniform_int_tuple_type(dst_coordinates)
-    mode = require_constant_enum(mode, cp_async.TMAStoreMode)
+    mode = require_constant_enum(mode, copy_async.TMAStoreMode)
     mode_attribute = cl_enum_to_mlir_attribute(mode)
     dst_coordinates = tuple(
         implicit_cast(coord, datatype.int32, "TMA coordinates")
