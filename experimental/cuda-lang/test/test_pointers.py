@@ -6,11 +6,18 @@ import pytest
 import cuda.lang as cl
 import torch
 from typing import Any
+from cuda.tile import static_assert
 from cuda.lang._compile import compile_simt
 from cuda.lang._exception import TileError, TileTypeError
 from cuda.lang.compilation import KernelSignature
 
-from .util import make_symbolic_tensor, make_symbolic_scalar, compile_for_arguments
+from .util import (
+    make_symbolic_tensor,
+    make_symbolic_scalar,
+    compile_for_arguments,
+    compile_kernel,
+    require_blackwell_cc100,
+)
 
 
 @cl.function
@@ -346,6 +353,59 @@ def test_pointer_setitem():
     arr = torch.tensor([1], dtype=torch.int32).cuda()
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (arr,))
     assert arr.cpu().item() == 5
+
+
+@require_blackwell_cc100()
+@pytest.mark.parametrize("cluster", (False, True))
+def test_map_shared_to_leader_block(cluster):
+    """
+    The ptx compiler will see the alignment and not mask the lowest bits
+    since they will always be zero anyways - this is why we don't see the exact
+    mask pattern provided by cl.shared_cluster_leader_bit_mask() in the ptx:
+
+    >>> # What we see in the ptx without the mapa instruction
+    >>> print(hex(-16777220 & 0xFFFFFFFF))
+    0xfefffffc
+
+    In the cluster case, the alignment is not reflected in the mask, so we
+    see the exact value of cl.shared_cluster_leader_bit_mask() in the assembly:
+
+    >>> # What we see in the ptx with the mapa instruction
+    >>> print(hex(-16777217 & 0xFFFFFFFF))
+    0xfeffffff
+    """
+    expected_space = cl.MemorySpace.SHARED_CLUSTER if cluster else cl.MemorySpace.SHARED
+
+    @cl.kernel
+    def kernel(out):
+        pointer = cl.shared_array(1, cl.int32, alignment=4).get_base_pointer()
+        if cluster:
+            pointer = cl.map_shared_to_cluster(pointer, 0)
+        mapped = cl.map_shared_to_leader_block(pointer)
+        static_assert(cl.dtype_of(mapped) == cl.pointer_dtype(cl.int32, expected_space))
+        out[0] = cl.bitcast(mapped, cl.uint32)
+
+    constant = "-16777217" if cluster else "-16777220"
+    compile_kernel(
+        kernel,
+        signature=KernelSignature([make_symbolic_tensor(1, cl.uint32)]),
+        filecheck_ptx=f"""
+        CHECK: and.b32
+        CHECK-SAME: {constant}
+        """,
+    )
+
+
+def test_map_shared_to_leader_block_rejects_global_pointer():
+    @cl.kernel
+    def kernel(out):
+        cl.map_shared_to_leader_block(out.get_base_pointer())
+
+    with pytest.raises(TileTypeError, match="Expected pointer memory space"):
+        compile_simt(
+            kernel,
+            [KernelSignature([make_symbolic_tensor(1, cl.uint32)])],
+        )
 
 
 def test_opaque_pointer_getitem():

@@ -1310,10 +1310,10 @@ def mbarrier_try_wait_parity_impl(
 
 
 @impl(core_api.map_shared_to_cluster)
-def map_shared_to_cluster_impl(ptr: Var, rank: Var):
-    ptr_ty = require_pointer_type(ptr)
+def map_shared_to_cluster_impl(pointer: Var, rank: Var):
+    ptr_ty = require_pointer_type(pointer)
     rank = astype(rank, datatype.int32)
-    require_pointer_in_memory_space(ptr, (MemorySpace.SHARED,))
+    require_pointer_in_memory_space(pointer, (MemorySpace.SHARED,))
     if ptr_ty.opaque:
         result_dtype = opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER)
     else:
@@ -1323,8 +1323,20 @@ def map_shared_to_cluster_impl(ptr: Var, rank: Var):
         RawNVVMIntrinsic,
         result_ty,
         intrinsic="llvm.nvvm.mapa.shared.cluster",
-        operands_=(ptr, rank),
+        operands_=(pointer, rank),
     )
+
+
+@impl(core_api.map_shared_to_leader_block)
+def map_shared_to_leader_block(pointer: Var):
+    spaces = (MemorySpace.SHARED, MemorySpace.SHARED_CLUSTER)
+    pointer_type = require_pointer_in_memory_space(pointer, spaces)
+    int_value = bitcast(pointer, datatype.uint32)
+    mask = core_api.shared_cluster_leader_bit_mask()
+    mask = strictly_typed_const(mask, ScalarTy(datatype.uint32))
+    mapped = binary_bitwise_tensorlike("and_", int_value, mask)
+    # TODO: should this be shared_cluster memory space?
+    return bitcast(mapped, pointer_type.pointer_dtype)
 
 
 def bitcast(x: Var[ScalarTy | PointerTy | VectorTy], dtype: datatype.DType):

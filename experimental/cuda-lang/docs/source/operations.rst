@@ -34,6 +34,8 @@ Pointer Utilities
    opaque_pointer_dtype
    address_space_cast
    map_shared_to_cluster
+   map_shared_to_leader_block
+   shared_cluster_leader_bit_mask
 
 .. autosummary::
    :toctree: generated

@@ -26,7 +26,7 @@ def _require_constant_enum(var, enum):
     )
 
 
-@function
+@function()
 def barrier_sync_block(
     number_of_threads: int | None = None,
     barrier_id: int = 0,
@@ -56,7 +56,7 @@ def barrier_sync_block(
             _nvvm.barrier_cta_sync_count(barrier_id, number_of_threads)
 
 
-@function
+@function()
 def barrier_arrive_block(
     number_of_threads: int,
     barrier_id: int = 0,
@@ -130,7 +130,7 @@ def barrier_arrive_cluster(
             _nvvm.barrier_cluster_arrive()
 
 
-@function
+@function()
 def barrier_wait_cluster(*, aligned: bool = True) -> None:
     """
     Args:
@@ -144,7 +144,7 @@ def barrier_wait_cluster(*, aligned: bool = True) -> None:
         _nvvm.barrier_cluster_wait()
 
 
-@function
+@function()
 def barrier_sync_cluster(*, aligned: bool = True) -> None:
     """
     Args:
@@ -155,7 +155,7 @@ def barrier_sync_cluster(*, aligned: bool = True) -> None:
     barrier_wait_cluster(aligned=aligned)
 
 
-@function
+@function()
 def barrier_sync_warp(mask: int = FULL_MASK) -> None:
     """
     Synchronize warp lanes selected by ``mask``.

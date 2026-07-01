@@ -42,7 +42,7 @@ class Array(TileArray, Generic[T]):
     @stub
     def __getitem__(self, indices: int | tuple[int, ...]) -> T: ...
 
-    @function
+    @function()
     def load_element(
         self,
         indices: int | tuple[int, ...],
@@ -73,7 +73,7 @@ class Array(TileArray, Generic[T]):
             memory_order=memory_order,
         )
 
-    @function
+    @function()
     def store_element(
         self,
         indices: int | tuple[int, ...],
@@ -173,7 +173,7 @@ def block_count(axis: int, /) -> int:
     """
 
 
-@function
+@function()
 def lane_index() -> int:
     """
     Gets the index of the current thread within its warp.
@@ -185,7 +185,7 @@ def lane_index() -> int:
     return nvvm.read_ptx_sreg_laneid()
 
 
-@function
+@function()
 def lane_count() -> int:
     """Gets the number of threads in a warp (also known as warp size).
 
@@ -194,7 +194,7 @@ def lane_count() -> int:
     return 32
 
 
-@function
+@function()
 def warp_index() -> int:
     """Gets the current virtual warp index within its thread block."""
     tx, ty, tz = thread_index(0), thread_index(1), thread_index(2)
@@ -253,6 +253,12 @@ def shared_array(
     alignment: int | None = None,
 ) -> Array[T]:
     """Create an on-device array in shared memory.
+
+    Args:
+        shape (int | tuple[int, ...]):
+        dtype (DType):
+        dynamic (bool):
+        alignment (int | None):
 
     Shared arrays must be declared at the beginning of the kernel.
     The optional alignment is specified in bytes and must be a positive power of
@@ -323,6 +329,11 @@ def local_array(
 ) -> LocalArrayContextManager:
     """Create an on-device array in local memory.
 
+    Args:
+        shape (int | tuple[int, ...]):
+        dtype (DType):
+        alignment (int | None):
+
     Local arrays must be declared in a `with` statement and have static shape.
     The local memory is only valid inside the with block.
     The optional alignment is specified in bytes and must be a positive power
@@ -352,12 +363,12 @@ def local_array(
     """
 
 
-@function
+@function()
 def setmaxregister_increase(value: int32):
     nvvm.setmaxnreg_inc_sync_aligned_u32(int32(value))
 
 
-@function
+@function()
 def setmaxregister_decrease(value: int32):
     nvvm.setmaxnreg_dec_sync_aligned_u32(int32(value))
 
@@ -438,7 +449,7 @@ def _inline_ptx(ptx_code: str, *constraint_pairs: tuple) -> tuple:
     """
 
 
-@function
+@function()
 def ptx_comment(comment: str):
     _inline_ptx(static_eval("// " + comment))
 
@@ -971,8 +982,11 @@ def shfl_xor_sync(value: int, lane_mask: int, width: int = 32, mask: int = FULL_
 
 @stub
 def address_space_cast(value: Pointer[T], memory_space: MemorySpace) -> Pointer[T]:
-    """
-    Cast a pointer to the given memory space.
+    """Cast a pointer to the given memory space, preserving dtype.
+
+    Args:
+        value (pointer): Pointer value to be casted.
+        memory_space (MemorySpace): Address space of the resulting pointer.
 
     .. testcode::
         :template: kernel_wrapper.py
@@ -985,7 +999,7 @@ def address_space_cast(value: Pointer[T], memory_space: MemorySpace) -> Pointer[
 
 
 @stub
-def map_shared_to_cluster(ptr: Pointer[T], rank: int) -> Pointer[T]:
+def map_shared_to_cluster(pointer: Pointer[T], rank: int) -> Pointer[T]:
     """
     Map a pointer in shared memory from another CTA within the same cluster
     with rank ``rank`` to this CTA.
@@ -993,6 +1007,34 @@ def map_shared_to_cluster(ptr: Pointer[T], rank: int) -> Pointer[T]:
     ``MemorySpace.SHARED`` and a pointer with memory space
     ``MemorySpace.SHARED_CLUSTER`` is returned.
     Corresponds to the ptx instruction ``mapa.shared::cluster``.
+
+    Args:
+        pointer: Address to be mapped.
+        rank (int): Rank of the destination CTA within the cluster.
+    """
+
+
+@function(host=True)
+def shared_cluster_leader_bit_mask() -> int:
+    """
+    Masks off the 24th bit of an address in shared memory.
+    The shared state space is accessible to all blocks in a thread-block
+    cluster and masking off the 24th bit yields an address corresponding to
+    the block with an even numbered index within the cluster.
+    This mask is the same as CuTe's Sm100MmaPeerBitMask.
+    """
+    return 0xFEFFFFFF
+
+
+@stub
+def map_shared_to_leader_block(pointer: Pointer[T]) -> Pointer[T]:
+    """
+    Map a shared-memory pointer to the same offset in the leader block of its
+    two-block group while preserving the pointer type.
+
+    Args:
+        pointer: Address in shared memory to be mapped into the leader-block's
+            shared memory.
     """
 
 

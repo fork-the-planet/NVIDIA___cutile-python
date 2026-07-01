@@ -9,33 +9,47 @@ from .._enums import FenceProxyKind, MemoryOrder, MemoryScope, MemorySpace
 from . import nvvm_mlir_interfaces as _mlir
 
 
-@function
+@function()
 def fence_sc_cluster() -> None:
     _mlir.fence_sc_cluster()
 
 
-@function
+@function()
 def fence_mbarrier_initialize() -> None:
     _mlir.fence_mbarrier_init()
 
 
-@function
+@function()
 def fence_sync_restrict(
     order: Literal[MemoryOrder.ACQUIRE, MemoryOrder.RELEASE],
 ) -> None:
+    """
+    Uni-directional proxy fence operation with sync_restrict.
+
+    Args:
+        order: MemoryOrder.ACQUIRE or MemoryOrder.RELEASE
+    """
     _mlir.fence_sync_restrict(order=order)
 
 
-@function
+@function()
 def fence_proxy(
     kind: FenceProxyKind,
     *,
     space: MemorySpace | None = None,
 ) -> None:
+    """
+    Fence operation with proxy to establish an ordering between memory accesses
+    that may happen through different proxies.
+
+    Args:
+        kind (FenceProxyKind):
+        space (MemorySpace):
+    """
     _mlir.fence_proxy(kind=kind, space=space)
 
 
-@function
+@function()
 def fence_proxy_acquire(
     address,
     size: int,
@@ -44,6 +58,16 @@ def fence_proxy_acquire(
     from_proxy: FenceProxyKind = FenceProxyKind.GENERIC,
     to_proxy: FenceProxyKind = FenceProxyKind.TENSORMAP,
 ) -> None:
+    """
+    Uni-directional proxy fence operation with acquire semantics.
+
+    Args:
+        address (pointer):
+        size (int):
+        scope (MemoryScope):
+        from_proxy (FenceProxyKind):
+        to_proxy (FenceProxyKind):
+    """
     _mlir.fence_proxy_acquire(
         addr=address,
         size=size,
@@ -53,13 +77,21 @@ def fence_proxy_acquire(
     )
 
 
-@function
+@function()
 def fence_proxy_release(
     *,
     scope: MemoryScope,
     from_proxy: FenceProxyKind = FenceProxyKind.GENERIC,
     to_proxy: FenceProxyKind = FenceProxyKind.TENSORMAP,
 ) -> None:
+    """
+    Uni-directional proxy fence operation with release semantics.
+
+    Args:
+        scope (MemoryScope):
+        from_proxy (FenceProxyKind):
+        to_proxy (FenceProxyKind):
+    """
     _mlir.fence_proxy_release(
         scope=scope,
         from_proxy=from_proxy,
@@ -67,13 +99,21 @@ def fence_proxy_release(
     )
 
 
-@function
+@function()
 def fence_proxy_sync_restrict(
     order: Literal[MemoryOrder.ACQUIRE, MemoryOrder.RELEASE],
     *,
     from_proxy: FenceProxyKind = FenceProxyKind.GENERIC,
     to_proxy: FenceProxyKind = FenceProxyKind.ASYNC,
 ) -> None:
+    """
+    Uni-directional proxy fence operation with sync_restrict.
+
+    Args:
+        order: MemoryOrder.ACQUIRE or MemoryOrder.RELEASE
+        from_proxy (FenceProxyKind):
+        to_proxy (FenceProxyKind):
+    """
     _mlir.fence_proxy_sync_restrict(
         order=order,
         from_proxy=from_proxy,

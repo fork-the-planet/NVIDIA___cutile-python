@@ -24,17 +24,17 @@ from .._enums import (
 from cuda.tile import static_assert
 
 
-@function
+@function()
 def tcgen05_wait_load() -> None:
     _nvvm.tcgen05_wait_ld()
 
 
-@function
+@function()
 def tcgen05_wait_store() -> None:
     _nvvm.tcgen05_wait_st()
 
 
-@function
+@function()
 def tcgen05_fence_before_thread_sync() -> None:
     """
     Orders all prior async tcgen05 operations with respect to the subsequent
@@ -43,7 +43,7 @@ def tcgen05_fence_before_thread_sync() -> None:
     _nvvm.tcgen05_fence_before_thread_sync()
 
 
-@function
+@function()
 def tcgen05_fence_after_thread_sync() -> None:
     """
     Orders all subsequent async tcgen05 operations with respect to the prior
@@ -52,7 +52,7 @@ def tcgen05_fence_after_thread_sync() -> None:
     _nvvm.tcgen05_fence_after_thread_sync()
 
 
-@function
+@function()
 def tcgen05_relinquish_allocation_permit(cta_group: CTAGroup = CTAGroup.CTA_1) -> None:
     static_assert(cta_group in (CTAGroup.CTA_1, CTAGroup.CTA_2))
     if cta_group == CTAGroup.CTA_1:
@@ -61,7 +61,7 @@ def tcgen05_relinquish_allocation_permit(cta_group: CTAGroup = CTAGroup.CTA_1) -
         _nvvm.tcgen05_relinq_alloc_permit_cg2()
 
 
-@function
+@function()
 def tcgen05_shift_down(address, cta_group: CTAGroup = CTAGroup.CTA_1) -> None:
     """
     Asynchronously shift down the rows of the matrix in the Tensor Memory for a warp.

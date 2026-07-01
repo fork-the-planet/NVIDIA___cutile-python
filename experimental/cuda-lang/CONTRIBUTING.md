@@ -18,6 +18,8 @@ These terms and abbreviations are permitted in `cuda.lang` source code.
 - PTX: [Parallel Thread Execution](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html) instruction set.
 - IR: Intermediate representation.
 - NVVM: [Intermediate representation based on LLVM IR](https://docs.nvidia.com/cuda/nvvm-ir-spec/index.html)
+- smem: [shared memory](https://docs.nvidia.com/cuda/parallel-thread-execution/#shared-state-space)
+- tmem: [tensor memory](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-memory) (not to be confused with [*texture memory*](https://docs.nvidia.com/cuda/parallel-thread-execution/#texture-state-space-deprecated))
 - dtype: data type
 - sync: synchronize/synchronous
 - async: asynchronous
