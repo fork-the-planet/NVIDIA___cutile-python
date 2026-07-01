@@ -227,25 +227,19 @@ class TupleConstraint:
     Describes a tuple kernel parameter.
 
     Args:
-        elements: Per-element parameter constraints. Elements may be
-            :class:`ScalarConstraint`, :class:`ArrayConstraint`,
-            :class:`ConstantConstraint`, :class:`ListConstraint`, or nested
-            :class:`TupleConstraint`.
+        items: Per-item constraints.
     """
-    elements: "tuple[ParameterConstraint, ...]"
+    items: "tuple[ParameterConstraint, ...]"
 
-    def __init__(
-            self,
-            elements: "Sequence[ParameterConstraint]",
-    ):
-        for i, e in enumerate(elements):
-            if not isinstance(e, (ScalarConstraint, ArrayConstraint, ConstantConstraint,
-                                  TupleConstraint, ListConstraint)):
+    def __init__(self,
+                 items: "Sequence[ParameterConstraint]"):
+        items = tuple(items)
+        for i, item_constraint in enumerate(items):
+            if not isinstance(item_constraint, ParameterConstraint):
                 raise TypeError(
-                    f"TupleConstraint element {i} must be a ScalarConstraint,"
-                    f" ArrayConstraint, ConstantConstraint, TupleConstraint, or ListConstraint,"
-                    f" got {type(e).__name__}")
-        object.__setattr__(self, "elements", tuple(elements))
+                    f"TupleConstraint item #{i} must be a ParameterConstraint,"
+                    f" got {type(item_constraint).__name__}")
+        object.__setattr__(self, "items", items)
 
 
 @dataclass(frozen=False, eq=False)
@@ -445,7 +439,7 @@ def _collect_alias_groups(parameters: Sequence[ParameterConstraint]
             yield p, p.alias_groups
             yield from _collect_alias_groups([p.element])
         elif isinstance(p, TupleConstraint):
-            yield from _collect_alias_groups(list(p.elements))
+            yield from _collect_alias_groups(p.items)
 
 
 def _check_optional_int(i: int, val, param_name: str):

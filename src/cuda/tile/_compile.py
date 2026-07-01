@@ -177,13 +177,13 @@ def _create_parameter(
 
     if isinstance(constraint, TupleConstraint):
         if isinstance(annotation, LeafAnnotationNode):
-            item_nodes = [annotation] * len(constraint.elements)
+            item_nodes = [annotation] * len(constraint.items)
         elif isinstance(annotation, HomogeneousTupleNode):
-            item_nodes = [annotation.each] * len(constraint.elements)
+            item_nodes = [annotation.each] * len(constraint.items)
         elif isinstance(annotation, HeterogeneousTupleNode):
-            if len(annotation.items) != len(constraint.elements):
+            if len(annotation.items) != len(constraint.items):
                 raise _make_constraint_error(
-                        f"Received a tuple of length {len(constraint.elements)}"
+                        f"Received a tuple of length {len(constraint.items)}"
                         f" but the annotation implies length {len(annotation.items)}.",
                         path)
             item_nodes = annotation.items
@@ -191,7 +191,7 @@ def _create_parameter(
             assert False
 
         item_vars = []
-        for i, (item, node) in enumerate(zip(constraint.elements, item_nodes, strict=True)):
+        for i, (item, node) in enumerate(zip(constraint.items, item_nodes, strict=True)):
             item_var = var.ctx.make_var(var.name + f"_{i}", var.loc)
             _create_parameter(item, node, path.tuple_item(i), item_var, nonconstant_flat_vars)
             item_vars.append(item_var)

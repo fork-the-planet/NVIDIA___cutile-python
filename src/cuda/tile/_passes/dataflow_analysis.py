@@ -68,21 +68,21 @@ def _register_leaf_param(state, constraint: ArrayConstraint | ScalarConstraint,
 
 def _register_tuple_params(state, constraint: TupleConstraint, flat_params, offset: int,
                            alias_set_mapper) -> int:
-    for elem in constraint.elements:
-        if isinstance(elem, (ArrayConstraint, ScalarConstraint)):
-            n = 1 + 2 * elem.ndim if isinstance(elem, ArrayConstraint) else 1
-            _register_leaf_param(state, elem, flat_params[offset:offset + n], alias_set_mapper)
+    for item in constraint.items:
+        if isinstance(item, (ArrayConstraint, ScalarConstraint)):
+            n = 1 + 2 * item.ndim if isinstance(item, ArrayConstraint) else 1
+            _register_leaf_param(state, item, flat_params[offset:offset + n], alias_set_mapper)
             offset += n
-        elif isinstance(elem, TupleConstraint):
-            offset = _register_tuple_params(state, elem, flat_params, offset, alias_set_mapper)
-        elif isinstance(elem, ListConstraint):
-            assert isinstance(elem.element, ArrayConstraint)
+        elif isinstance(item, TupleConstraint):
+            offset = _register_tuple_params(state, item, flat_params, offset, alias_set_mapper)
+        elif isinstance(item, ListConstraint):
+            assert isinstance(item.element, ArrayConstraint)
             base_ptr, size_var = flat_params[offset], flat_params[offset + 1]
             state.tracker.update(base_ptr,
-                                 DataPredicate(alias_set=alias_set_mapper(elem.alias_groups),
+                                 DataPredicate(alias_set=alias_set_mapper(item.alias_groups),
                                                div_by=1,
-                                               may_alias_internally=elem.elements_may_alias))
-            elt_predicates = _get_array_predicates(elem.element, alias_set_mapper)
+                                               may_alias_internally=item.elements_may_alias))
+            elt_predicates = _get_array_predicates(item.element, alias_set_mapper)
             state.list_array_tracker.update(base_ptr,
                                             _AggregatePredicate(dict(enumerate(elt_predicates))))
             state.set_always_true(size_var)

@@ -1691,12 +1691,12 @@ static PyPtr parse_param_constraint(ConstantCursor& cursor,
                                     Cursor<RefPtr<LeafAnnotationNode>>* annotation_cursor) {
     ParameterKind pk = param_cursor->next();
     if (pk == ParameterKind::TupleBegin) {
-        PyPtr elements_list = steal(PyList_New(0));
-        if (!elements_list) return {};
+        PyPtr items_list = steal(PyList_New(0));
+        if (!items_list) return {};
         while (param_cursor->peek() != ParameterKind::TupleEnd) {
-            PyPtr elem = parse_param_constraint(cursor, param_cursor, annotation_cursor);
-            if (!elem) return {};
-            if (PyList_Append(elements_list.get(), elem.get()) < 0) return {};
+            PyPtr item = parse_param_constraint(cursor, param_cursor, annotation_cursor);
+            if (!item) return {};
+            if (PyList_Append(items_list.get(), item.get()) < 0) return {};
         }
         ParameterKind tuple_end = param_cursor->next();
         CHECK(tuple_end == ParameterKind::TupleEnd);
@@ -1705,7 +1705,7 @@ static PyPtr parse_param_constraint(ConstantCursor& cursor,
         if (!signature_module) return {};
         PyPtr constraint_class = getattr(signature_module, "TupleConstraint");
         if (!constraint_class) return {};
-        return steal(PyObject_CallOneArg(constraint_class.get(), elements_list.get()));
+        return steal(PyObject_CallOneArg(constraint_class.get(), items_list.get()));
     }
     LeafAnnotationNode* annotation = annotation_cursor->next().get();
     return parse_element_constraint(cursor, pk, *annotation);

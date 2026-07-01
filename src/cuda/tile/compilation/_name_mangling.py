@@ -395,17 +395,17 @@ def _demangle_list_constraint(cursor: _Cursor,
 
 def _mangle_tuple_constraint(constraint: TupleConstraint, alias_group_map: dict[str, int],
                              cconv: CallingConvention) -> str:
-    # Format: {count}{elem0_mangling}{elem1_mangling}...
-    return f"{len(constraint.elements)}" + "".join(
-        _mangle_constraint(e, alias_group_map, cconv) for e in constraint.elements)
+    # Format: {count}{item0_mangling}{item1_mangling}...
+    return f"{len(constraint.items)}" + "".join(
+        _mangle_constraint(e, alias_group_map, cconv) for e in constraint.items)
 
 
 def _demangle_tuple_constraint(cursor: _Cursor,
                                alias_group_demangler: _AliasGroupDemangler,
                                cconv: CallingConvention) -> TupleConstraint:
     count = int(cursor.expect("[0-9]+", "Expected element count"))
-    elements = [_demangle_constraint(cursor, alias_group_demangler, cconv) for _ in range(count)]
-    return TupleConstraint(elements)
+    items = [_demangle_constraint(cursor, alias_group_demangler, cconv) for _ in range(count)]
+    return TupleConstraint(items)
 
 
 def _mangle_dtype(dtype: DType):
