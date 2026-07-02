@@ -231,6 +231,7 @@ def exhaustive_search(
     total = len(search_space)
     isatty = _in_terminal()
     dynamic_launch_timeout_sec = _MAX_DYNAMIC_LAUNCH_TIMEOUT_SEC
+    slowest_wall_time_sec = _MIN_DYNAMIC_LAUNCH_TIMEOUT_SEC / 2
 
     if total == 0:
         raise ValueError("Search space is empty.")
@@ -261,12 +262,11 @@ def exhaustive_search(
                 stream, _WARM_UP_REPEATS, dynamic_launch_timeout_sec)
             candidate.run_benchmark(stream, _BATCH_REPEATS)
             if wall_time_sec is not None:
-                # udpate dynamic launch timeout to 2x of the fastest successful launch
-                # wall time and floor by _MIN_DYNAMIC_LAUNCH_TIMEOUT_SEC
+                # Update dynamic launch timeout to 2x of the slowest successful launch
+                # wall time, capped at _MAX_DYNAMIC_LAUNCH_TIMEOUT_SEC.
+                slowest_wall_time_sec = max(slowest_wall_time_sec, wall_time_sec)
                 dynamic_launch_timeout_sec = min(
-                    dynamic_launch_timeout_sec,
-                    max(_MIN_DYNAMIC_LAUNCH_TIMEOUT_SEC, wall_time_sec * 2),
-                )
+                    slowest_wall_time_sec * 2, _MAX_DYNAMIC_LAUNCH_TIMEOUT_SEC)
         except Exception as e:
             errors.append((cfg, type(e).__name__, str(e)))
             continue
@@ -337,7 +337,7 @@ def exhaustive_search(
 
 
 _MAX_DYNAMIC_LAUNCH_TIMEOUT_SEC = 5.0
-_MIN_DYNAMIC_LAUNCH_TIMEOUT_SEC = 0.5
+_MIN_DYNAMIC_LAUNCH_TIMEOUT_SEC = 1.0
 _MAX_MEASURE_TIME_US = 5_000_000  # 5s
 _MAX_REPEATS = 1000
 _MIN_REPEATS = 5
@@ -362,7 +362,8 @@ class _TimingCandidate(Generic[T]):
 
         # First warmup is timed to ensure it doesn't deadlock.
         _, wall_time_sec = benchmark_with_timeout(
-            stream, self.grid, self.kernel, self.get_args(), launch_timeout_sec)
+            stream, self.grid, self.kernel, self.get_args(), launch_timeout_sec,
+            _MAX_DYNAMIC_LAUNCH_TIMEOUT_SEC)
         for _ in range(num_times - 1):
             _benchmark(stream, self.grid, self.kernel, self.get_args())
         return wall_time_sec

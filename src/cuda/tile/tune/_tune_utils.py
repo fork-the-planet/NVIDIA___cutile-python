@@ -41,12 +41,14 @@ class _WorkerState:
 
 
 class _TimedBenchmarkRunner:
-    def __init__(self, timeout_sec: float):
-        self._timeout_sec = timeout_sec
+    def __init__(self):
         self._worker: _WorkerState | None = None
         self._next_task_id = itertools.count(0)
 
-    def run(self, payload: bytes) -> tuple[float, float]:
+    def is_running(self) -> bool:
+        return self._worker is not None and self._worker.process.poll() is None
+
+    def run(self, payload: bytes, timeout_sec: float) -> tuple[float, float]:
         worker = self._get_or_start_worker()
         task_id = next(self._next_task_id)
         wall_time_start = time.perf_counter()
@@ -55,11 +57,11 @@ class _TimedBenchmarkRunner:
         except ConnectionError:
             self._exit_worker_and_report_error(worker.process)
 
-        conn_ready = wait([worker.conn], self._timeout_sec)
+        conn_ready = wait([worker.conn], timeout_sec)
         if not conn_ready:
             self.terminate(graceful_shutdown=False)
             raise TileLaunchTimeoutError(
-                f"CUDA kernel launch exceeded timeout {self._timeout_sec} sec"
+                f"CUDA kernel launch exceeded timeout {timeout_sec} sec"
             )
         try:
             result_task_id, ok, value, details = worker.conn.recv()
@@ -169,12 +171,11 @@ _timed_benchmark_runner: _TimedBenchmarkRunner | None = None
 _timed_benchmark_lock = threading.Lock()
 
 
-def _get_timed_benchmark_runner(timeout_sec: float) -> _TimedBenchmarkRunner:
+def _get_timed_benchmark_runner() -> _TimedBenchmarkRunner:
     global _timed_benchmark_runner
     if _timed_benchmark_runner is None:
-        _timed_benchmark_runner = _TimedBenchmarkRunner(timeout_sec)
-    else:
-        _timed_benchmark_runner._timeout_sec = timeout_sec
+        _timed_benchmark_runner = _TimedBenchmarkRunner()
+
     return _timed_benchmark_runner
 
 
@@ -216,7 +217,8 @@ def _benchmark_subprocess_disabled() -> bool:
 
 
 def benchmark_with_timeout(
-        stream, grid, kernel, pyargs, timeout_sec: float) -> tuple[float, float | None]:
+        stream, grid, kernel, pyargs, dynamic_launch_timeout_sec: float,
+        inactive_runner_timeout_sec: float) -> tuple[float, float | None]:
     if _benchmark_subprocess_disabled():
         return _benchmark(stream, grid, kernel, pyargs), None
 
@@ -225,5 +227,9 @@ def benchmark_with_timeout(
         return _benchmark(stream, grid, kernel, pyargs), None
 
     with _timed_benchmark_lock:
-        runner = _get_timed_benchmark_runner(timeout_sec)
-        return runner.run(serialized_payload)
+        runner = _get_timed_benchmark_runner()
+
+        # Use default timeout for inactive runner, since first run is expected to be slower.
+        timeout_sec = (dynamic_launch_timeout_sec if runner.is_running()
+                       else inactive_runner_timeout_sec)
+        return runner.run(serialized_payload, timeout_sec)
