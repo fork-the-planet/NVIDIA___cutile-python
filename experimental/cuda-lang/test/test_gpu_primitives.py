@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) <2025> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+import math
 
 import cuda.lang as cl
 from cuda.lang._exception import TileCompilerExecutionError
@@ -345,6 +346,22 @@ def test_warp_index():
     cl.launch(torch.cuda.current_stream(), (1,), (64,), kernel, (out,))
     expected = torch.tensor([0] * 32 + [1] * 32, dtype=torch.int32)
     assert (out.cpu() == expected).all()
+
+
+@pytest.mark.parametrize(
+    "thread_count",
+    [(1,), (16,), (31,), (32,), (33,), (60,), (64,), (80,), (128,), (7, 7), (32, 32), (5, 5, 5)]
+)
+def test_warp_count(thread_count):
+    @cl.kernel
+    def kernel(out):
+        if cl.thread_index(0) == 0 and cl.thread_index(1) == 0 and cl.thread_index(2) == 0:
+            out[()] = cl.warp_count()
+
+    out = torch.zeros((), dtype=torch.int32, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), thread_count, kernel, (out,))
+    expected = (math.prod(thread_count) + 31) // 32
+    assert out.item() == expected
 
 
 def test_saxpy():

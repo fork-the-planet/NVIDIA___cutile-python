@@ -203,6 +203,12 @@ def warp_index() -> int:
     return tid // lane_count()
 
 
+@function
+def warp_count() -> int:
+    bdx, bdy, bdz = thread_count(0), thread_count(1), thread_count(2)
+    return (bdx * bdy * bdz - 1) // lane_count() + 1
+
+
 @stub
 def cluster_index(axis: int, /) -> int:
     """Gets the index of the current cluster in the grid.
