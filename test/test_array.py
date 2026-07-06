@@ -134,6 +134,21 @@ def test_static_shape_standalone_recompile():
     assert mock_compile.call_count == 2
 
 
+def test_static_shape_constraint_values():
+    x = torch.zeros((48, 32), dtype=torch.float16, device='cuda')
+    out = torch.zeros((16, 16), dtype=torch.float16, device='cuda')
+    sig = ct.compilation.KernelSignature.from_kernel_args(
+        load_static_shaped, (x, out),
+        ct.compilation.CallingConvention.cutile_python_v2())
+
+    constraint = sig.parameters[0]
+    assert constraint.shape_constant == (48, 32)
+    assert constraint.stride_constant == (None, 1)
+    assert constraint.stride_divisible_by == (8, 1)
+    assert constraint.may_alias_internally is False
+    assert constraint.base_addr_divisible_by == 16
+
+
 def test_static_shape_annotation_validation():
     with pytest.raises(TypeError, match="must be int"):
         ct.ArrayAnnotation(static_shape_dims=(False,))

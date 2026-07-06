@@ -830,7 +830,10 @@ struct ArrayTypeConstantBuilder {
                   const Vec<int64_t>& static_shape_dims,
                   LaunchHelper& helper) {
         CHECK(first_array_shape);
+        // Written as [packed_array_type, specialization_bits, static_shape_value...];
+        // parse_array_constraint() must read in the same order.
         helper.constants.push_back(pack_array_type(arrty));
+        helper.constants.push_back(bits);
         for (int64_t dim : static_shape_dims) {
             Result<size_t> normalized_dim = normalize_dim(dim, arrty.ndim);
             CHECK(normalized_dim.is_ok());
@@ -840,7 +843,6 @@ struct ArrayTypeConstantBuilder {
             driver->cuPointerGetAttribute(&helper.cuda_context, CU_POINTER_ATTRIBUTE_CONTEXT,
                     reinterpret_cast<CUdeviceptr>(device_ptr));
         }
-        helper.constants.push_back(bits);
     }
 };
 
