@@ -15,6 +15,9 @@ from .._enums import (
     CTAGroup,
     SwizzleMode,
     Tcgen05MMAKind,
+    Tcgen05MMABlockScaleKind,
+    Tcgen05MMAScaleVectorSize,
+    Tcgen05MMACollectorBBuffer,
     Tcgen05MMACollectorOp,
     Tcgen05LoadStoreShape,
     Tcgen05CopyMulticast,
@@ -359,47 +362,146 @@ class Tcgen05SharedMemoryDescriptor:
     leading_dimension_offset: int
     stride_dimension_offset: int
     base_offset: int = 0
-    leading_dimension_mode: LeadingDimensionMode = LeadingDimensionMode.ByteOffsetRelative
+    leading_dimension_mode: LeadingDimensionMode = (
+        LeadingDimensionMode.ByteOffsetRelative
+    )
     swizzle_mode: SwizzleMode = SwizzleMode.SWIZZLE_NONE
 
     @stub
-    def encode(self) -> int:
-        ...
+    def encode(self) -> int: ...
 
 
 @stub
 def tcgen05_mma(
     kind,
-    cta_group,
     matrix_d,
     matrix_a,
     matrix_b,
     instruction_descriptor,
-    enable_input_d,
+    *,
+    accumulate,
+    cta_group=CTAGroup.CTA_1,
+    sparse_metadata=None,
     scale_input_d=None,
     disable_output_lane=None,
     collector_op=Tcgen05MMACollectorOp.DISCARD,
-    a_shift=None,
+    a_shift=False,
 ) -> None:
     """
+    Perform the 5th generation of matrix multiply and accumulate operation.
+
     Args:
-        kind (Tcgen05MMAKind):
-        cta_group (CTAGroup):
-        matrix_d (P6):
-        matrix_a (P6 | int64):
-        matrix_b (int64):
+        kind (Tcgen05MMAKind): Data type the operation should be performed in.
+        matrix_d (P6): Pointer in tensor memory to the destination and optional
+            accumulator matrix D.
+        matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
+            descriptor or a pointer in tensor memory.
+        matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
         instruction_descriptor (int32):
-        enable_input_d (bool):
-        scale_input_d (int32 | None):
-        disable_output_lane (vector | None):
-        collector_op (Tcgen05MMACollectorOp):
-        a_shift (bool | None):
+        accumulate (bool): Whether input matrix D is included in the result.
+        cta_group (CTAGroup): Controlls whether the operation takes place in
+            one block or a pair of blocks.
+        sparse_metadata (P6 | None): Optional pointer in tensor memory containing
+            sparsity metadata for packed sparse matrix A. ``None`` selects dense
+            MMA; presence selects sparse MMA and must be compile-time known.
+        scale_input_d (int | None): Optional compile-time exponent in
+            ``[0, 15]`` that scales input D by ``2**-scale_input_d``.
+            Supported only for ``F16`` and ``TF32`` kinds.
+        disable_output_lane (vector | None): Optional vector mask selecting
+            tensor-memory lanes that must not be updated.
+        collector_op (Tcgen05MMACollectorOp): Collector-buffer operation for
+            matrix A.
+        a_shift (bool): Shifts the rows of the A matrix down by one row and
+            can only be applied if A is in tensor memory
+    """
+
+
+@stub
+def tcgen05_mma_block_scale(
+    kind,
+    matrix_d,
+    matrix_a,
+    matrix_b,
+    instruction_descriptor,
+    scale_a,
+    scale_b,
+    *,
+    accumulate,
+    sparse_metadata=None,
+    cta_group=CTAGroup.CTA_1,
+    scale_vector_size=Tcgen05MMAScaleVectorSize.DEFAULT,
+    collector_op=Tcgen05MMACollectorOp.DISCARD,
+) -> None:
+    """
+    Performs block scaled MMA operation on 5th-generation tensor cores.
+
+    Args:
+        kind (Tcgen05MMABlockScaleKind): Data type the operation should be
+            performed in.
+        matrix_d (P6): Pointer in tensor memory to the destination and optional
+            accumulator matrix D.
+        matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
+            descriptor or a pointer in tensor memory.
+        matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
+        instruction_descriptor (int32):
+        scale_a (P6): Pointer in tensor memory to matrix A scale factors.
+        scale_b (P6): Pointer in tensor memory to matrix B scale factors.
+        accumulate (bool): Whether input matrix D is included in the result.
+        sparse_metadata (P6 | None): Optional pointer in tensor memory containing
+            sparsity metadata for packed sparse matrix A. ``None`` selects dense
+            MMA; presence selects sparse MMA and must be compile-time known.
+        cta_group (CTAGroup): Controlls whether the operation takes place in
+            one block or a pair of blocks.
+        scale_vector_size (Tcgen05MMAScaleVectorSize): Scale-vector layout.
+        collector_op (Tcgen05MMACollectorOp): Collector-buffer operation for
+            matrix A.
+    """
+
+
+@stub
+def tcgen05_mma_weight_stationary(
+    kind,
+    matrix_d,
+    matrix_a,
+    matrix_b,
+    instruction_descriptor,
+    *,
+    accumulate,
+    sparse_metadata=None,
+    zero_column_mask=None,
+    collector_op=Tcgen05MMACollectorOp.DISCARD,
+    collector_b_buffer=Tcgen05MMACollectorBBuffer.BUFFER_0,
+) -> None:
+    """
+    Perform the 5th generation of weight stationary convolution matrix
+    multiply and accumulate operation.
+
+    Args:
+        kind (Tcgen05MMAKind): Data type the operation should be performed in.
+        matrix_d (P6): Pointer in tensor memory to the destination and optional
+            accumulator matrix D.
+        matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
+            descriptor or a pointer in tensor memory.
+        matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
+        instruction_descriptor (int32):
+        accumulate (bool): Whether input matrix D is included in the result.
+        sparse_metadata (P6 | None): Optional pointer in tensor memory containing
+            sparsity metadata for packed sparse matrix A. ``None`` selects dense
+            MMA; presence selects sparse MMA and must be compile-time known.
+        zero_column_mask (int64 | None): Optional integral scalar containing a 64-bit
+            zero-column mask descriptor for matrix B.
+        collector_op (Tcgen05MMACollectorOp): Collector-buffer operation for
+            matrix A.
+        collector_b_buffer (Tcgen05MMACollectorBBuffer):
     """
 
 
 __all__ = (
     "CTAGroup",
     "Tcgen05MMAKind",
+    "Tcgen05MMABlockScaleKind",
+    "Tcgen05MMAScaleVectorSize",
+    "Tcgen05MMACollectorBBuffer",
     "Tcgen05MMACollectorOp",
     "Tcgen05LoadStoreShape",
     "Tcgen05CopyMulticast",
@@ -416,6 +518,8 @@ __all__ = (
     "tcgen05_copy",
     "tcgen05_store",
     "tcgen05_mma",
+    "tcgen05_mma_block_scale",
+    "tcgen05_mma_weight_stationary",
     "tcgen05_wait_load",
     "tcgen05_wait_store",
     "tcgen05_fence_before_thread_sync",

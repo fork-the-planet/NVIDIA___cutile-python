@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cuda.tile._exception import TileCompilerExecutionError
 import pytest
 
 import cuda.lang as cl
 from cuda.lang._compile import KernelSignature, get_compute_capability
-from cuda.lang._exception import TileTypeError, TileValueError
+from cuda.lang._exception import TileTypeError, TileValueError, TileCompilerExecutionError
 from test.util import make_symbolic_tensor, compile_kernel
 
 
@@ -291,8 +290,7 @@ def test_copy(shape, cta_group, multicast, source_format):
 @pytest.mark.parametrize("count", (1, 2, 4, 8, 16, 32, 64, 128))
 @pytest.mark.parametrize("pack", (True, False, None))
 @pytest.mark.parametrize("offset", (None, 0, 1))
-def test_load(log_ptx, shape, count, pack, offset):
-    @cl.kernel
+def test_load(shape, count, pack, offset):
     def kernel():
         tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
         smem = cl.shared_array(1, tmem_dtype, alignment=4)
@@ -301,13 +299,9 @@ def test_load(log_ptx, shape, count, pack, offset):
         cl.tcgen05_load(shape, tmem_ptr, count=count, pack=pack, offset=offset)
         cl.tcgen05_deallocate(tmem_ptr, 128)
 
-    def do_compile():
-        compiled = cl.compile_simt(kernel, [KernelSignature([])])
-        ptx = compiled.ptx
-        assert ptx is not None
-        assert "tcgen05.ld.sync.aligned" in ptx and shape.value in ptx, ptx
-
-    bad_args = offset is not None and shape is not cl.Tcgen05LoadStoreShape.SHAPE_16X32BX2
+    bad_args = (
+        offset is not None and shape is not cl.Tcgen05LoadStoreShape.SHAPE_16X32BX2
+    )
     bad_args |= shape is cl.Tcgen05LoadStoreShape.SHAPE_16X256B and count not in (
         1,
         2,
@@ -326,47 +320,151 @@ def test_load(log_ptx, shape, count, pack, offset):
         32,
         64,
     )
-    if bad_args:
-        with pytest.raises((TileTypeError, TileValueError)):
-            do_compile()
-    else:
-        do_compile()
+    compile_kernel(
+        kernel,
+        assert_in_ptx=None if bad_args else ("tcgen05.ld.sync.aligned", shape.value),
+        raises=pytest.raises((TileTypeError, TileValueError)) if bad_args else None,
+    )
 
 
-@pytest.mark.parametrize("kind", cl.Tcgen05MMAKind)
-@pytest.mark.parametrize("cta_group", cl.CTAGroup)
-@pytest.mark.parametrize("collector_op", cl.Tcgen05MMACollectorOp)
-def test_mma_valid_enum_combinations(kind, cta_group, collector_op):
-    if kind in (
-        cl.Tcgen05MMAKind.I8,
-        cl.Tcgen05MMAKind.MXF8F6F4,
-        cl.Tcgen05MMAKind.MXF4,
-        cl.Tcgen05MMAKind.MXF4NVF4,
-    ):
-        pytest.xfail("needs updated mlir bindings")
+ORDINARY_MMA_KINDS = (
+    cl.Tcgen05MMAKind.I8,
+    cl.Tcgen05MMAKind.F8F6F4,
+    cl.Tcgen05MMAKind.F16,
+    cl.Tcgen05MMAKind.TF32,
+)
 
-    @cl.kernel
+
+@pytest.mark.parametrize("kind", ORDINARY_MMA_KINDS)
+@pytest.mark.parametrize("cta_group", tuple(cl.CTAGroup))
+@pytest.mark.parametrize("collector_op", tuple(cl.Tcgen05MMACollectorOp))
+def test_mma_valid_enum_combinations(kind, cta_group, collector_op, request):
+
     def kernel():
         tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
         tmem_smem = cl.shared_array(1, tmem_dtype, alignment=4)
         cl.tcgen05_mma(
             kind,
-            cta_group,
             tmem_smem[0],
             cl.int64(0),
             cl.int64(0),
             cl.int32(0),
-            False,
+            accumulate=False,
+            cta_group=cta_group,
             collector_op=collector_op,
         )
 
-    compiled = cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
-    ptx = compiled.ptx
-    assert ptx is not None
-    assert "tcgen05.mma" in ptx, ptx
+    compile_kernel(kernel, assert_in_ptx="tcgen05.mma")
 
 
-@pytest.mark.parametrize("cta_group", cl.CTAGroup._member_map_.values())
+MMA_BLOCK_SCALE_CASES = (
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF8F6F4,
+        cl.Tcgen05MMAScaleVectorSize.DEFAULT,
+    ),
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF8F6F4,
+        cl.Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF4,
+        cl.Tcgen05MMAScaleVectorSize.DEFAULT,
+    ),
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF4,
+        cl.Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF4NVF4,
+        cl.Tcgen05MMAScaleVectorSize.BLOCK_16,
+    ),
+    (
+        cl.Tcgen05MMABlockScaleKind.MXF4NVF4,
+        cl.Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+)
+
+
+@pytest.mark.parametrize("kind", tuple(cl.Tcgen05MMABlockScaleKind))
+@pytest.mark.parametrize(
+    "scale_vector_size",
+    tuple(cl.Tcgen05MMAScaleVectorSize),
+)
+@pytest.mark.parametrize("cta_group", tuple(cl.CTAGroup))
+@pytest.mark.parametrize(
+    "collector_op",
+    tuple(cl.Tcgen05MMACollectorOp),
+)
+def test_mma_block_scale_valid_enum_combinations(
+    kind,
+    scale_vector_size,
+    cta_group,
+    collector_op,
+):
+    @cl.kernel
+    def kernel():
+        tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
+        tmem = cl.shared_array(3, tmem_dtype, alignment=4)
+
+        cl.tcgen05_mma_block_scale(
+            kind,
+            tmem[0],
+            cl.int64(0),
+            cl.int64(0),
+            cl.int32(0),
+            tmem[1],
+            tmem[2],
+            accumulate=False,
+            cta_group=cta_group,
+            scale_vector_size=scale_vector_size,
+            collector_op=collector_op,
+        )
+
+    if (kind, scale_vector_size) in MMA_BLOCK_SCALE_CASES:
+        compile_kernel(
+            kernel,
+            filecheck_ptx="""CHECK: tcgen05.mma
+                             CHECK-SAME: .block_scale""",
+        )
+    else:
+        compile_kernel(
+            kernel,
+            raises=pytest.raises(TileValueError),
+        )
+
+
+@pytest.mark.parametrize("kind", ORDINARY_MMA_KINDS)
+@pytest.mark.parametrize("collector_b_buffer", tuple(cl.Tcgen05MMACollectorBBuffer))
+@pytest.mark.parametrize("collector_op", tuple(cl.Tcgen05MMACollectorOp))
+def test_mma_weight_stationary_valid_enum_combinations(
+    kind,
+    collector_b_buffer,
+    collector_op,
+    request,
+):
+    @cl.kernel
+    def kernel():
+        tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
+        tmem = cl.shared_array(1, tmem_dtype, alignment=4)
+
+        cl.tcgen05_mma_weight_stationary(
+            kind,
+            tmem[0],
+            cl.int64(0),
+            cl.int64(0),
+            cl.int32(0),
+            accumulate=False,
+            collector_b_buffer=collector_b_buffer,
+            collector_op=collector_op,
+        )
+
+    compile_kernel(
+        kernel,
+        assert_in_ptx="tcgen05.mma.ws",
+    )
+
+
+@pytest.mark.parametrize("cta_group", tuple(cl.CTAGroup))
 @pytest.mark.parametrize("scale_input_d", (None, 0, 15))
 @pytest.mark.parametrize("disable_output_lane", (False, True))
 def test_mma_optional_operands(cta_group, scale_input_d, disable_output_lane):
@@ -396,12 +494,12 @@ def test_mma_optional_operands(cta_group, scale_input_d, disable_output_lane):
 
         cl.tcgen05_mma(
             cl.Tcgen05MMAKind.F16,
-            cta_group,
             tmem_smem[0],
             cl.int64(0),
             cl.int64(0),
             cl.int32(0),
-            False,
+            accumulate=False,
+            cta_group=cta_group,
             collector_op=cl.Tcgen05MMACollectorOp.DISCARD,
             disable_output_lane=disable_output_lane_value,
             scale_input_d=cl.int64(scale_input_d)
@@ -409,10 +507,7 @@ def test_mma_optional_operands(cta_group, scale_input_d, disable_output_lane):
             else None,
         )
 
-    compiled = cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
-    ptx = compiled.ptx
-    assert ptx is not None
-    assert "tcgen05.mma" in ptx, ptx
+    compile_kernel(kernel, assert_in_ptx="tcgen05.mma")
 
 
 def test_mma_matrix_a_validation():
@@ -422,20 +517,19 @@ def test_mma_matrix_a_validation():
         tmem_smem = cl.shared_array(1, tmem_dtype, alignment=4)
         cl.tcgen05_mma(
             cl.Tcgen05MMAKind.F16,
-            cl.CTAGroup.CTA_1,
             tmem_smem[0],
             cl.int32(0),  # wrong type!
             cl.int64(0),
             cl.int32(0),
-            False,
+            accumulate=False,
+            cta_group=cl.CTAGroup.CTA_1,
         )
 
     match = (
         "Expected a tensor memory pointer or a shared memory descriptor "
         "encoded as a 64 bit integer but got int32"
     )
-    with pytest.raises(TileTypeError, match=match):
-        cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
+    compile_kernel(kernel, raises=pytest.raises(TileTypeError, match=match))
 
 
 @pytest.mark.parametrize(
@@ -486,21 +580,17 @@ def test_fence(op, expect):
     ),
 )
 def test_relinquish(group, expect):
-    @cl.kernel
     def kernel():
         cl.tcgen05_relinquish_allocation_permit(group)
 
-    compiled = cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
-    assert expect in compiled.ptx, compiled.ptx
+    compile_kernel(kernel, assert_in_ptx=expect)
 
 
 def test_relinquish_bad_group():
-    @cl.kernel
     def kernel():
         cl.tcgen05_relinquish_allocation_permit(0xDEADBEEF)
 
-    with pytest.raises(Exception):
-        cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
+    compile_kernel(kernel, raises=pytest.raises(Exception))
 
 
 @pytest.mark.parametrize(
@@ -511,14 +601,12 @@ def test_relinquish_bad_group():
     ),
 )
 def test_shift(group, expect):
-    @cl.kernel
     def kernel():
         tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
         tmem_smem = cl.shared_array(1, tmem_dtype, alignment=4)
         cl.tcgen05_shift_down(tmem_smem[0], group)
 
-    compiled = cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
-    assert expect in compiled.ptx, compiled.ptx
+    compile_kernel(kernel, assert_in_ptx=expect)
 
 
 def test_shift_bad_group():
@@ -532,38 +620,31 @@ def test_shift_bad_group():
         cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
 
 
-def test_shift_bad_address_space(subtests):
-    with subtests.test("shared"):
+def test_shift_bad_address_space_shared():
+    def kernel():
+        ptr = cl.shared_array(1, cl.int8).get_base_pointer()
+        cl.tcgen05_shift_down(ptr, 0xDEADBEEF)
 
-        @cl.kernel
-        def kernel():
-            ptr = cl.shared_array(1, cl.int8).get_base_pointer()
-            cl.tcgen05_shift_down(ptr, 0xDEADBEEF)
+    compile_kernel(kernel, raises=pytest.raises(Exception))
 
-        with pytest.raises(Exception):
-            cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
 
-    with subtests.test("local"):
+def test_shift_bad_address_space_local():
 
-        @cl.kernel
-        def kernel():
-            with cl.local_array(1, cl.int8) as arr:
-                ptr = arr.get_base_pointer()
-                cl.tcgen05_shift_down(ptr, 0xDEADBEEF)
-
-        with pytest.raises(Exception):
-            cl.compile_simt(kernel, [KernelSignature([])], log_ptx=True)
-
-    with subtests.test("global"):
-
-        @cl.kernel
-        def kernel(arr):
+    def kernel():
+        with cl.local_array(1, cl.int8) as arr:
             ptr = arr.get_base_pointer()
             cl.tcgen05_shift_down(ptr, 0xDEADBEEF)
 
-        with pytest.raises(Exception):
-            cl.compile_simt(
-                kernel,
-                [KernelSignature([make_symbolic_tensor(1, cl.int8)])],
-                log_ptx=True,
-            )
+    compile_kernel(kernel, raises=pytest.raises(Exception))
+
+
+def test_shift_bad_address_space_global():
+    def kernel(arr):
+        ptr = arr.get_base_pointer()
+        cl.tcgen05_shift_down(ptr, 0xDEADBEEF)
+
+    compile_kernel(
+        kernel,
+        signature=KernelSignature([make_symbolic_tensor(1, cl.int8)]),
+        raises=pytest.raises(Exception),
+    )

@@ -66,7 +66,9 @@ def compile_kernel(
     kernel,
     signature=KernelSignature([]),
     assert_in_ptx=None,
+    assert_not_in_ptx=None,
     assert_in_mlir=None,
+    assert_not_in_mlir=None,
     filecheck_ptx=None,
     raises=None,
 ):
@@ -81,20 +83,26 @@ def compile_kernel(
     compiled = cl.compile_simt(kernel, [signature], log_ptx=True)
     assert compiled.ptx
 
-    def tuple_or_str_check(check, scrutinee):
+    def tuple_or_str_check(check, scrutinee, predicate=lambda x, y: x in y):
         match check:
             case None:
                 pass
             case str():
-                assert check in scrutinee, f"'{check}' not in \n{scrutinee}"
+                assert predicate(check, scrutinee), (
+                    f"{predicate=} failed with\n{check=}\n{scrutinee}"
+                )
             case tuple() | list():
-                for check in check:
-                    assert check in scrutinee, f"'{check}' not in \n{scrutinee}"
+                for single_check in check:
+                    assert predicate(single_check, scrutinee), (
+                        f"{predicate=} failed with\n{single_check=}\n{scrutinee}"
+                    )
             case _:
                 assert False, "expected assert_in_ptx to be str or iterable of str"
 
     tuple_or_str_check(assert_in_ptx, compiled.ptx)
+    tuple_or_str_check(assert_not_in_ptx, compiled.ptx, lambda x, y: x not in y)
     tuple_or_str_check(assert_in_mlir, compiled.mlir)
+    tuple_or_str_check(assert_not_in_mlir, compiled.mlir, lambda x, y: x not in y)
 
     if filecheck_ptx is not None:
         assert isinstance(filecheck_ptx, str)

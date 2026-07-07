@@ -360,12 +360,12 @@ def two_cta_tcgen05_kernel(a, b, c):
             for kk in ct.static_iter(range(tile_k // MMA_K)):
                 cl.tcgen05_mma(
                     cl.Tcgen05MMAKind.F16,
-                    cl.CTAGroup.CTA_2,
                     tmem_storage[0],
                     cl.int64(a_desc + (32 >> 4) * kk),
                     cl.int64(b_desc + (32 >> 4) * kk),
                     cl.int32(instruction),
-                    enable_input_d=kk != 0,
+                    accumulate=kk != 0,
+                    cta_group=cl.CTAGroup.CTA_2,
                 )
             cl.tcgen05_commit(
                 mma_bar,
@@ -513,12 +513,12 @@ def tma_tcgen05_kernel(a, b, c):
             for kk in ct.static_iter(range(tile_k // MMA_K)):
                 cl.tcgen05_mma(
                     cl.Tcgen05MMAKind.F16,
-                    cl.CTAGroup.CTA_2,
                     tmem_storage[0],
                     cl.int64(a_desc + (32 >> 4) * kk),
                     cl.int64(b_desc + (32 >> 4) * kk),
                     cl.int32(instruction),
-                    enable_input_d=k_tile != 0 or kk != 0,
+                    accumulate=k_tile != 0 or kk != 0,
+                    cta_group=cl.CTAGroup.CTA_2,
                 )
             cl.tcgen05_commit(
                 mma_bar,
@@ -923,12 +923,12 @@ def matmul_multicta_kernel(
                     for kk in ct.static_iter(range(tile_k // MMA_K)):
                         cl.tcgen05_mma(
                             cl.Tcgen05MMAKind.F16,
-                            cl.CTAGroup.CTA_2,
                             acc_tmem,
                             cl.int64(a_desc + (32 >> 4) * kk),
                             cl.int64(b_desc + (32 >> 4) * kk),
                             cl.int32(instruction),
-                            enable_input_d=k_tile != 0 or kk != 0,
+                            accumulate=k_tile != 0 or kk != 0,
+                            cta_group=cl.CTAGroup.CTA_2,
                         )
                     cl.tcgen05_commit(
                         load_empty.get_element_pointer(stage),

@@ -45,9 +45,25 @@ class Tcgen05MMAKind(Enum):
     TF32 = 1
     F8F6F4 = 2
     I8 = 3
-    MXF8F6F4 = 4
-    MXF4 = 5
-    MXF4NVF4 = 6
+
+
+class Tcgen05MMABlockScaleKind(Enum):
+    MXF8F6F4 = 0
+    MXF4 = 1
+    MXF4NVF4 = 2
+
+
+class Tcgen05MMAScaleVectorSize(Enum):
+    DEFAULT = 0
+    BLOCK_16 = 1
+    BLOCK_32 = 2
+
+
+class Tcgen05MMACollectorBBuffer(Enum):
+    BUFFER_0 = 0
+    BUFFER_1 = 1
+    BUFFER_2 = 2
+    BUFFER_3 = 3
 
 
 class Tcgen05MMACollectorOp(Enum):
@@ -123,6 +139,9 @@ __all__ = (
     "TMAStoreMode",
     "CTAGroup",
     "Tcgen05MMAKind",
+    "Tcgen05MMABlockScaleKind",
+    "Tcgen05MMAScaleVectorSize",
+    "Tcgen05MMACollectorBBuffer",
     "Tcgen05MMACollectorOp",
     "Tcgen05LoadStoreShape",
     "Tcgen05CopyMulticast",

@@ -72,10 +72,6 @@ cl_enum_to_mlir_attribute.register(
     partial(enum_to_mlir_nvvm_attribute, mlir_enum=mlir.nvvm.Tcgen05CpSrcFormat),
 )
 cl_enum_to_mlir_attribute.register(
-    enums.Tcgen05MMAKind,
-    partial(enum_to_mlir_nvvm_attribute, mlir_enum=mlir.nvvm.Tcgen05MMAKind),
-)
-cl_enum_to_mlir_attribute.register(
     enums.Tcgen05MMACollectorOp,
     partial(enum_to_mlir_nvvm_attribute, mlir_enum=mlir.nvvm.Tcgen05MMACollectorOp),
 )
@@ -87,6 +83,30 @@ cl_enum_to_mlir_attribute.register(
     enums.Tcgen05WaitKind,
     partial(enum_to_mlir_nvvm_attribute, mlir_enum=mlir.nvvm.Tcgen05WaitKind),
 )
+
+
+@cl_enum_to_mlir_attribute.register
+def tc5_mma_kind_to_mlir_attribute(enum_value: enums.Tcgen05MMAKind):
+    Kind = enums.Tcgen05MMAKind
+    NVVMKind = mlir.nvvm.Tcgen05MMAKind
+
+    def attr(x):
+        return mlir.nvvm.Tcgen05MMAKindAttr(value=x)
+
+    match enum_value:
+        case Kind.F16:
+            return attr(NVVMKind.F16)
+        case Kind.TF32:
+            return attr(NVVMKind.TF32)
+        case Kind.F8F6F4:
+            return attr(NVVMKind.F8F6F4)
+        case Kind.I8:
+            return attr(NVVMKind.I8)
+        case _:
+            raise TileInternalError(
+                f"Tcgen05MMAKind.{enum_value._name_} does not have a known "
+                "field in the corresponding NVVM enum"
+            )
 
 
 @cl_enum_to_mlir_attribute.register(enums.MemorySpace)

@@ -258,22 +258,22 @@ def make_mma_kernel(
 
                         cl.tcgen05_mma(
                             cl.Tcgen05MMAKind.F16,
-                            cta_group_kind,
                             tmem_ptr + tensor_memory_address,
                             cl.int64(a_desc),
                             cl.int64(b_desc),
                             cl.int32(i_desc),
-                            iter_k != 0,
+                            accumulate=iter_k != 0,
+                            cta_group=cta_group_kind,
                         )
                         for kk in ct.static_iter(range(1, BLOCK_K // MMA_K)):
                             cl.tcgen05_mma(
                                 cl.Tcgen05MMAKind.F16,
-                                cta_group_kind,
                                 tmem_ptr + tensor_memory_address,
                                 cl.int64(a_desc + (32 >> 4) * kk),
                                 cl.int64(b_desc + (32 >> 4) * kk),
                                 cl.int32(i_desc),
-                                enable_input_d=True,
+                                accumulate=True,
+                                cta_group=cta_group_kind,
                             )
 
                         if cta_group > 1:

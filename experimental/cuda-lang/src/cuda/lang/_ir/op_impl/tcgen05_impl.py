@@ -2,11 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from cuda.tile._ir.cast_ops import implicit_cast
 import cuda.lang._datatype as datatype
 from cuda.lang._enums import (
+    Tcgen05MMABlockScaleKind,
+    Tcgen05MMAScaleVectorSize,
+    Tcgen05MMACollectorBBuffer,
     Tcgen05MMAKind,
     Tcgen05LoadStoreShape,
     Tcgen05MMACollectorOp,
@@ -45,7 +48,6 @@ from cuda.tile._ir.op_impl import (
     require_constant_bool,
     require_constant_enum,
     require_constant_int,
-    require_optional_constant_enum,
 )
 import cuda.lang._mlir as mlir
 
@@ -319,8 +321,35 @@ def tcgen05_load_impl(
     return result
 
 
-def _require_tcgen05_mma_matrix_a(var: Var):
+TCGEN05_VALID_BLOCK_SCALE_COMBINATIONS = (
+    (
+        Tcgen05MMABlockScaleKind.MXF8F6F4,
+        Tcgen05MMAScaleVectorSize.DEFAULT,
+    ),
+    (
+        Tcgen05MMABlockScaleKind.MXF8F6F4,
+        Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+    (
+        Tcgen05MMABlockScaleKind.MXF4,
+        Tcgen05MMAScaleVectorSize.DEFAULT,
+    ),
+    (
+        Tcgen05MMABlockScaleKind.MXF4,
+        Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+    (
+        Tcgen05MMABlockScaleKind.MXF4NVF4,
+        Tcgen05MMAScaleVectorSize.BLOCK_16,
+    ),
+    (
+        Tcgen05MMABlockScaleKind.MXF4NVF4,
+        Tcgen05MMAScaleVectorSize.BLOCK_32,
+    ),
+)
 
+
+def _tcgen05_mma_matrix_a(var: Var) -> tuple[Var, bool]:
     ty = var.get_type()
 
     def error():
@@ -334,79 +363,356 @@ def _require_tcgen05_mma_matrix_a(var: Var):
             info = datatype.PointerInfo(pt.pointer_dtype)
             if info.memory_space is not MemorySpace.TENSOR:
                 raise error()
-            return var
+            return var, True
         case ScalarTy() as st:
             if not datatype.is_integral(st.dtype) or st.dtype.bitwidth != 64:
                 raise error()
-            return astype(var, datatype.int64)
+            return astype(var, datatype.int64), False
         case _:
             raise error()
+
+
+class _Tcgen05MMAOperands(NamedTuple):
+    operands: tuple[Var, ...]
+    matrix_a_is_tensor: bool
+
+
+def _tcgen05_mma_operands(
+    matrix_d: Var,
+    matrix_a: Var,
+    matrix_b: Var,
+    instruction_descriptor: Var,
+    accumulate: Var,
+) -> _Tcgen05MMAOperands:
+    require_pointer_in_memory_space(matrix_d, (MemorySpace.TENSOR,))
+    matrix_a, matrix_a_is_tensor = _tcgen05_mma_matrix_a(matrix_a)
+
+    require_integral_scalar_type(matrix_b, bitwidth=64)
+    matrix_b = astype(matrix_b, datatype.int64)
+
+    require_integral_scalar_type(instruction_descriptor)
+    instruction_descriptor = implicit_cast(
+        instruction_descriptor,
+        datatype.int32,
+        "instruction descriptor as int32",
+    )
+    accumulate = implicit_cast(accumulate, datatype.bool_, "accumulate as bool_")
+
+    return _Tcgen05MMAOperands(
+        operands=(
+            matrix_d,
+            matrix_a,
+            matrix_b,
+            instruction_descriptor,
+            accumulate,
+        ),
+        matrix_a_is_tensor=matrix_a_is_tensor,
+    )
+
+
+def require_optional_pointer_in_memory_space(
+    var: Var, spaces: tuple[MemorySpace, ...]
+) -> Var | None:
+    if is_none(var):
+        return None
+    require_pointer_in_memory_space(var, spaces)
+    return var
+
+
+def _i32_const(value: int) -> Var:
+    return strictly_typed_const(value, ScalarTy(datatype.int32))
+
+
+def _mma_kind_flag(kind: Tcgen05MMAKind) -> int:
+    match kind:
+        case Tcgen05MMAKind.F16:
+            return 0
+        case Tcgen05MMAKind.TF32:
+            return 1
+        case Tcgen05MMAKind.F8F6F4:
+            return 2
+        case Tcgen05MMAKind.I8:
+            return 3
+    assert False
+
+
+def _collector_op_flag(collector_op: Tcgen05MMACollectorOp) -> int:
+    match collector_op:
+        case Tcgen05MMACollectorOp.DISCARD:
+            return 0
+        case Tcgen05MMACollectorOp.LASTUSE:
+            return 1
+        case Tcgen05MMACollectorOp.FILL:
+            return 2
+        case Tcgen05MMACollectorOp.USE:
+            return 3
+    assert False
+
+
+def _collector_b_buffer_flag(
+    collector_b_buffer: Tcgen05MMACollectorBBuffer,
+) -> int:
+    match collector_b_buffer:
+        case Tcgen05MMACollectorBBuffer.BUFFER_0:
+            return 0
+        case Tcgen05MMACollectorBBuffer.BUFFER_1:
+            return 1
+        case Tcgen05MMACollectorBBuffer.BUFFER_2:
+            return 2
+        case Tcgen05MMACollectorBBuffer.BUFFER_3:
+            return 3
+    assert False
+
+
+def _block_scale_name(kind: Tcgen05MMABlockScaleKind) -> str:
+    match kind:
+        case Tcgen05MMABlockScaleKind.MXF8F6F4:
+            return "mxf8f6f4"
+        case Tcgen05MMABlockScaleKind.MXF4:
+            return "mxf4"
+        case Tcgen05MMABlockScaleKind.MXF4NVF4:
+            return "mxf4nvf4"
+    assert False
+
+
+def _scale_vector_suffix(
+    scale_vector_size: Tcgen05MMAScaleVectorSize,
+) -> str:
+    match scale_vector_size:
+        case Tcgen05MMAScaleVectorSize.DEFAULT:
+            return ""
+        case Tcgen05MMAScaleVectorSize.BLOCK_16:
+            return ".block16"
+        case Tcgen05MMAScaleVectorSize.BLOCK_32:
+            return ".block32"
+    assert False
 
 
 @impl(tcgen05_stub.tcgen05_mma)
 def tcgen05_mma_impl(
     kind: Var[Any],
-    cta_group: Var[Any],
     matrix_d: Var[Any],
     matrix_a: Var[Any],
     matrix_b: Var[Any],
     instruction_descriptor: Var[Any],
-    enable_input_d: Var[Any],
+    accumulate: Var[Any],
+    cta_group: Var[Any],
+    sparse_metadata: Var[Any],
     scale_input_d: Var[Any],
     disable_output_lane: Var[Any],
     collector_op: Var[Any],
     a_shift: Var[Any],
-):
+) -> None:
     kind_value = require_constant_enum(kind, Tcgen05MMAKind)
-    cta_group_value = (
-        require_optional_constant_enum(cta_group, CTAGroup) or CTAGroup.CTA_1
-    )
+    cta_group_value = require_constant_enum(cta_group, CTAGroup)
     collector_op_value = require_constant_enum(collector_op, Tcgen05MMACollectorOp)
-    require_pointer_in_memory_space(matrix_d, (MemorySpace.TENSOR,))
-    matrix_a = _require_tcgen05_mma_matrix_a(matrix_a)
-    require_integral_scalar_type(matrix_b, bitwidth=64)
-    require_integral_scalar_type(instruction_descriptor)
-    instruction_descriptor = implicit_cast(
-        instruction_descriptor, datatype.int32, "instruction descriptor as int32"
-    )
-    enable_input_d = implicit_cast(
-        enable_input_d, datatype.bool_, "enable_input_d as bool_"
-    )
+    a_shift_value = require_constant_bool(a_shift)
 
-    builder = (
-        RawMLIROperationBuilder(name="nvvm.tcgen05.mma")
-        .add_attribute("mmaKind", cl_enum_to_mlir_attribute(kind_value))
-        .add_attribute("ctaGroup", cl_enum_to_mlir_attribute(cta_group_value))
-        .add_attribute("collectorOp", cl_enum_to_mlir_attribute(collector_op_value))
-        .add_operand(matrix_d)
-        .add_operand(matrix_a)
-        .add_operand(matrix_b)
-        .add_operand(instruction_descriptor)
-        .add_operand(enable_input_d)
+    mma_operands = _tcgen05_mma_operands(
+        matrix_d,
+        matrix_a,
+        matrix_b,
+        instruction_descriptor,
+        accumulate,
     )
+    operands = list(mma_operands.operands)
+    matrix_a_is_tensor = mma_operands.matrix_a_is_tensor
 
-    if not is_none(scale_input_d):
-        value = require_constant_int(scale_input_d)
-        if value < 0 or value > 15:
-            raise make_type_checking_error(
-                "Expected scale_input_d to be an immediate in [0, 15]"
+    sparse_metadata = require_optional_pointer_in_memory_space(
+        sparse_metadata, (MemorySpace.TENSOR,)
+    )
+    if sparse_metadata is not None:
+        operands.append(sparse_metadata)
+
+    has_scale_input_d = not is_none(scale_input_d)
+    if has_scale_input_d:
+        if kind_value not in (Tcgen05MMAKind.F16, Tcgen05MMAKind.TF32):
+            raise TileValueError(
+                "scale_input_d is only supported for F16 and TF32 MMA kinds"
             )
-        scale_input_d = astype(scale_input_d, datatype.int32)
-    builder = builder.add_optional_operand(scale_input_d)
+        scale_value = require_constant_int(scale_input_d)
+        if scale_value < 0 or scale_value > 15:
+            raise TileValueError("scale_input_d must be an immediate in [0, 15]")
+        operands.append(astype(scale_input_d, datatype.int64))
 
-    if not is_none(disable_output_lane):
+    has_disable_output_lane = not is_none(disable_output_lane)
+    if has_disable_output_lane:
         expected_len = 4 if cta_group_value is CTAGroup.CTA_1 else 8
         require_vector_type(disable_output_lane, expected_len)
-        disable_output_lane = astype(disable_output_lane, datatype.int32)
-    builder = builder.add_optional_operand(disable_output_lane)
+        operands.append(astype(disable_output_lane, datatype.int32))
 
-    if not is_none(a_shift):
-        value = require_constant_bool(a_shift)
-        if value:
-            if not isinstance(matrix_a.get_type(), PointerTy):
-                raise make_type_checking_error(
-                    "a_shift can only be applied if A is in tensor memory", a_shift
-                )
-            builder = builder.add_unit_attribute("aShift")
+    if a_shift_value:
+        if not matrix_a_is_tensor:
+            raise make_type_checking_error(
+                "a_shift can only be applied if A is in tensor memory", a_shift
+            )
+        if collector_op_value in (
+            Tcgen05MMACollectorOp.FILL,
+            Tcgen05MMACollectorOp.USE,
+        ):
+            raise TileValueError(
+                "a_shift cannot be combined with collector operation FILL or USE"
+            )
 
-    builder.emit()
+    intrinsic_parts = ["llvm", "nvvm", "tcgen05", "mma"]
+    if sparse_metadata is not None:
+        intrinsic_parts.append("sp")
+    intrinsic_parts.append("tensor" if matrix_a_is_tensor else "shared")
+    if has_scale_input_d:
+        intrinsic_parts.append("scale_d")
+    if has_disable_output_lane:
+        intrinsic_parts.extend(("disable_output_lane", cta_group_value.value))
+    if a_shift_value:
+        intrinsic_parts.append("ashift")
+
+    operands.append(_i32_const(_mma_kind_flag(kind_value)))
+    if not has_disable_output_lane:
+        operands.append(_i32_const(1 if cta_group_value is CTAGroup.CTA_1 else 2))
+    operands.append(_i32_const(_collector_op_flag(collector_op_value)))
+
+    add_operation_variadic(
+        RawNVVMIntrinsic,
+        (),
+        intrinsic=".".join(intrinsic_parts),
+        operands_=tuple(operands),
+    )
+
+
+@impl(tcgen05_stub.tcgen05_mma_block_scale)
+def tcgen05_mma_block_scale_impl(
+    kind: Var[Any],
+    matrix_d: Var[Any],
+    matrix_a: Var[Any],
+    matrix_b: Var[Any],
+    instruction_descriptor: Var[Any],
+    scale_a: Var[Any],
+    scale_b: Var[Any],
+    accumulate: Var[Any],
+    sparse_metadata: Var[Any],
+    cta_group: Var[Any],
+    scale_vector_size: Var[Any],
+    collector_op: Var[Any],
+) -> None:
+    kind_value = require_constant_enum(kind, Tcgen05MMABlockScaleKind)
+    cta_group_value = require_constant_enum(cta_group, CTAGroup)
+    scale_vector_size_value = require_constant_enum(
+        scale_vector_size, Tcgen05MMAScaleVectorSize
+    )
+    collector_op_value = require_constant_enum(collector_op, Tcgen05MMACollectorOp)
+
+    if (
+        kind_value,
+        scale_vector_size_value,
+    ) not in TCGEN05_VALID_BLOCK_SCALE_COMBINATIONS:
+        raise TileValueError(
+            "Invalid tcgen05 block-scale kind and scale-vector-size combination: "
+            f"{kind_value.name}, {scale_vector_size_value.name}"
+        )
+
+    mma_operands = _tcgen05_mma_operands(
+        matrix_d,
+        matrix_a,
+        matrix_b,
+        instruction_descriptor,
+        accumulate,
+    )
+    operands = list(mma_operands.operands)
+    matrix_a_is_tensor = mma_operands.matrix_a_is_tensor
+
+    sparse_metadata = require_optional_pointer_in_memory_space(
+        sparse_metadata, (MemorySpace.TENSOR,)
+    )
+    if sparse_metadata is not None:
+        operands.append(sparse_metadata)
+
+    require_pointer_in_memory_space(scale_a, (MemorySpace.TENSOR,))
+    require_pointer_in_memory_space(scale_b, (MemorySpace.TENSOR,))
+    operands.extend((scale_a, scale_b))
+
+    intrinsic_parts = ["llvm", "nvvm", "tcgen05", "mma"]
+    if sparse_metadata is not None:
+        intrinsic_parts.append("sp")
+    intrinsic_parts.extend(
+        (
+            "tensor" if matrix_a_is_tensor else "shared",
+            _block_scale_name(kind_value),
+            "block_scale",
+        )
+    )
+    intrinsic = ".".join(intrinsic_parts)
+    intrinsic += _scale_vector_suffix(scale_vector_size_value)
+
+    operands.extend(
+        (
+            _i32_const(1 if cta_group_value is CTAGroup.CTA_1 else 2),
+            _i32_const(_collector_op_flag(collector_op_value)),
+        )
+    )
+    add_operation_variadic(
+        RawNVVMIntrinsic,
+        (),
+        intrinsic=intrinsic,
+        operands_=tuple(operands),
+    )
+
+
+@impl(tcgen05_stub.tcgen05_mma_weight_stationary)
+def tcgen05_mma_weight_stationary_impl(
+    kind: Var[Any],
+    matrix_d: Var[Any],
+    matrix_a: Var[Any],
+    matrix_b: Var[Any],
+    instruction_descriptor: Var[Any],
+    accumulate: Var[Any],
+    sparse_metadata: Var[Any],
+    zero_column_mask: Var[Any],
+    collector_op: Var[Any],
+    collector_b_buffer: Var[Any],
+) -> None:
+    kind_value = require_constant_enum(kind, Tcgen05MMAKind)
+    collector_op_value = require_constant_enum(collector_op, Tcgen05MMACollectorOp)
+    collector_b_buffer_value = require_constant_enum(
+        collector_b_buffer, Tcgen05MMACollectorBBuffer
+    )
+
+    mma_operands = _tcgen05_mma_operands(
+        matrix_d,
+        matrix_a,
+        matrix_b,
+        instruction_descriptor,
+        accumulate,
+    )
+    operands = list(mma_operands.operands)
+    matrix_a_is_tensor = mma_operands.matrix_a_is_tensor
+
+    sparse_metadata = require_optional_pointer_in_memory_space(
+        sparse_metadata, (MemorySpace.TENSOR,)
+    )
+    if sparse_metadata is not None:
+        operands.append(sparse_metadata)
+
+    has_zero_column_mask = not is_none(zero_column_mask)
+    if has_zero_column_mask:
+        require_integral_scalar_type(zero_column_mask)
+        operands.append(astype(zero_column_mask, datatype.int64))
+
+    intrinsic_parts = ["llvm", "nvvm", "tcgen05", "mma", "ws"]
+    if sparse_metadata is not None:
+        intrinsic_parts.append("sp")
+    intrinsic_parts.append("tensor" if matrix_a_is_tensor else "shared")
+    if has_zero_column_mask:
+        intrinsic_parts.append("zero_col_mask")
+
+    operands.extend(
+        (
+            _i32_const(_mma_kind_flag(kind_value)),
+            _i32_const(_collector_b_buffer_flag(collector_b_buffer_value)),
+            _i32_const(_collector_op_flag(collector_op_value)),
+        )
+    )
+    add_operation_variadic(
+        RawNVVMIntrinsic,
+        (),
+        intrinsic=".".join(intrinsic_parts),
+        operands_=tuple(operands),
+    )
