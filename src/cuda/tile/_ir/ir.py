@@ -117,7 +117,11 @@ class PhiState:
         elif not isinstance(self.ty, InvalidType):
             var_name = src.get_original_name()
             if src_ty != self.ty:
-                msg = (f"Type of `{var_name}` depends on path taken:"
+                if var_name == "$retval":
+                    what = "return value"
+                else:
+                    what = f"`{var_name}`"
+                msg = (f"Type of {what} depends on path taken:"
                        f" {src_ty} (line {src.loc.line}) vs. {self.ty} (line {self.last_loc.line})")
                 if fail_eagerly:
                     raise TileTypeError(msg, src.loc)

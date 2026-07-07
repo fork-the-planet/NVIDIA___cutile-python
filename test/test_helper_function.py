@@ -250,6 +250,21 @@ def test_early_return_inside_for_loop():
         ct.launch(torch.cuda.current_stream(), (1,), kernel, (n, out))
 
 
+def test_return_type_mismatch():
+    def helper():
+        if ct.bid(0) == 0:
+            return 3
+        else:
+            return 5.0
+
+    @ct.kernel
+    def kern():
+        helper()
+
+    with pytest.raises(TileTypeError, match="Type of return value depends on path taken"):
+        ct.launch(torch.cuda.current_stream(), (1,), kern, ())
+
+
 def return_after_while_loop(n):
     while n > 0:
         n = n - 1

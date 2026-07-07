@@ -252,8 +252,10 @@ async def loop_impl(body: hir.Block, iterable: Var):
     for body_var, state, local_idx, is_valid in zip(body_vars, var_states, stored_locals, mask,
                                                     strict=True):
         if not is_valid:
-            store_invalid(local_idx, body_var.get_type_allow_invalid(),
-                          state.result_phi.last_loc)
+            invalid_type = state.result_phi.ty
+            if invalid_type is None or not isinstance(invalid_type, InvalidType):
+                invalid_type = body_var.get_type_allow_invalid()
+            store_invalid(local_idx, invalid_type, state.result_phi.last_loc)
 
     # Do this check at the end because this may be an automatically inserted loop
     # around the helper function's body.

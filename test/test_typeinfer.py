@@ -355,7 +355,21 @@ def kernel_while_loop(x):
     ct.store(x, (0,), a)
 
 
-@pytest.mark.parametrize("kernel", [kernel_if_else, kernel_for_loop, kernel_while_loop])
+def kernel_while_loop_result_type_mismatch(x):
+    i = 0
+    while True:
+        i += 1
+        if i >= 5:
+            a = 3.0
+            break
+        elif i >= ct.bid(0):
+            a = 5
+            break
+    ct.store(x, (0,), a)
+
+
+@pytest.mark.parametrize("kernel", [kernel_if_else, kernel_for_loop, kernel_while_loop,
+                                    kernel_while_loop_result_type_mismatch])
 def test_control_flow_type_mismatch(kernel):
     x = torch.zeros(1, dtype=torch.float32, device='cuda')
     msg = re.escape('Type of `a` depends on path taken')
