@@ -113,6 +113,40 @@ def test_dealloc(log_ptx, cta_group, expect):
     assert expect in ptx, ptx
 
 
+def test_tmem_offset():
+    @cl.kernel
+    def kernel():
+        tmem_dtype = cl.pointer_dtype(cl.int8, cl.MemorySpace.TENSOR)
+        smem = cl.shared_array(1, tmem_dtype, alignment=4)
+        tmem = cl.tcgen05_tmem_offset(
+            smem[0],
+            lane_offset=32,
+            column_offset=7,
+        )
+        cl.tcgen05_store(
+            cl.Tcgen05LoadStoreShape.SHAPE_32X32B,
+            tmem,
+            cl.int32(0),
+        )
+
+    compile_kernel(kernel, assert_in_ptx="tcgen05.st.sync.aligned.32x32b.x1.b32")
+
+
+def test_tmem_offset_requires_tensor_pointer():
+    @cl.kernel
+    def kernel():
+        smem = cl.shared_array(1, cl.int8)
+        cl.tcgen05_tmem_offset(smem.get_base_pointer(), lane_offset=32)
+
+    compile_kernel(
+        kernel,
+        raises=pytest.raises(
+            TileTypeError,
+            match="Expected pointer memory space to be MemorySpace.TENSOR",
+        ),
+    )
+
+
 STORE_VALID_COUNTS_BY_SHAPE = {
     cl.Tcgen05LoadStoreShape.SHAPE_16X64B: (1, 2, 4, 8, 16, 32, 64, 128),
     cl.Tcgen05LoadStoreShape.SHAPE_16X128B: (1, 2, 4, 8, 16, 32, 64),

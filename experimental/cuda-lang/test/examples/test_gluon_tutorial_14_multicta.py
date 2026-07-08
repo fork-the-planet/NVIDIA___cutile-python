@@ -361,9 +361,9 @@ def two_cta_tcgen05_kernel(a, b, c):
                 cl.tcgen05_mma(
                     cl.Tcgen05MMAKind.F16,
                     tmem_storage[0],
-                    cl.int64(a_desc + (32 >> 4) * kk),
-                    cl.int64(b_desc + (32 >> 4) * kk),
-                    cl.int32(instruction),
+                    a_desc + (32 >> 4) * kk,
+                    b_desc + (32 >> 4) * kk,
+                    instruction,
                     accumulate=kk != 0,
                     cta_group=cl.CTAGroup.CTA_2,
                 )
@@ -514,9 +514,9 @@ def tma_tcgen05_kernel(a, b, c):
                 cl.tcgen05_mma(
                     cl.Tcgen05MMAKind.F16,
                     tmem_storage[0],
-                    cl.int64(a_desc + (32 >> 4) * kk),
-                    cl.int64(b_desc + (32 >> 4) * kk),
-                    cl.int32(instruction),
+                    a_desc + (32 >> 4) * kk,
+                    b_desc + (32 >> 4) * kk,
+                    instruction,
                     accumulate=k_tile != 0 or kk != 0,
                     cta_group=cl.CTAGroup.CTA_2,
                 )
@@ -924,9 +924,9 @@ def matmul_multicta_kernel(
                         cl.tcgen05_mma(
                             cl.Tcgen05MMAKind.F16,
                             acc_tmem,
-                            cl.int64(a_desc + (32 >> 4) * kk),
-                            cl.int64(b_desc + (32 >> 4) * kk),
-                            cl.int32(instruction),
+                            a_desc + (32 >> 4) * kk,
+                            b_desc + (32 >> 4) * kk,
+                            instruction,
                             accumulate=k_tile != 0 or kk != 0,
                             cta_group=cl.CTAGroup.CTA_2,
                         )

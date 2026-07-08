@@ -103,6 +103,26 @@ def tcgen05_deallocate(
 
 
 @stub
+def tcgen05_tmem_offset(
+    pointer: P6,
+    *,
+    lane_offset: int = 0,
+    column_offset: int = 0,
+) -> P6:
+    """Offset a tensor memory pointer by lane and column coordinates.
+
+    Args:
+        pointer: Pointer in tensor memory.
+        lane_offset (int): Number of tensor memory lanes to add.
+        column_offset (int): Number of tensor memory columns to add.
+
+    Returns:
+        A tensor memory pointer with the same pointee type as ``pointer``.
+    """
+    ...
+
+
+@stub
 def tcgen05_commit(
     mbar: P3,
     *,
@@ -397,7 +417,7 @@ def tcgen05_mma(
         matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
             descriptor or a pointer in tensor memory.
         matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
-        instruction_descriptor (int32):
+        instruction_descriptor (int32 | uint32): Encoded instruction descriptor.
         accumulate (bool): Whether input matrix D is included in the result.
         cta_group (CTAGroup): Controlls whether the operation takes place in
             one block or a pair of blocks.
@@ -443,7 +463,7 @@ def tcgen05_mma_block_scale(
         matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
             descriptor or a pointer in tensor memory.
         matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
-        instruction_descriptor (int32):
+        instruction_descriptor (int32 | uint32): Encoded instruction descriptor.
         scale_a (P6): Pointer in tensor memory to matrix A scale factors.
         scale_b (P6): Pointer in tensor memory to matrix B scale factors.
         accumulate (bool): Whether input matrix D is included in the result.
@@ -483,7 +503,7 @@ def tcgen05_mma_weight_stationary(
         matrix_a (P6 | int64): Matrix A encoded as either a 64-bit shared-memory
             descriptor or a pointer in tensor memory.
         matrix_b (int64): Matrix B encoded as a 64-bit shared-memory descriptor.
-        instruction_descriptor (int32):
+        instruction_descriptor (int32 | uint32): Encoded instruction descriptor.
         accumulate (bool): Whether input matrix D is included in the result.
         sparse_metadata (P6 | None): Optional pointer in tensor memory containing
             sparsity metadata for packed sparse matrix A. ``None`` selects dense
@@ -513,6 +533,7 @@ __all__ = (
     "Tcgen05SharedMemoryDescriptor",
     "tcgen05_allocate",
     "tcgen05_deallocate",
+    "tcgen05_tmem_offset",
     "tcgen05_commit",
     "tcgen05_load",
     "tcgen05_copy",

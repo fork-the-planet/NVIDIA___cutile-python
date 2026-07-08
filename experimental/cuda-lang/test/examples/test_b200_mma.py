@@ -27,22 +27,16 @@ def wait_mbarrier(mbar, phase):
         pass
 
 
-def tcgen05_tmem_ptr_from_warp_row_col(tmem_base, warp, base_col):
-    dtype = tmem_base.pointee_dtype
-    pointer_dtype = cl.pointer_dtype(dtype, cl.MemorySpace.TENSOR)
-    base_address = cl.bitcast(tmem_base, cl.uint32)
-    base_row = cl.int32(base_address >> 16)
-    row = base_row + warp * 32
-    tmem_address = (row << 16) | (base_col & 0xFFFF)
-    return cl.bitcast(tmem_address, pointer_dtype)
-
-
 def p3_to_u64(pointer):
     return cl.uint64(cl.bitcast(pointer, cl.uint32))
 
 
 def epilogue_store_tile(c_ptr, tmem_base, warp, base_col, g_row, g_col, n):
-    tmem_ptr = tcgen05_tmem_ptr_from_warp_row_col(tmem_base, warp, base_col)
+    tmem_ptr = cl.tcgen05_tmem_offset(
+        tmem_base,
+        lane_offset=warp * WARP_SIZE,
+        column_offset=base_col,
+    )
     regs = cl.tcgen05_load(cl.Tcgen05LoadStoreShape.SHAPE_32X32B, tmem_ptr, count=16)
     cl.tcgen05_wait_load()
 
@@ -259,9 +253,9 @@ def make_mma_kernel(
                         cl.tcgen05_mma(
                             cl.Tcgen05MMAKind.F16,
                             tmem_ptr + tensor_memory_address,
-                            cl.int64(a_desc),
-                            cl.int64(b_desc),
-                            cl.int32(i_desc),
+                            a_desc,
+                            b_desc,
+                            i_desc,
                             accumulate=iter_k != 0,
                             cta_group=cta_group_kind,
                         )
@@ -269,9 +263,9 @@ def make_mma_kernel(
                             cl.tcgen05_mma(
                                 cl.Tcgen05MMAKind.F16,
                                 tmem_ptr + tensor_memory_address,
-                                cl.int64(a_desc + (32 >> 4) * kk),
-                                cl.int64(b_desc + (32 >> 4) * kk),
-                                cl.int32(i_desc),
+                                a_desc + (32 >> 4) * kk,
+                                b_desc + (32 >> 4) * kk,
+                                i_desc,
                                 accumulate=True,
                                 cta_group=cta_group_kind,
                             )

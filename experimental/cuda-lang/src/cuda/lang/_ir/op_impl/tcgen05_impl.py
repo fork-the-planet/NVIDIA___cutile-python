@@ -5,6 +5,12 @@
 from typing import Any, NamedTuple, cast
 
 from cuda.tile._ir.cast_ops import implicit_cast
+from cuda.tile._ir.arithmetic_ops import (
+    binary_arithmetic_tensorlike,
+    binary_bitwise_tensorlike,
+    bitwise_shift_tensorlike,
+)
+from cuda.tile._ir.core_ops import strictly_typed_const
 import cuda.lang._datatype as datatype
 from cuda.lang._enums import (
     Tcgen05MMABlockScaleKind,
@@ -21,7 +27,7 @@ from cuda.lang._enums import (
 from cuda.lang._exception import TypeCheckingError, InvalidValueError
 from cuda.lang._ir.type import PointerTy
 from cuda.lang._stub import tcgen05 as tcgen05_stub
-from cuda.lang._ir.ir import Var
+from cuda.lang._ir.ir import Var, add_operation
 from cuda.lang._ir.ops import (
     MemorySpace,
     ScalarTy,
@@ -29,9 +35,8 @@ from cuda.lang._ir.ops import (
     add_operation_variadic,
     astype,
     require_scalar_type,
-    strictly_typed_const,
 )
-from cuda.lang._ir.op_defs import RawNVVMIntrinsic
+from cuda.lang._ir.op_defs import BitCast, RawNVVMIntrinsic
 from .raw_mlir_operation_utils import RawMLIROperationBuilder
 from cuda.lang._ir.enum_to_mlir import cl_enum_to_mlir_attribute
 from cuda.lang._ir.type_checking_helpers import (
@@ -116,6 +121,31 @@ def tcgen05_deallocate_impl(
         intrinsic=intrinsic,
         operands_=(address, number_of_columns),
     )
+
+
+@impl(tcgen05_stub.tcgen05_tmem_offset)
+def tcgen05_tmem_offset_impl(
+    pointer: Var,
+    lane_offset: Var,
+    column_offset: Var,
+) -> Var:
+    pointer_type = require_pointer_in_memory_space(pointer, (MemorySpace.TENSOR,))
+    lane_offset = implicit_cast(lane_offset, datatype.int32, "lane offset")
+    column_offset = implicit_cast(column_offset, datatype.int32, "column offset")
+
+    int32_type = ScalarTy(datatype.int32)
+    field_mask = strictly_typed_const(0xFFFF, int32_type)
+    field_shift = strictly_typed_const(16, int32_type)
+    address = add_operation(BitCast, int32_type, x=pointer)
+
+    lane = bitwise_shift_tensorlike("rshift", address, field_shift)
+    column = binary_bitwise_tensorlike("and_", address, field_mask)
+    lane = binary_arithmetic_tensorlike("add", lane, lane_offset)
+    column = binary_arithmetic_tensorlike("add", column, column_offset)
+
+    lane = bitwise_shift_tensorlike("lshift", lane, field_shift)
+    address = binary_bitwise_tensorlike("or_", lane, column)
+    return add_operation(BitCast, pointer_type, x=address)
 
 
 @impl(tcgen05_stub.tcgen05_commit)
@@ -389,12 +419,8 @@ def _tcgen05_mma_operands(
     require_integral_scalar_type(matrix_b, bitwidth=64)
     matrix_b = astype(matrix_b, datatype.int64)
 
-    require_integral_scalar_type(instruction_descriptor)
-    instruction_descriptor = implicit_cast(
-        instruction_descriptor,
-        datatype.int32,
-        "instruction descriptor as int32",
-    )
+    require_integral_scalar_type(instruction_descriptor, bitwidth=32)
+    instruction_descriptor = astype(instruction_descriptor, datatype.int32)
     accumulate = implicit_cast(accumulate, datatype.bool_, "accumulate as bool_")
 
     return _Tcgen05MMAOperands(
