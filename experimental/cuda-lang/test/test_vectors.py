@@ -410,3 +410,14 @@ def test_vector_setitem():
         TypeCheckingError, match="Vectors are immutable: item assignment is not supported"
     ):
         cl.compile_simt(kernel, [KernelSignature([])])
+
+
+def test_vector_from_tuple():
+    @cl.kernel
+    def kernel(tensor):
+        v4 = cl.Vector(*tuple(i for i in static_iter(range(4))))
+        tensor.get_base_pointer().store(v4, alignment=16)
+
+    tensor = torch.zeros(4, dtype=torch.int32, device='cuda')
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (tensor,))
+    assert tensor.cpu().tolist() == [0, 1, 2, 3]

@@ -184,13 +184,6 @@ def binary_arithmetic_impl_with_rd_and_ftz(fn: str, x: Var, y: Var,
     return binary_arithmetic_tensorlike(fn, x, y, rounding_mode, flush_to_zero)
 
 
-@impl(operator.add, overload=(TupleTy, TupleTy))
-def add_tuple_impl(x: Var[TupleTy], y: Var[TupleTy]):
-    x_items = x.get_aggregate().items
-    y_items = y.get_aggregate().items
-    return build_tuple(x_items + y_items)
-
-
 @impl(ct.mod)
 def tile_mod_function_impl(x: Var, y: Var):
     return mod_tensorlike(ensure_tile(x), ensure_tile(y))

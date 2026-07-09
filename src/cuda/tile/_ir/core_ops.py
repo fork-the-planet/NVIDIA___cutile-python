@@ -417,9 +417,16 @@ async def is_contained_in_tuple_impl(x: Var, y: Var[TupleTy]) -> Var:
     return loosely_typed_const(False) if result is None else result
 
 
+@impl(operator.add, overload=(TupleTy, TupleTy))
+def add_tuple_impl(x: Var[TupleTy], y: Var[TupleTy]):
+    x_items = x.get_aggregate().items
+    y_items = y.get_aggregate().items
+    return build_tuple(x_items + y_items)
+
 # ===========================================================================================
 # Dictionary
 # ===========================================================================================
+
 
 def build_dict(keys: tuple[str, ...], values: tuple[Var, ...]) -> Var:
     keys = tuple(keys)
