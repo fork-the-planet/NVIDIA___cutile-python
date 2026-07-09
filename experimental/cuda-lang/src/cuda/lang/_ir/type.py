@@ -27,7 +27,11 @@ from cuda.tile._ir.type import (
     MemorySpace,
     ArrayValue,
     TupleValue,
-    PointerInfoTy, TensorLikeTy, Symbol
+    PointerInfoTy,
+    TensorLikeTy,
+    Symbol,
+    SymbolicArray,
+    SymbolicClosure,
 )
 import cuda.tile._datatype as datatype
 from cuda.tile._datatype import DType, PointerInfo
@@ -303,5 +307,10 @@ __all__ = (
     "ArrayValue",
     "TupleValue",
     "PointerInfoTy",
-    "LangTypingHooks"
+    "LangTypingHooks",
+    "SymbolicArray",
+    "SymbolicClosure",
+    "SymbolicVector",
+    "SymbolicScalar",
+    "SymbolicPointer",
 )
