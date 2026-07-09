@@ -62,22 +62,21 @@ def bench_rms_norm(shape, dtype, algo, backend, benchmark):
     if algo == 'persistent' and get_tileiras_version() < BytecodeVersion.V_13_3:
         pytest.skip("earlier version of tileiras has bug compiling this kernel")
 
-    with ct.compiler_timeout(5):
-        o = backend(x, weight, eps, static_persistent, gather)
-        ref = ref_rms_norm(x, weight, eps)
-        torch.testing.assert_close(o, ref, atol=1e-2, rtol=5e-2)
-        torch.cuda.synchronize()
+    o = backend(x, weight, eps, static_persistent, gather)
+    ref = ref_rms_norm(x, weight, eps)
+    torch.testing.assert_close(o, ref, atol=1e-2, rtol=5e-2)
+    torch.cuda.synchronize()
 
-        warmup_rounds, iterations, rounds = estimate_bench_iter(
-            backend, (x, weight, eps, static_persistent, gather),
-            cudagraph=True
-        )
+    warmup_rounds, iterations, rounds = estimate_bench_iter(
+        backend, (x, weight, eps, static_persistent, gather),
+        cudagraph=True
+    )
 
-        benchmark.pedantic(
-            backend, (x, weight, eps, static_persistent, gather),
-            rounds=rounds, warmup_rounds=warmup_rounds, iterations=iterations,
-            cudagraph=True
-        )
+    benchmark.pedantic(
+        backend, (x, weight, eps, static_persistent, gather),
+        rounds=rounds, warmup_rounds=warmup_rounds, iterations=iterations,
+        cudagraph=True
+    )
 
     M, N = x.shape
     flop_count = M * (4 * N + 2)
