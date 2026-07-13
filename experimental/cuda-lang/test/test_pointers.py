@@ -51,24 +51,70 @@ def test_atomic_ptr_ldst(ordering, operation):
     cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
 
 
-def test_atomic_store_missing_alignment():
+@pytest.mark.parametrize("cl_dtype,expected_align", [(cl.int32, 4), (cl.int64, 8)])
+def test_atomic_store_default_natural_alignment(cl_dtype, expected_align):
     @cl.kernel
-    def kernel():
-        ptr = cl.shared_array(1, cl.int32).get_base_pointer()
-        ptr.store(0, memory_order=cl.MemoryOrder.RELAXED)
+    def kernel(out):
+        out.get_base_pointer().store(cl_dtype(0), memory_order=cl.MemoryOrder.RELAXED)
 
-    with pytest.raises(TypeCheckingError, match="Expected explicit alignment on atomic"):
-        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
+    compile_kernel(
+        kernel,
+        signature=KernelSignature((make_symbolic_tensor(1, cl_dtype),)),
+        assert_in_mlir=f"alignment = {expected_align} : i64",
+    )
 
 
-def test_atomic_load_missing_alignment():
+@pytest.mark.parametrize("cl_dtype,expected_align", [(cl.int32, 4), (cl.int64, 8)])
+def test_atomic_load_default_natural_alignment(cl_dtype, expected_align):
     @cl.kernel
-    def kernel():
-        ptr = cl.shared_array(1, cl.int32).get_base_pointer()
-        ptr.load(memory_order=cl.MemoryOrder.RELAXED)
+    def kernel(out):
+        out[0] = out.get_base_pointer().load(memory_order=cl.MemoryOrder.RELAXED)
 
-    with pytest.raises(TypeCheckingError, match="Expected explicit alignment on atomic"):
-        cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, ())
+    compile_kernel(
+        kernel,
+        signature=KernelSignature((make_symbolic_tensor(1, cl_dtype),)),
+        assert_in_mlir=f"alignment = {expected_align} : i64",
+    )
+
+
+@pytest.mark.parametrize("count", [3, 4])
+def test_atomic_load_vector_rejected(count):
+    @cl.kernel
+    def kernel(out):
+        out.get_base_pointer().load(count=count, memory_order=cl.MemoryOrder.RELAXED)
+
+    compile_kernel(
+        kernel,
+        signature=KernelSignature((make_symbolic_tensor(count, cl.int32),)),
+        raises=pytest.raises(TypeCheckingError, match="must be scalar"),
+    )
+
+
+def test_atomic_store_vector_rejected():
+    @cl.kernel
+    def kernel(out):
+        base = out.get_base_pointer()
+        v = base.load(count=4, alignment=16)  # non-atomic vector load -> vector value
+        base.store(v, memory_order=cl.MemoryOrder.RELAXED)
+
+    compile_kernel(
+        kernel,
+        signature=KernelSignature((make_symbolic_tensor(4, cl.int32),)),
+        raises=pytest.raises(TypeCheckingError, match="must be scalar"),
+    )
+
+
+def test_atomic_ldst_default_alignment_roundtrip():
+    @cl.kernel
+    def kernel(out):
+        p0 = out.get_element_pointer(0)
+        p0.store(cl.int32(42), memory_order=cl.MemoryOrder.RELEASE)
+        v = p0.load(memory_order=cl.MemoryOrder.ACQUIRE)
+        out.get_element_pointer(1).store(v + cl.int32(1))
+
+    out = torch.zeros(2, dtype=torch.int32, device="cuda")
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kernel, (out,))
+    assert out.cpu().tolist() == [42, 43]
 
 
 @pytest.mark.parametrize(

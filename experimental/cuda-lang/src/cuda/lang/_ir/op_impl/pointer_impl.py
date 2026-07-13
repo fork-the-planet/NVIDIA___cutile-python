@@ -262,6 +262,16 @@ def array_setitem(object: Var, key: Var, value: Var):
     )
 
 
+def _require_atomic_scalar_dtype(dtype: datatype.DType, operation: str) -> None:
+    """Atomic accesses operate on a single value of power-of-two byte size."""
+    total_bytes, remainder = divmod(dtype.bitwidth, 8)
+    if remainder or (total_bytes & (total_bytes - 1)):
+        raise TypeCheckingError(
+            f"Type {dtype} cannot be accessed atomically; atomic {operation}s "
+            f"require a pointee whose size is a power-of-two number of bytes"
+        )
+
+
 def pointer_load(
     pointer: Var,
     count: Var,
@@ -274,11 +284,18 @@ def pointer_load(
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(LoadPointer, ordering)
-    if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
-        raise TypeCheckingError("Expected explicit alignment on atomic load")
+    is_atomic = ordering not in (None, MemoryOrder.WEAK)
     if count is None or count == 1:
+        if is_atomic:
+            _require_atomic_scalar_dtype(pointee_dtype, "load")
+            if alignment is None:
+                alignment = pointee_dtype.bitwidth // 8
         result_ty = ScalarTy(pointee_dtype)
     else:
+        if is_atomic:
+            raise TypeCheckingError(
+                "Atomic loads must be scalar; a vector load (count > 1) cannot be atomic"
+            )
         result_ty = VectorTy(pointee_dtype, count)
     return add_operation(
         LoadPointer,
@@ -301,12 +318,20 @@ def pointer_store(
     volatile = require_constant_bool(volatile)
     alignment = require_optional_alignment(alignment)
     ordering = require_pointer_memory_order(StorePointer, ordering)
-    if ordering not in (None, MemoryOrder.WEAK) and alignment is None:
-        raise TypeCheckingError("Expected explicit alignment on atomic store")
 
     pointee_dtype = pointer_ty.pointee_dtype
     value = implicit_cast(value, pointee_dtype,
                           "Stored value type is incompatible with pointer type")
+
+    is_atomic = ordering not in (None, MemoryOrder.WEAK)
+    if is_atomic:
+        if isinstance(value.get_type(), VectorTy):
+            raise TypeCheckingError(
+                "Atomic stores must be scalar; a vector value cannot be stored atomically"
+            )
+        _require_atomic_scalar_dtype(pointee_dtype, "store")
+        if alignment is None:
+            alignment = pointee_dtype.bitwidth // 8
 
     add_operation_variadic(
         StorePointer,

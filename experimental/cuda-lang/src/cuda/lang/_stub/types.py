@@ -66,7 +66,8 @@ class Pointer(Generic[T]):
                 this load is performed nor the order of execution with respect
                 to other volatile operations.
             memory_order: When memory_order is specified, the load is atomic.
-                Alignment must be explicitly specified on atomic loads.
+                If alignment is None, the natural alignment of the loaded type
+                (its size in bytes) is used.
                 Atomic loads require a pointee type with a bit width that
                 is a power of two greater than or equal to one byte.
         """
@@ -96,8 +97,9 @@ class Pointer(Generic[T]):
                 this store is performed nor the order of execution with respect
                 to other volatile operations.
             memory_order: When memory_order is specified, the store is atomic.
-                Alignment must be explicitly specified on atomic stores.
-                Atomic loads require a pointee type with a bit width that
+                If alignment is None, the natural alignment of the stored type
+                (its size in bytes) is used.
+                Atomic stores require a pointee type with a bit width that
                 is a power of two greater than or equal to one byte.
                 Only relaxed, release, and weak are valid memory orders on
                 stores.
