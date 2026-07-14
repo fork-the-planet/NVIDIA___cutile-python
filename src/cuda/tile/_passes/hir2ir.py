@@ -13,9 +13,10 @@ from typing import Sequence, Mapping, Callable
 from .ast2hir import get_function_hir
 from .. import TileTypeError
 from .._coroutine_util import resume_after, run_coroutine
+from .._dispatch_mode import MetafunctionMode
 from .._exception import Loc, FunctionDesc, TileInternalError, TileError, TileRecursionError, \
     TileValueError, UnsupportedCallError
-from .._execution import is_stub
+from .._execution import is_stub, is_metafunction
 from .._ir import hir, ir
 from .._ir.ir import Var, IRContext
 from .._ir.op_impl import ImplRegistry
@@ -27,7 +28,7 @@ from .._ir.arithmetic_ops import dtype_constructor
 from .._ir.scope import Scope, LocalScope, IntMap
 from .._ir.type import FunctionTy, BoundMethodTy, DTypeConstructor, ClosureTy, \
     ClosureDefaultPlaceholder, StringFormat, TypeTy, TupleTy, BoundMethodValue, TupleValue, \
-    ClosureValue, DictTy, DictValue
+    ClosureValue, DictTy, DictValue, var2sym
 from .._ir.typing_support import get_signature, get_dataclass_info
 
 
@@ -235,6 +236,12 @@ async def _call_function(callee: Callable,
         if impl is None:
             raise UnsupportedCallError(f"{callee.__name__}() is not supported in device code")
         return await _call_builtin(callee, impl, args, kwargs, builder)
+    elif is_metafunction(callee):
+        with MetafunctionMode().as_current():
+            args_sym = tuple(var2sym(x) for x in args)
+            kwargs_sym = {k: var2sym(v) for k, v in kwargs.items()}
+            res_sym = callee(*args_sym, **kwargs_sym)
+            return sym2var(res_sym)
     else:
         callee_hir = get_function_hir(callee, entry_point=False)
         sig = get_signature(callee)

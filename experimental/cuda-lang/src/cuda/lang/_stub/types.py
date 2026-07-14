@@ -7,12 +7,96 @@ from typing import Generic, TypeVar, Literal
 from cuda.tile import MemoryOrder, DType
 from cuda.tile._execution import stub
 from cuda.tile._memory_model import MemorySpace
+from .._stub import math as cl_math
+
 
 T = TypeVar("T")
 
 
 class Scalar(Generic[T]):
-    pass
+    def __add__(self, other):
+        return cl_math.add(self, other)
+
+    def __sub__(self, other):
+        return cl_math.sub(self, other)
+
+    def __mul__(self, other):
+        return cl_math.mul(self, other)
+
+    def __truediv__(self, other):
+        return cl_math.truediv(self, other)
+
+    def __floordiv__(self, other):
+        return cl_math.floordiv(self, other)
+
+    def __mod__(self, other):
+        return cl_math.mod(self, other)
+
+    def __pow__(self, other):
+        return cl_math.pow(self, other)
+
+    def __and__(self, other):
+        return cl_math.bitwise_and(self, other)
+
+    def __or__(self, other):
+        return cl_math.bitwise_or(self, other)
+
+    def __xor__(self, other):
+        return cl_math.bitwise_xor(self, other)
+
+    def __radd__(self, other):
+        return cl_math.add(other, self)
+
+    def __rsub__(self, other):
+        return cl_math.sub(other, self)
+
+    def __rmul__(self, other):
+        return cl_math.mul(other, self)
+
+    def __rtruediv__(self, other):
+        return cl_math.truediv(other, self)
+
+    def __rfloordiv__(self, other):
+        return cl_math.floordiv(other, self)
+
+    def __rmod__(self, other):
+        return cl_math.mod(other, self)
+
+    def __rpow__(self, other):
+        return pow(other, self)
+
+    def __rand__(self, other):
+        return cl_math.bitwise_and(other, self)
+
+    def __ror__(self, other):
+        return cl_math.bitwise_or(other, self)
+
+    def __rxor__(self, other):
+        return cl_math.bitwise_xor(other, self)
+
+    def __ge__(self, other):
+        return cl_math.greater_equal(self, other)
+
+    def __gt__(self, other):
+        return cl_math.greater(self, other)
+
+    def __le__(self, other):
+        return cl_math.less_equal(self, other)
+
+    def __lt__(self, other):
+        return cl_math.less(self, other)
+
+    def __eq__(self, other):
+        return cl_math.equal(self, other)
+
+    def __ne__(self, other):
+        return cl_math.not_equal(self, other)
+
+    def __neg__(self):
+        return cl_math.negative(self)
+
+    def __invert__(self):
+        return cl_math.bitwise_not(self)
 
 
 class Vector(Generic[T]):

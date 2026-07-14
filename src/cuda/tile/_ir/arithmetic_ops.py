@@ -714,10 +714,18 @@ UNARY_BOOL_INT = UnaryBehavior(_unary_preserve, _unary_preserve, None)
 UNARY_ANYTHING = UnaryBehavior(_unary_preserve, _unary_preserve, _unary_preserve)
 
 
-@impl(operator.invert, fixed_args=["invert", UNARY_BOOL_INT], overload=(TensorLikeTy,))
-@impl(operator.neg, fixed_args=["neg", UNARY_INT_FLOAT], overload=(TensorLikeTy,))
-def _invert_neg_tensorlike_impl(fn: str, behavior: UnaryBehavior, x: Var) -> Var:
-    return unary(fn, behavior, x)
+def invert_tensorlike(x: Var[TensorLikeTy]):
+    return unary("invert", UNARY_BOOL_INT, x)
+
+
+@impl(operator.invert, overload=(TensorLikeTy,))
+def _invert_tensorlike_impl(x: Var) -> Var:
+    return invert_tensorlike(x)
+
+
+@impl(operator.neg, overload=(TensorLikeTy,))
+def _neg_tensorlike_impl(x: Var) -> Var:
+    return unary("neg", UNARY_INT_FLOAT, x)
 
 
 @impl(operator.not_, overload=(TensorLikeTy,))

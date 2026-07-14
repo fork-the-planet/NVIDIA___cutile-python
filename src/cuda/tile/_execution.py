@@ -190,5 +190,24 @@ def is_stub(func) -> bool:
             return False
 
 
+def metafunction(func, /):
+    """Mark a function as a metafunction.
+
+    Normally, when device code calls a user-defined function, the callee function is compiled
+    using the regular language semantics. Decorating the callee function with ``@metafunction``
+    changes this: instead, the function is evaluated using the host Python interpreter
+    and standard Python semantics. This works similarly to ``static_eval()``, with one important
+    distinction: unlike a ``static_eval()``-enclosed expression, the metafunction is allowed
+    to generate run-time code.
+    """
+
+    func._cutile_python_metafunction = True
+    return func
+
+
+def is_metafunction(func):
+    return getattr(func, "_cutile_python_metafunction", False)
+
+
 def is_function_wrapper(func) -> bool:
     return getattr(func, "_cutile_function_wrapper", False)

@@ -37,7 +37,7 @@ from cuda.tile._ir.arithmetic_ops import (
     mod_tensorlike,
     promote_and_broadcast_to,
     unary,
-    where,
+    where, invert_tensorlike,
 )
 from cuda.tile._ir.core_ops import strictly_typed_const
 from cuda.tile._ir.op_impl import (
@@ -62,7 +62,36 @@ def math_impl_registry() -> ImplRegistry:
 @impl(cl_math.truediv, fixed_args=["truediv"])
 @impl(cl_math.floordiv, fixed_args=["floordiv"])
 def math_binary_arithmetic_impl(fn: str, x: Var, y: Var):
+    require_scalar_or_vector_type(x)
+    require_scalar_or_vector_type(y)
     return binary_arithmetic_tensorlike(fn, x, y)
+
+
+@impl(cl_math.bitwise_and, fixed_args=["and_"])
+@impl(cl_math.bitwise_or, fixed_args=["or_"])
+@impl(cl_math.bitwise_xor, fixed_args=["xor"])
+def math_binary_bitwise_impl(fn: str, x: Var, y: Var):
+    require_scalar_or_vector_type(x)
+    require_scalar_or_vector_type(y)
+    return binary_bitwise_tensorlike(fn, x, y)
+
+
+@impl(cl_math.bitwise_not)
+def math_bitwise_not_impl(x: Var):
+    require_scalar_or_vector_type(x)
+    return invert_tensorlike(x)
+
+
+@impl(cl_math.greater, fixed_args=["gt"])
+@impl(cl_math.greater_equal, fixed_args=["ge"])
+@impl(cl_math.less, fixed_args=["lt"])
+@impl(cl_math.less_equal, fixed_args=["le"])
+@impl(cl_math.equal, fixed_args=["eq"])
+@impl(cl_math.not_equal, fixed_args=["ne"])
+def math_comparison_impl(fn: str, x: Var, y: Var):
+    require_scalar_or_vector_type(x)
+    require_scalar_or_vector_type(y)
+    return compare_tensorlike(fn, x, y)
 
 
 def get_libdevice_fmod_function(dtype):

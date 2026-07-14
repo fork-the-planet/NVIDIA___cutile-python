@@ -10,7 +10,7 @@ from cuda.lang._execution import function
 @function()
 def require_constant_bool(var):
     cl.static_assert(
-        var in (True, False),
+        isinstance(var, bool),
         f"Expected constant of type bool but got {var}",
     )
 

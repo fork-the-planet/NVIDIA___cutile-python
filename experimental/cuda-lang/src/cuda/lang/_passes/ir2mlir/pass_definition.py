@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cuda.lang._compiler_options import CompilerOptions
 import sys
 from functools import partial
 from typing import Callable
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from functools import singledispatchmethod
 from typing import Sequence
 
+from cuda.lang._compiler_options import CompilerOptions
 from cuda.lang._ir import ir, ops
 from cuda.lang import _mlir as mlir
 from cuda.tile._memory_model import MemoryOrder, MemoryScope
@@ -18,7 +18,7 @@ import cuda.lang._mlir.extras.types as T
 import cuda.lang._ir.type as ir_type
 from cuda.lang.compilation import KernelSignature
 import cuda.lang._datatype as datatype
-from cuda.tile._datatype import PointerInfo
+from cuda.tile._datatype import PointerInfo, is_integral
 from cuda.lang._exception import InternalError, TypeCheckingError
 from .type_conversion import (
     ir_type_to_mlir_type,
@@ -222,23 +222,33 @@ def _get_mlir_unary_op_for_op_and_type(
         case "pos":
             return lambda operand: operand
         case "invert" if datatype.is_boolean(dtype):
-
-            def invert(operand):
-                mlir_bool = dtype_to_mlir_type(datatype.bool_)
-                false = mlir_constant_of_type(mlir_bool, 0)
-                cmp = mlir.arith.add_CmpIOp(
-                    predicate=mlir.arith.CmpIPredicate.eq, lhs=operand, rhs=false
-                )
-                cmp = mlir.arith.add_ExtUIOp(out_type=mlir_bool, in_=cmp)
-                return cmp
-
-            return invert
-        case "neg" if datatype.is_float(dtype):
+            return _invert_boolean
+        case "invert" if datatype.is_integral(dtype):
+            return partial(_invert_int, dtype)
+        case 'neg' if datatype.is_float(dtype):
             return mlir.arith.add_NegFOp
         case "neg" if datatype.is_integral(dtype):
             mlir_type = ir_type_to_mlir_type(typ)
             zero = mlir_constant_of_type(mlir_type, 0)
             return lambda operand: mlir.arith.add_SubIOp(lhs=zero, rhs=operand)
+
+
+def _invert_boolean(operand):
+    mlir_bool = dtype_to_mlir_type(datatype.bool_)
+    false = mlir_constant_of_type(mlir_bool, 0)
+    cmp = mlir.arith.add_CmpIOp(
+        predicate=mlir.arith.CmpIPredicate.eq, lhs=operand, rhs=false
+    )
+    cmp = mlir.arith.add_ExtUIOp(out_type=mlir_bool, in_=cmp)
+    return cmp
+
+
+def _invert_int(dtype, operand):
+    assert is_integral(dtype)
+    mlir_dtype = dtype_to_mlir_type(dtype)
+    all_ones = (1 << dtype.bitwidth) - 1
+    all_ones_mlir = mlir_constant_of_type(mlir_dtype, all_ones)
+    return mlir.arith.add_XOrIOp(lhs=operand, rhs=all_ones_mlir)
 
 
 def _get_mlir_comparison_op(

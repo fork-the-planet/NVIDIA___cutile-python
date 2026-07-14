@@ -10,6 +10,7 @@ from cuda.tile._memory_model import (
 
 from ._execution import (
     function,
+    metafunction,
     kernel,
     launch,
 )
@@ -53,6 +54,16 @@ from ._stub.math import (
     pow,
     maximum,
     minimum,
+    bitwise_and,
+    bitwise_or,
+    bitwise_xor,
+    bitwise_not,
+    greater,
+    greater_equal,
+    less,
+    less_equal,
+    equal,
+    not_equal
 )
 from ._stub.fence import (
     FenceProxyKind,
@@ -236,6 +247,7 @@ __all__ = (
     "is_pointer_dtype",
     "PointerInfo",
     "function",
+    "metafunction",
     "kernel",
     "launch",
     "full_mask",
@@ -414,4 +426,14 @@ __all__ = (
     "static_assert",
     "static_eval",
     "static_iter",
+    "bitwise_and",
+    "bitwise_or",
+    "bitwise_xor",
+    "bitwise_not",
+    "greater",
+    "greater_equal",
+    "less",
+    "less_equal",
+    "equal",
+    "not_equal",
 )

@@ -67,6 +67,15 @@ OPERATOR_ALIAS_BINARY_OPS = (
     (device_math.mod, operator.mod, cl.float32),
     (device_math.floordiv, operator.floordiv, cl.float64),
     (device_math.mod, operator.mod, cl.float64),
+    (device_math.bitwise_and, operator.and_, cl.int32),
+    (device_math.bitwise_or, operator.or_, cl.int32),
+    (device_math.bitwise_xor, operator.xor, cl.int32),
+    (device_math.greater, operator.gt, cl.int32),
+    (device_math.greater_equal, operator.ge, cl.int32),
+    (device_math.less, operator.lt, cl.int32),
+    (device_math.less_equal, operator.le, cl.int32),
+    (device_math.equal, operator.eq, cl.int32),
+    (device_math.not_equal, operator.ne, cl.int32),
 )
 
 FPCLASS_OPS = (
@@ -408,8 +417,8 @@ def test_math_binary_float_promotion():
 @pytest.mark.parametrize("device_op,python_op,dtype", OPERATOR_ALIAS_BINARY_OPS)
 @pytest.mark.parametrize("vector", (False, True))
 def test_operator_alias_binary_math(device_op, python_op, dtype, vector):
-    lhs_values = (-7, 9, 5, -1)
-    rhs_values = (3, 2, -2, -4)
+    lhs_values = (-7, 9, 5, -1, 5, 5, 6)
+    rhs_values = (3, 2, -2, -4, 5, 6, 5)
     count = 4 if vector else 1
 
     @cl.kernel
@@ -798,3 +807,16 @@ def test_minmax_nan(dtype, device_op, propagate_nan):
         assert host_math.isnan(got), f"expected NaN, got {got}"
     else:
         assert got == 3.0, f"expected 3.0, got {got}"
+
+
+def test_bitwise_not():
+    @cl.kernel
+    def kernel(inp, out):
+        tid = cl.thread_index(0)
+        out[tid] = cl.bitwise_not(inp[tid])
+
+    input = torch.tensor([0, 1, 0xffff, 13, -1], dtype=torch.int32, device="cuda")
+    expected = torch.bitwise_not(input)
+    output = torch.zeros_like(input)
+    cl.launch(torch.cuda.current_stream(), (1,), (len(input),), kernel, (input, output))
+    assert expected.tolist() == output.tolist()

@@ -11,7 +11,7 @@ from cuda.lang._ir import ir
 from ._compiler_options import CompilerOptions
 from cuda.tile import _cext
 from cuda.tile._cext import launch_extended
-from cuda.tile._execution import function, stub
+from cuda.tile._execution import function, stub, metafunction
 
 if TYPE_CHECKING:
     from cuda.lang.compilation import KernelSignature
@@ -22,6 +22,7 @@ __all__ = (
     "kernel",
     "launch",
     "stub",
+    "metafunction"
 )
 
 

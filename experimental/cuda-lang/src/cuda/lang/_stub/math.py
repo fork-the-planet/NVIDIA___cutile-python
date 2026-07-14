@@ -202,6 +202,56 @@ def minimum(x, y, /, *, propagate_nan=False):
     ...
 
 
+@stub
+def bitwise_and(x, y, /):
+    """Compute ``x & y``."""
+
+
+@stub
+def bitwise_or(x, y, /):
+    """Compute ``x | y``."""
+
+
+@stub
+def bitwise_xor(x, y, /):
+    """Compute ``x ^ y``."""
+
+
+@stub
+def bitwise_not(x, /):
+    """Compute ``~x``."""
+
+
+@stub
+def greater(x, y, /):
+    """Compute ``x > y``."""
+
+
+@stub
+def greater_equal(x, y, /):
+    """Compute ``x >= y``."""
+
+
+@stub
+def less(x, y, /):
+    """Compute ``x < y``."""
+
+
+@stub
+def less_equal(x, y, /):
+    """Compute ``x <= y``."""
+
+
+@stub
+def equal(x, y, /):
+    """Compute ``x == y``."""
+
+
+@stub
+def not_equal(x, y, /):
+    """Compute ``x != y``."""
+
+
 __all__ = (
     "add",
     "sub",
@@ -237,4 +287,14 @@ __all__ = (
     "pow",
     "maximum",
     "minimum",
+    "bitwise_and",
+    "bitwise_or",
+    "bitwise_xor",
+    "bitwise_not",
+    "greater",
+    "greater_equal",
+    "less",
+    "less_equal",
+    "equal",
+    "not_equal",
 )
