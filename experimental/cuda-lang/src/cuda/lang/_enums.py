@@ -129,6 +129,13 @@ class BarrierReductionKind(Enum):
     OR = auto()
 
 
+class CachePolicy(Enum):
+    L2_EVICT_LAST = "L2::evict_last"
+    L2_EVICT_NORMAL = "L2::evict_normal"
+    L2_EVICT_FIRST = "L2::evict_first"
+    L2_EVICT_UNCHANGED = "L2::evict_unchanged"
+
+
 __all__ = (
     "MemorySpace",
     "MemoryScope",
@@ -150,4 +157,5 @@ __all__ = (
     "Tcgen05WaitKind",
     "FenceProxyKind",
     "BarrierReductionKind",
+    "CachePolicy",
 )

@@ -23,6 +23,11 @@ from cuda.tile._datatype import (
     is_pointer_dtype,
     PointerInfo,
 )
+from ._stub.cache_policy import (
+    create_fractional_cache_policy,
+    create_range_cache_policy,
+    CachePolicy,
+)
 from ._stub.math import (
     add,
     sub,
@@ -436,4 +441,7 @@ __all__ = (
     "less_equal",
     "equal",
     "not_equal",
+    "create_fractional_cache_policy",
+    "create_range_cache_policy",
+    "CachePolicy",
 )

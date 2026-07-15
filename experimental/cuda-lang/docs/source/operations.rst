@@ -325,6 +325,8 @@ Utility
    :nosignatures:
 
     nanosleep
+    create_range_cache_policy
+    create_fractional_cache_policy
 
 
 .. _operations-classes:

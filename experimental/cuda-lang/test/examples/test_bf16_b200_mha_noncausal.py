@@ -69,15 +69,6 @@ def fast_log2(value):
     return cl._nvvm.lg2_approx_ftz_f(value)
 
 
-def evict_first_cache_policy():
-    (result,) = cl._inline_ptx(
-        "createpolicy.fractional.L2::evict_first.b64 %0, %1;",
-        ("=l", cl.int64),
-        ("f", cl.float32(1.0)),
-    )
-    return result
-
-
 def max_vector32(values, current):
     for i in cl.static_iter(range(32)):
         current = cl.maximum(current, cl.bitcast(values[i], cl.float32))
@@ -137,10 +128,38 @@ def probability_vector(values, scale, offset):
         cl.bitcast(cl._nvvm.ff2bf16x2_rn(p31, p30), cl.int32),
     )
     total = (
-        p0 + p1 + p2 + p3 + p4 + p5 + p6 + p7
-        + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15
-        + p16 + p17 + p18 + p19 + p20 + p21 + p22 + p23
-        + p24 + p25 + p26 + p27 + p28 + p29 + p30 + p31
+        p0
+        + p1
+        + p2
+        + p3
+        + p4
+        + p5
+        + p6
+        + p7
+        + p8
+        + p9
+        + p10
+        + p11
+        + p12
+        + p13
+        + p14
+        + p15
+        + p16
+        + p17
+        + p18
+        + p19
+        + p20
+        + p21
+        + p22
+        + p23
+        + p24
+        + p25
+        + p26
+        + p27
+        + p28
+        + p29
+        + p30
+        + p31
     )
     return packed, total
 
@@ -836,11 +855,14 @@ def mha_kernel(
                         space=cl.MemorySpace.SHARED,
                     )
                     m_tile = m_base + rank * 2 + qid
+                    cache_hint = cl.create_fractional_cache_policy(
+                        cl.CachePolicy.L2_EVICT_FIRST
+                    )
                     cl.copy_async_bulk_tensor_shared_to_global(
                         o_smem.get_base_pointer(),
                         o_tmap,
                         (0, m_tile * BLOCK_M, 0, head_idx, batch_idx),
-                        l2_cache_hint=evict_first_cache_policy(),
+                        l2_cache_hint=cache_hint,
                     )
                     cl.copy_async_bulk_commit_group()
                     cl.mbarrier_arrive(

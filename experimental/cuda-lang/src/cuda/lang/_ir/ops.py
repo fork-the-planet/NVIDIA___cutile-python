@@ -105,6 +105,7 @@ from .op_impl.core_api_impl import core_api_impl_registry
 from .type_checking_helpers import (
     require_optional_alignment,
     require_scalar_type,
+    require_integral_scalar_type,
     require_pointer_type,
     require_pointer_in_memory_space,
     require_mbarrier_ptr,
@@ -140,7 +141,7 @@ from .ir import (
 )
 from .._stub.cluster_launch_control import clusterlaunchcontrol_try_cancel, \
     clusterlaunchcontrol_is_canceled, clusterlaunchcontrol_get_first_block_index
-from .._enums import SwizzleMode, TMALoadMode
+from .._enums import SwizzleMode, TMALoadMode, CachePolicy
 from .._stub.mbarrier import MbarrierScope
 from .._stub import (
     foreign_function,
@@ -148,6 +149,7 @@ from .._stub import (
     mbarrier as mbarrier_stub,
     tcgen05 as tcgen05_stub,
     tensor_map,
+    cache_policy,
 )
 from cuda.tile._ir import hir_stubs
 
@@ -1449,6 +1451,87 @@ def impl_setmaxregister_increase(number_of_registers: Var[ScalarTy]):
         write_only_operands=(),
         read_write_operands=(),
     )
+
+
+@impl(cache_policy.create_range_cache_policy)
+def impl_create_range_cache_policy(
+    base_address,
+    primary_size,
+    total_size,
+    primary_policy,
+    secondary_policy,
+):
+    require_integral_scalar_type(primary_size)
+    primary_size = astype(primary_size, datatype.int32)
+    require_integral_scalar_type(total_size)
+    total_size = astype(total_size, datatype.int32)
+    require_pointer_type(base_address)
+    primary_policy = require_constant_enum(primary_policy, CachePolicy)
+    secondary_policy = require_constant_enum(secondary_policy, CachePolicy)
+    valid = (CachePolicy.L2_EVICT_FIRST, CachePolicy.L2_EVICT_UNCHANGED)
+    if secondary_policy not in valid:
+        raise InvalidValueError(
+            "Secondary cache policy may only be " + " or ".join(str(i) for i in valid)
+        )
+    code = (
+        "createpolicy.range."
+        + primary_policy.value
+        + "."
+        + secondary_policy.value
+        + ".b64"
+        + "  {$w0}"
+        + ", [{$r0}]"
+        + ", {$r1}"
+        + ", {$r2};"
+    )
+    results = add_operation_variadic(
+        InlinePTX,
+        (ScalarTy(datatype.int64),),
+        ptx_code=code,
+        read_only_operands=(
+            base_address,
+            primary_size,
+            total_size,
+        ),
+        write_only_operands=(datatype.int64,),
+        read_write_operands=(),
+    )
+    return results[0]
+
+
+@impl(cache_policy.create_fractional_cache_policy)
+def impl_create_fractional_cache_policy(
+    primary_policy,
+    fraction,
+    secondary_policy,
+):
+    primary_policy = require_constant_enum(primary_policy, CachePolicy)
+    require_scalar_type(fraction, datatype.is_unrestricted_float)
+    fraction = astype(fraction, datatype.float32)
+    secondary_policy = require_constant_enum(secondary_policy, CachePolicy)
+    valid = (CachePolicy.L2_EVICT_FIRST, CachePolicy.L2_EVICT_UNCHANGED)
+    if secondary_policy not in valid:
+        raise InvalidValueError(
+            "Secondary cache policy may only be " + " or ".join(str(i) for i in valid)
+        )
+    code = (
+        "createpolicy.fractional."
+        + primary_policy.value
+        + "."
+        + secondary_policy.value
+        + ".b64"
+        + "  {$w0}"
+        + ", {$r0};"
+    )
+    results = add_operation_variadic(
+        InlinePTX,
+        (ScalarTy(datatype.int64),),
+        ptx_code=code,
+        read_only_operands=(fraction,),
+        write_only_operands=(datatype.int64,),
+        read_write_operands=(),
+    )
+    return results[0]
 
 
 __all__ = (
