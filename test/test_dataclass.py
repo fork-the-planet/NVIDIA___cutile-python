@@ -13,6 +13,7 @@ import cuda.tile as ct
 import torch
 
 from cuda.tile import TileTypeError
+from cuda.tile._exception import TypeCheckingError
 from cuda.tile._execution import static_def
 
 
@@ -428,3 +429,114 @@ def test_init_static_def():
     x = torch.zeros(2, dtype=torch.int32, device="cuda")
     ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))
     assert x.tolist() == [50, 70]
+
+
+def test_call_dunder():
+    @dataclass(frozen=True)
+    class WithCall:
+        x: int
+        y: int
+
+        def __call__(self, z):
+            return 100 * self.x + 10 * self.y + z
+
+    @ct.kernel
+    def kern(x):
+        d = WithCall(3, 5)
+        val = d(7)
+        ct.scatter(x, (), val)
+
+    x = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))
+    assert x.item() == 357
+
+
+def test_call_dunder_static_def():
+    @dataclass(frozen=True)
+    class WithCallStaticDef:
+        x: int
+        y: int
+
+        @static_def
+        def __call__(self, z):
+            items = [self.x, self.y, z]
+            res = 0
+            while items:
+                res = res * 10 + items.pop()
+            return res
+
+    @ct.kernel
+    def kern(x):
+        d = WithCallStaticDef(3, 5)
+        val = d(7)
+        ct.scatter(x, (), val)
+
+    x = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))
+    assert x.item() == 753
+
+
+def test_call_dunder_base_class():
+    @dataclass(frozen=True)
+    class WithCallBase:
+        x: int
+
+        def __call__(self, z):
+            return 100 * self.x + 10 * self.y + z
+
+    @dataclass(frozen=True)
+    class Derived(WithCallBase):
+        y: int
+
+    @ct.kernel
+    def kern(x):
+        d = Derived(3, 5)
+        val = d(7)
+        ct.scatter(x, (), val)
+
+    x = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))
+    assert x.item() == 357
+
+
+def test_call_dunder_base_class_shadowed():
+    @dataclass(frozen=True)
+    class WithCallBase:
+        x: int
+
+        def __call__(self, z):
+            ct.static_assert(False)
+            return -1
+
+    @dataclass(frozen=True)
+    class WithCallDerived(WithCallBase):
+        y: int
+
+        def __call__(self, z):
+            return 100 * self.x + 10 * self.y + z
+
+    @ct.kernel
+    def kern(x):
+        d = WithCallDerived(3, 5)
+        val = d(7)
+        ct.scatter(x, (), val)
+
+    x = torch.zeros((), dtype=torch.int32, device="cuda")
+    ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))
+    assert x.item() == 357
+
+
+def test_reject_call_no_dunder():
+    @dataclass(frozen=True)
+    class NoCall:
+        x: int
+        y: int
+
+    @ct.kernel
+    def kern(x):
+        d = NoCall(3, 5)
+        d(7)
+
+    x = torch.zeros((), dtype=torch.int32, device="cuda")
+    with pytest.raises(TypeCheckingError, match="Cannot call an object of type NoCall"):
+        ct.launch(torch.cuda.current_stream(), (1,), kern, (x,))

@@ -1,0 +1,1 @@
+- Add support for user-defined ``__call__()`` method on dataclasses.
