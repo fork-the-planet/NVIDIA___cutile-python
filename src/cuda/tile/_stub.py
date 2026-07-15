@@ -816,6 +816,7 @@ class TiledView:
 
     @stub
     def load(self, index: Shape, *,
+             check_bounds: Constant[bool] = True,
              latency: Optional[int] = None,
              allow_tma: Optional[bool] = None) -> Tile:
         """Loads a tile from the |tiled view| at the given tile `index`.
@@ -828,6 +829,11 @@ class TiledView:
 
         Args:
             index (tuple[int,...]): An index in the |tiled view|'s tile space.
+            check_bounds (const bool): Whether to bounds-check the tile against the view
+                boundaries. When ``False``, the tile is assumed to stay fully within bounds and the
+                out-of-bounds check is skipped, producing a faster load; violating this assumption
+                is undefined behavior. Defaults to ``True``. Setting it to ``False`` requires
+                tileiras 13.4+.
             latency (const int): A hint indicating how heavy DRAM traffic will be. It shall be an
                 integer between 1 (low) and 10 (high). By default, the compiler will infer the
                 latency.
@@ -858,6 +864,7 @@ class TiledView:
 
     @stub
     def store(self, index: Shape, tile: Tile, *,
+              check_bounds: Constant[bool] = True,
               latency: Optional[int] = None,
               allow_tma: Optional[bool] = None) -> None:
         """Stores a `tile` into the |tiled view| at the given tile `index`.
@@ -872,6 +879,11 @@ class TiledView:
         Args:
             index (tuple[int,...]): An index in the |tiled view|'s tile space.
             tile (Tile): The tile to store.
+            check_bounds (const bool): Whether to bounds-check the tile against the view
+                boundaries. When ``False``, the tile is assumed to stay fully within bounds and the
+                out-of-bounds check is skipped, producing a faster store; violating this assumption
+                is undefined behavior. Defaults to ``True``. Setting it to ``False`` requires
+                tileiras 13.4+.
             latency (const int): A hint indicating how heavy DRAM traffic will be. It shall be an
                 integer between 1 (low) and 10 (high). By default, the compiler will infer the
                 latency.
@@ -1255,6 +1267,7 @@ def load(array: Array, /,
          shape: Constant[Shape], *,
          order: Constant[Order] = "C",
          padding_mode: PaddingMode = PaddingMode.UNDETERMINED,
+         check_bounds: Constant[bool] = True,
          latency: Optional[int] = None,
          allow_tma: Optional[bool] = None,
          memory_order: MemoryOrder = MemoryOrder.WEAK,
@@ -1302,6 +1315,11 @@ def load(array: Array, /,
 
         padding_mode (PaddingMode): The value used to pad the tile when it extends beyond the array
             boundaries. By default, the padding value is undetermined.
+        check_bounds (const bool): Whether to bounds-check the tile against the array boundaries.
+            When ``False``, the tile is assumed to stay fully within bounds and the out-of-bounds
+            check is skipped, producing a faster load; violating this assumption is undefined
+            behavior. Since no out-of-bound elements can occur in this case, ``padding_mode`` is
+            ignored. Defaults to ``True``. Setting it to ``False`` requires tileiras 13.4+.
         latency (const int): A hint indicating how heavy DRAM traffic will be. It shall be an
             integer between 1 (low) and 10 (high). By default, the compiler will infer the latency.
         allow_tma (const bool): If False, the load will not use TMA. By default, TMA is allowed.
@@ -1408,6 +1426,7 @@ def store(array: Array, /,
           index: Shape,
           tile: TileOrScalar, *,
           order: Constant[Order] = "C",
+          check_bounds: Constant[bool] = True,
           latency: Optional[int] = None,
           allow_tma: Optional[bool] = None,
           memory_order: MemoryOrder = MemoryOrder.WEAK,
@@ -1437,6 +1456,10 @@ def store(array: Array, /,
         tile (Tile): The |tile| to store. The rank of the tile must match rank of the array,
             unless it is a scalar or 0d tile.
         order ("C" or "F", or tuple[const int,...]): Order of axis mapping. See :py:func:`load`.
+        check_bounds (const bool): Whether to bounds-check the tile against the array boundaries.
+            When ``False``, the tile is assumed to stay fully within bounds and the out-of-bounds
+            check is skipped, producing a faster store; violating this assumption is undefined
+            behavior. Defaults to ``True``. Setting it to ``False`` requires tileiras 13.4+.
         latency (int, optional): A hint indicating how heavy DRAM traffic will be. It shall be an
             integer between 1 (low) and 10 (high). By default, the compiler will infer the latency.
         allow_tma (bool, optional): If False, the store will not use TMA.

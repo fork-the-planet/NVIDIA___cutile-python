@@ -873,12 +873,25 @@ def _uniform_tuple(val: Any, *, rank: int):
     return (val,) * rank
 
 
+def _check_bounds_to_inbounds(check_bounds: Var, rank: int) -> tuple[bool, ...]:
+    check = require_constant_bool(check_bounds)
+    inbounds = _uniform_tuple(not check, rank=rank)
+    if not check:
+        cur_version = Builder.get_current().ir_ctx.tileiras_version
+        if cur_version < BytecodeVersion.V_13_4:
+            raise TileUnsupportedFeatureError(
+                f"'check_bounds=False' requires tileiras {BytecodeVersion.V_13_4.as_string()}"
+                f" or later. Current version is {cur_version.as_string()}.")
+    return inbounds
+
+
 @dataclass(eq=False)
 class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
     latency: Optional[int] = attribute()
     allow_tma: Optional[bool] = attribute()
     memory_order: MemoryOrder = attribute(default=MemoryOrder.WEAK)
     memory_scope: MemoryScope = attribute(default=MemoryScope.NONE)
+    inbounds: tuple[bool, ...] = attribute(default=())
     view: Var = operand()
     index: tuple[Var, ...] = operand()
     token: Optional[Var] = operand(default=None)
@@ -910,7 +923,7 @@ class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
             memory_ordering_semantics=memory_order_to_bytecode[self.memory_order],
             memory_scope=memory_scope_to_bytecode[self.memory_scope],
             optimization_hints=ctx.load_store_hints(self.latency, self.allow_tma),
-            inbounds=_uniform_tuple(False, rank=len(self.index)),
+            inbounds=self.inbounds or _uniform_tuple(False, rank=len(self.index)),
         )
         return res, res_token
 
@@ -918,6 +931,7 @@ class TileLoad(Operation, opcode="tile_load", memory_effect=MemoryEffect.LOAD):
 def _tile_load_impl_inner(array: Var, index_items: tuple[Var, ...], shape: Sequence[int],
                           order: Sequence[int], padding_mode: PaddingMode,
                           latency: Var, allow_tma: Var,
+                          inbounds: tuple[bool, ...] = (),
                           traversal_steps: Optional[tuple[int, ...]] = None,
                           memory_order: MemoryOrder = MemoryOrder.WEAK,
                           memory_scope: MemoryScope = MemoryScope.NONE) -> Var:
@@ -938,7 +952,7 @@ def _tile_load_impl_inner(array: Var, index_items: tuple[Var, ...], shape: Seque
     result, _token = add_operation_variadic(TileLoad, (res_ty, TokenTy()),
                                             view=view, index=index_items, latency=latency,
                                             allow_tma=allow_tma, memory_order=memory_order,
-                                            memory_scope=memory_scope)
+                                            memory_scope=memory_scope, inbounds=inbounds)
     return reshape(result, shape)
 
 
@@ -1009,7 +1023,7 @@ def raw_array_memory_store_offset_impl(self: Var, offset: Var, value: Var,
 
 @impl(ct.load)
 def tile_load_impl(array: Var, index: Var, shape: Var, order: Var,
-                   padding_mode: Var, latency: Var, allow_tma: Var,
+                   padding_mode: Var, check_bounds: Var, latency: Var, allow_tma: Var,
                    memory_order: Var, memory_scope: Var) -> Var:
     array_ty = require_array_type(array)
     index_ty = require_index_or_index_tuple_type(index)
@@ -1022,11 +1036,12 @@ def tile_load_impl(array: Var, index: Var, shape: Var, order: Var,
                                    allow_0d_shape=True)
     order = require_constant_axis_order(order, array_ty.ndim)
     padding_mode = require_constant_enum(padding_mode, PaddingMode)
+    inbounds = _check_bounds_to_inbounds(check_bounds, array_ty.ndim)
     mem_order = require_constant_enum(memory_order, MemoryOrder)
     mem_scope = require_constant_enum(memory_scope, MemoryScope)
     validate_memory_order_and_scope(mem_order, mem_scope, TileLoad)
     return _tile_load_impl_inner(array, index_items, shape, order, padding_mode, latency, allow_tma,
-                                 memory_order=mem_order, memory_scope=mem_scope)
+                                 inbounds=inbounds, memory_order=mem_order, memory_scope=mem_scope)
 
 
 @dataclass(eq=False)
@@ -1035,6 +1050,7 @@ class TileStore(Operation, opcode="tile_store", memory_effect=MemoryEffect.STORE
     allow_tma: Optional[bool] = attribute()
     memory_order: MemoryOrder = attribute(default=MemoryOrder.WEAK)
     memory_scope: MemoryScope = attribute(default=MemoryScope.NONE)
+    inbounds: tuple[bool, ...] = attribute(default=())
     view: Var = operand()
     index: tuple[Var, ...] = operand()
     tile: Var = operand()
@@ -1066,12 +1082,13 @@ class TileStore(Operation, opcode="tile_store", memory_effect=MemoryEffect.STORE
             memory_ordering_semantics=memory_order_to_bytecode[self.memory_order],
             memory_scope=memory_scope_to_bytecode[self.memory_scope],
             optimization_hints=ctx.load_store_hints(self.latency, self.allow_tma),
-            inbounds=_uniform_tuple(False, rank=len(self.index))
+            inbounds=self.inbounds or _uniform_tuple(False, rank=len(self.index))
         )
 
 
 def _tile_store_impl_inner(array: Var, index_items: tuple[Var, ...], tile: Var,
                            order: Sequence[int], latency: Var, allow_tma: Var,
+                           inbounds: tuple[bool, ...] = (),
                            traversal_steps: Optional[tuple[int, ...]] = None,
                            memory_order: MemoryOrder = MemoryOrder.WEAK,
                            memory_scope: MemoryScope = MemoryScope.NONE):
@@ -1092,12 +1109,12 @@ def _tile_store_impl_inner(array: Var, index_items: tuple[Var, ...], tile: Var,
                                    traversal_steps)
     add_operation(TileStore, TokenTy(), view=view, index=index_items, tile=tile,
                   latency=latency, allow_tma=allow_tma, memory_order=memory_order,
-                  memory_scope=memory_scope)
+                  memory_scope=memory_scope, inbounds=inbounds)
 
 
 @impl(ct.store)
 def tile_store_impl(array: Var, index: Var, tile: Var, order: Var,
-                    latency: Var, allow_tma: Var,
+                    check_bounds: Var, latency: Var, allow_tma: Var,
                     memory_order: Var, memory_scope: Var):
     array_ty = require_array_type(array)
     index_ty = require_index_or_index_tuple_type(index)
@@ -1108,11 +1125,12 @@ def tile_store_impl(array: Var, index: Var, tile: Var, order: Var,
 
     tile = implicit_cast(tile, array_ty.dtype, "Stored tile is incompatible with array's dtype")
     order = require_constant_axis_order(order, array_ty.ndim)
+    inbounds = _check_bounds_to_inbounds(check_bounds, array_ty.ndim)
     mem_order = require_constant_enum(memory_order, MemoryOrder)
     mem_scope = require_constant_enum(memory_scope, MemoryScope)
     validate_memory_order_and_scope(mem_order, mem_scope, TileStore)
     _tile_store_impl_inner(array, index_items, tile, order, latency, allow_tma,
-                           memory_order=mem_order, memory_scope=mem_scope)
+                           inbounds=inbounds, memory_order=mem_order, memory_scope=mem_scope)
 
 
 @dataclass(eq=False)
@@ -3158,7 +3176,8 @@ def tiled_view_num_tiles(self: Var, axis: Var) -> Var:
 
 
 @impl(ct.TiledView.load)
-def tiled_view_load_impl(self: Var, index: Var, latency: Var, allow_tma: Var) -> Var:
+def tiled_view_load_impl(self: Var, index: Var, check_bounds: Var, latency: Var,
+                         allow_tma: Var) -> Var:
     view_ty = require_tiled_view_type(self)
     index_ty = require_index_or_index_tuple_type(index)
     index_items = index.get_aggregate().items if isinstance(index_ty, TupleTy) else (index,)
@@ -3166,15 +3185,18 @@ def tiled_view_load_impl(self: Var, index: Var, latency: Var, allow_tma: Var) ->
         raise TileTypeError(f"Index size {len(index_items)}"
                             f" does not match the tiled view rank {view_ty.ndim}")
 
+    inbounds = _check_bounds_to_inbounds(check_bounds, view_ty.ndim)
     [array] = self.get_aggregate().as_tuple()
     order = get_default_order(view_ty.ndim)
     return _tile_load_impl_inner(array, index_items, view_ty.tile_shape, order,
                                  view_ty.padding_mode, latency, allow_tma,
+                                 inbounds=inbounds,
                                  traversal_steps=view_ty.traversal_steps)
 
 
 @impl(ct.TiledView.store)
-def tiled_view_store_impl(self: Var, index: Var, tile: Var, latency: Var, allow_tma: Var):
+def tiled_view_store_impl(self: Var, index: Var, tile: Var, check_bounds: Var, latency: Var,
+                          allow_tma: Var):
     view_ty = require_tiled_view_type(self)
     index_ty = require_index_or_index_tuple_type(index)
     index_items = index.get_aggregate().items if isinstance(index_ty, TupleTy) else (index,)
@@ -3187,12 +3209,14 @@ def tiled_view_store_impl(self: Var, index: Var, tile: Var, latency: Var, allow_
         raise TileTypeError(f"Tile shape {tile_ty.shape} is not broadcastable"
                             f" to the tiled view's tile shape {view_ty.tile_shape}")
 
+    inbounds = _check_bounds_to_inbounds(check_bounds, view_ty.ndim)
     tile = broadcast_to(tile, view_ty.tile_shape)
     tile = implicit_cast(tile, view_ty.dtype,
                          "Stored tile is incompatible with tiled view's dtype")
     [array] = self.get_aggregate().as_tuple()
     order = get_default_order(view_ty.ndim)
     _tile_store_impl_inner(array, index_items, tile, order, latency, allow_tma,
+                           inbounds=inbounds,
                            traversal_steps=view_ty.traversal_steps)
 
 

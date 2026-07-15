@@ -19,7 +19,8 @@ from cuda.tile._ir.typing_support import to_dtype
 from conftest import arithmetic_dtypes, dtype_id, requires_tileiras
 from util import (
     assert_equal, AtomicOp, int_32_64_dtypes, int_float_32_64_dtypes,
-    is_hopper_or_newer, raises_if, ref_atomic_arith, ref_atomic_bitwise
+    is_hopper_or_newer, raises_if, ref_atomic_arith, ref_atomic_bitwise,
+    get_bytecode, filecheck
 )
 
 ConstInt = ct.Constant[int]
@@ -457,6 +458,60 @@ def test_tiled_view_traversal_steps_property(array_shape, tile_shape, traversal_
     x = torch.zeros(array_shape, dtype=torch.float32, device='cuda')
     grid = (1,) * len(array_shape)
     ct.launch(torch.cuda.current_stream(), grid, kernel, (x,))
+
+
+@pytest.mark.use_mlir
+@requires_tileiras(BytecodeVersion.V_13_4)
+def test_tiled_view_check_bounds():
+    # check_bounds=False lowers to an all-true `inbounds` attribute on every dimension.
+    @ct.kernel
+    def tiled_view_no_check_bounds(x, y, TILE: ct.Constant[int]):
+        tv_x = x.tiled_view((TILE, TILE))
+        tv_y = y.tiled_view((TILE, TILE))
+        tx = tv_x.load((ct.bid(0), ct.bid(1)), check_bounds=False)
+        tv_y.store((ct.bid(0), ct.bid(1)), tx, check_bounds=False)
+
+    shape = (64, 64)
+    tile = 32
+    x = make_tensor(shape, dtype=torch.float32, device="cuda")
+    y = torch.zeros_like(x)
+    grid = (shape[0] // tile, shape[1] // tile, 1)
+    bytecode = get_bytecode(tiled_view_no_check_bounds, (x, y, tile))
+    wildcard = "{{.*}}"
+    filecheck(bytecode, "\n".join([
+        f"// CHECK: load_view_tko{wildcard}inbounds = [true, true]",
+        f"// CHECK: store_view_tko{wildcard}inbounds = [true, true]",
+    ]))
+    ct.launch(torch.cuda.current_stream(), grid, tiled_view_no_check_bounds, (x, y, tile))
+    assert_equal(y, x)
+
+
+@pytest.mark.use_mlir
+@requires_tileiras(BytecodeVersion.V_13_4)
+def test_tiled_view_check_bounds_with_traversal_steps():
+    # check_bounds=False lowers to an all-true `inbounds` attribute on every dimension.
+    @ct.kernel
+    def tiled_view_no_check_bounds(x, y, TILE: ct.Constant[int], STEP: ct.Constant[int]):
+        tv_x = x.tiled_view((TILE,), traversal_steps=(STEP,))
+        tv_y = y.tiled_view((TILE,), traversal_steps=(STEP,))
+        tx = tv_x.load((ct.bid(0),), check_bounds=False)
+        tv_y.store((ct.bid(0),), tx, check_bounds=False)
+
+    tile, step, size = 2, 4, 4
+    x = make_tensor((size,), dtype=torch.float32, device="cuda")
+    y = torch.zeros_like(x)
+    bytecode = get_bytecode(tiled_view_no_check_bounds, (x, y, tile, step))
+    wildcard = "{{.*}}"
+    filecheck(bytecode, "\n".join([
+        f"// CHECK: load_view_tko{wildcard}inbounds = [true] : strided_view",
+        f"// CHECK: store_view_tko{wildcard}inbounds = [true]{wildcard}strided_view",
+    ]))
+    ct.launch(torch.cuda.current_stream(), (size // step, 1, 1), tiled_view_no_check_bounds,
+              (x, y, tile, step))
+    expected = torch.zeros_like(x)
+    for start in range(0, size, step):
+        expected[start: start + tile] = x[start: start + tile]
+    assert_equal(y, expected)
 
 
 class AtomicConfig(NamedTuple):
