@@ -21,11 +21,6 @@ BLOCK_K = 64
 MMA_K = 16
 
 
-def wait_mbarrier(mbar, phase):
-    while not cl.mbarrier_try_wait_parity(mbar, phase, time_hint=10_000):
-        pass
-
-
 def epilogue_store_tile(c_ptr, tmem_base, warp, base_col, g_row, g_col, n):
     tmem_ptr = cl.tcgen05_tmem_offset(
         tmem_base,
@@ -148,7 +143,7 @@ def make_mma_kernel(
                             )
                             tma_expect_mbar = cl.map_shared_to_cluster(tma_mbar, 0)
 
-                        wait_mbarrier(mma_mbar, mma_phase)
+                        cl.mbarrier_wait_parity(mma_mbar, mma_phase)
 
                         if cta_group > 1:
                             cl.copy_async_bulk_tensor_global_to_shared(
@@ -215,7 +210,7 @@ def make_mma_kernel(
 
                 this_bid = bid
                 while this_bid < num_tiles:
-                    wait_mbarrier(
+                    cl.mbarrier_wait_parity(
                         epilogue_mbars.get_element_pointer(mainloop_stage),
                         epilogue_phase,
                     )
@@ -238,7 +233,7 @@ def make_mma_kernel(
                             swizzle_mode=(cl.SwizzleMode.SWIZZLE_128B),
                         ).encode()
 
-                        wait_mbarrier(
+                        cl.mbarrier_wait_parity(
                             tma_mbars.get_element_pointer(tma_stage), tma_phase
                         )
                         cl.tcgen05_fence_after_thread_sync()
@@ -307,7 +302,7 @@ def make_mma_kernel(
                 bid_n = (this_bid // 2) % grid_n
 
                 if warp_id == 0:
-                    wait_mbarrier(
+                    cl.mbarrier_wait_parity(
                         mainloop_mbars.get_element_pointer(mainloop_stage),
                         mainloop_phase,
                     )

@@ -67,8 +67,7 @@ def test_cp_async_bulk_tensor_mlir_interface():
         else:
             token = cl.mbarrier_arrive(mbar)
 
-        while not cl.mbarrier_try_wait(mbar, token, time_hint=10_000):
-            pass
+        cl.mbarrier_wait(mbar, token)
 
         dst[cl.thread_index(0)] = smem[cl.thread_index(0)]
 

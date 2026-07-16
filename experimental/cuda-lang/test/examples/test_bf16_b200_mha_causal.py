@@ -49,11 +49,6 @@ DYNAMIC_STORAGE_BYTES = (
 )
 
 
-def wait_mbarrier(mbar, phase):
-    while not cl.mbarrier_try_wait_parity(mbar, phase, time_hint=10_000):
-        pass
-
-
 def get_tile_coordinates(block_idx, batch, q_sequence, heads, swizzle):
     cluster_linear = block_idx // CLUSTER_SIZE
     blocks_m = (q_sequence // BLOCK_M) // 4
@@ -300,7 +295,7 @@ def mha_kernel(
 
             for qid in cl.static_iter(range(2)):
                 if cl.static_eval(persistent):
-                    wait_mbarrier(q_finished.get_element_pointer(qid), q_phase)
+                    cl.mbarrier_wait_parity(q_finished.get_element_pointer(qid), q_phase)
                 q_dst = cl.map_shared_to_cluster(
                     q_smem.get_element_pointer((qid, 0)), rank
                 )
@@ -315,7 +310,7 @@ def mha_kernel(
                 )
 
             for key_block in range(iterations):
-                wait_mbarrier(kv_finished.get_element_pointer(kv_index), kv_phase)
+                cl.mbarrier_wait_parity(kv_finished.get_element_pointer(kv_index), kv_phase)
                 k_dst = cl.map_shared_to_cluster(
                     kv_smem.get_element_pointer((kv_index, 0)), rank
                 )
@@ -339,7 +334,7 @@ def mha_kernel(
                     kv_index = 0
                     kv_phase ^= 1
 
-                wait_mbarrier(kv_finished.get_element_pointer(kv_index), kv_phase)
+                cl.mbarrier_wait_parity(kv_finished.get_element_pointer(kv_index), kv_phase)
                 v_dst = cl.map_shared_to_cluster(
                     kv_smem.get_element_pointer((kv_index, 0)), rank
                 )
@@ -394,7 +389,7 @@ def mha_kernel(
                     CLUSTER_SIZE * Q_TILE_ELEMENTS * 2,
                     scope=cl.MbarrierScope.BLOCK,
                 )
-                wait_mbarrier(q_arrived.get_element_pointer(qid), q_phase)
+                cl.mbarrier_wait_parity(q_arrived.get_element_pointer(qid), q_phase)
 
             k_stage = kv_index
             cl.mbarrier_arrive_expect_transaction(
@@ -402,7 +397,7 @@ def mha_kernel(
                 CLUSTER_SIZE * KV_TILE_ELEMENTS * 2,
                 scope=cl.MbarrierScope.BLOCK,
             )
-            wait_mbarrier(kv_arrived.get_element_pointer(k_stage), kv_phase)
+            cl.mbarrier_wait_parity(kv_arrived.get_element_pointer(k_stage), kv_phase)
             cl.tcgen05_fence_after_thread_sync()
             for qid in cl.static_iter(range(2)):
                 score_tmem = cl.tcgen05_tmem_offset(
@@ -446,10 +441,10 @@ def mha_kernel(
                     CLUSTER_SIZE * BLOCK_N * (HEAD_DIM_V // 2) * 2,
                     scope=cl.MbarrierScope.BLOCK,
                 )
-                wait_mbarrier(kv_arrived.get_element_pointer(v_stage), kv_phase)
+                cl.mbarrier_wait_parity(kv_arrived.get_element_pointer(v_stage), kv_phase)
 
                 for qid in cl.static_iter(range(2)):
-                    wait_mbarrier(
+                    cl.mbarrier_wait_parity(
                         norm_scores_arrived.get_element_pointer(qid), norm_phase
                     )
                     output_tmem = cl.tcgen05_tmem_offset(
@@ -457,7 +452,7 @@ def mha_kernel(
                     )
                     for quarter in cl.static_iter(range(4)):
                         if quarter > 0:
-                            wait_mbarrier(
+                            cl.mbarrier_wait_parity(
                                 norm_quarter_arrived.get_element_pointer(
                                     (quarter - 1, qid)
                                 ),
@@ -499,7 +494,7 @@ def mha_kernel(
                         CLUSTER_SIZE * KV_TILE_ELEMENTS * 2,
                         scope=cl.MbarrierScope.BLOCK,
                     )
-                    wait_mbarrier(kv_arrived.get_element_pointer(k_stage), kv_phase)
+                    cl.mbarrier_wait_parity(kv_arrived.get_element_pointer(k_stage), kv_phase)
                     cl.tcgen05_fence_after_thread_sync()
                     for qid in cl.static_iter(range(2)):
                         score_tmem = cl.tcgen05_tmem_offset(
@@ -570,11 +565,11 @@ def mha_kernel(
             m_tile = m_base + rank * 2 + qid
             row_sum = cl.float32(0.0)
             row_max = cl.float32(-float("inf"))
-            wait_mbarrier(rescale_finished.get_element_pointer(qid), rescale_phase)
+            cl.mbarrier_wait_parity(rescale_finished.get_element_pointer(qid), rescale_phase)
             rescale_phase ^= 1
 
             for key_block in range(iterations):
-                wait_mbarrier(scores_arrived.get_element_pointer(qid), score_phase)
+                cl.mbarrier_wait_parity(scores_arrived.get_element_pointer(qid), score_phase)
                 row_tmem = cl.tcgen05_tmem_offset(
                     tmem_storage[0],
                     lane_offset=warp_in_group * WARP_SIZE,
@@ -661,7 +656,7 @@ def mha_kernel(
                             )
                         )
 
-                wait_mbarrier(rescale_finished.get_element_pointer(qid), rescale_phase)
+                cl.mbarrier_wait_parity(rescale_finished.get_element_pointer(qid), rescale_phase)
                 rescale_phase ^= 1
                 row_sum = row_sum * correction + block_sum
                 score_phase ^= 1
@@ -691,14 +686,14 @@ def mha_kernel(
             )
             iterations = m_base + 4
             for qid in cl.static_iter(range(2)):
-                wait_mbarrier(corr_arrived.get_element_pointer(qid), correction_phase)
+                cl.mbarrier_wait_parity(corr_arrived.get_element_pointer(qid), correction_phase)
                 if warp == 8 and cl.elect_sync():
                     cl.mbarrier_arrive(rescale_finished.get_element_pointer(qid))
             correction_phase ^= 1
 
             for key_block in range(1, iterations):
                 for qid in cl.static_iter(range(2)):
-                    wait_mbarrier(
+                    cl.mbarrier_wait_parity(
                         corr_arrived.get_element_pointer(qid), correction_phase
                     )
                     correction = max_vec[qid, lane_in_group]
@@ -737,7 +732,7 @@ def mha_kernel(
                 correction_phase ^= 1
 
             for qid in cl.static_iter(range(2)):
-                wait_mbarrier(corr_arrived.get_element_pointer(qid), correction_phase)
+                cl.mbarrier_wait_parity(corr_arrived.get_element_pointer(qid), correction_phase)
                 row_sum = max_vec[qid, lane_in_group]
                 row_max = lse_vec[qid, lane_in_group]
                 if warp == 8 and cl.elect_sync():
@@ -746,7 +741,7 @@ def mha_kernel(
                 inv_norm = cl._nvvm.rcp_approx_ftz_f(
                     cl.float32(1.0) if invalid else row_sum
                 )
-                wait_mbarrier(tile_arrived.get_element_pointer(qid), end_phase)
+                cl.mbarrier_wait_parity(tile_arrived.get_element_pointer(qid), end_phase)
                 cl.copy_async_bulk_wait_group(0, read=True)
                 cl.barrier_sync_block(number_of_threads=WARPGROUP_SIZE, barrier_id=1)
                 for column in cl.static_iter(range(0, HEAD_DIM_V, 16)):

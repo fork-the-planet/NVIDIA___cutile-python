@@ -211,8 +211,7 @@ def tma_multicast_copy_kernel(
             multicast_mask=(1 << num_ctas) - 1,
         )
 
-    while not cl.mbarrier_try_wait_parity(mbar, 0, time_hint=10_000):
-        pass
+    cl.mbarrier_wait_parity(mbar, 0)
     cl.barrier_sync_block()
 
     if rank == 0 and tid == 0:
@@ -239,11 +238,6 @@ def test_tma_multicast_copy():
     )
     torch.cuda.synchronize()
     torch.testing.assert_close(out, inp, rtol=0, atol=0)
-
-
-def wait_mbarrier(mbar, phase):
-    while not cl.mbarrier_try_wait_parity(mbar, phase, time_hint=10_000):
-        pass
 
 
 def tensor_memory_pointer(base, lane_offset, column_offset):
@@ -331,7 +325,7 @@ def two_cta_tcgen05_kernel(a, b, c):
             cta_group=cl.CTAGroup.CTA_2,
         )
         if rank == 0 and cl.elect_sync():
-            wait_mbarrier(tma_bar, 0)
+            cl.mbarrier_wait_parity(tma_bar, 0)
             cl.tcgen05_fence_after_thread_sync()
             a_desc = cl.Tcgen05SharedMemoryDescriptor(
                 matrix_start_address=a_smem,
@@ -368,7 +362,7 @@ def two_cta_tcgen05_kernel(a, b, c):
                 cta_group=cl.CTAGroup.CTA_2,
             )
 
-    wait_mbarrier(mma_bar, 0)
+    cl.mbarrier_wait_parity(mma_bar, 0)
     cl.barrier_sync_block()
     cl.tcgen05_fence_after_thread_sync()
     for column in cl.static_iter(range(0, tile_n, 16)):
@@ -499,8 +493,8 @@ def tma_tcgen05_kernel(a, b, c):
                     multicast_mask=cl.int16(0b0101 << rank),
                 )
 
-        wait_mbarrier(a_bar, phase)
-        wait_mbarrier(b_bar, phase)
+        cl.mbarrier_wait_parity(a_bar, phase)
+        cl.mbarrier_wait_parity(b_bar, phase)
         cl.barrier_sync_block()
 
         if pair_rank == 0 and warp == 0 and cl.elect_sync():
@@ -521,7 +515,7 @@ def tma_tcgen05_kernel(a, b, c):
                 cta_group=cl.CTAGroup.CTA_2,
             )
 
-        wait_mbarrier(mma_bar, phase)
+        cl.mbarrier_wait_parity(mma_bar, phase)
         cl.barrier_sync_block()
 
     cl.tcgen05_fence_after_thread_sync()
@@ -578,13 +572,6 @@ def fence_clc_release():
     cl.fence_proxy_sync_restrict(cl.MemoryOrder.RELEASE)
 
 
-def wait_mbarrier_cluster(mbar, phase):
-    while not cl.mbarrier_try_wait_parity(
-        mbar, phase, scope=cl.MbarrierScope.CLUSTER, time_hint=10_000
-    ):
-        pass
-
-
 def swizzle_program_id(tile, tiles_m, tiles_n, width):
     full_tiles = tiles_m // width
     full_size = full_tiles * width
@@ -606,7 +593,7 @@ def swizzle_program_id(tile, tiles_m, tiles_n, width):
 
 
 def consume_scheduled_tile(ready, consumed, next_tile, next_has_work, phase):
-    wait_mbarrier(ready, phase)
+    cl.mbarrier_wait_parity(ready, phase)
     tile = next_tile[0]
     has_work = next_has_work[0] != 0
     if cl.elect_sync():
@@ -634,7 +621,7 @@ def store_matmul_partition(
     subtile_n = 32
     subtile_stages = 4
 
-    wait_mbarrier(acc_ready, phase)
+    cl.mbarrier_wait_parity(acc_ready, phase)
     cl.tcgen05_fence_after_thread_sync()
     valid_tile = pid_m < m // tile_m and pid_n < n // tile_n
     row = warp * WARP_SIZE + lane
@@ -761,7 +748,7 @@ def matmul_multicta_kernel(
             slot = iteration % acc_stages
             ring_phase = (iteration // acc_stages) & 1
             if iteration >= acc_stages:
-                wait_mbarrier(
+                cl.mbarrier_wait_parity(
                     scheduler_consumed.get_element_pointer(slot), ring_phase ^ 1
                 )
             if rank == 0 and cl.elect_sync():
@@ -774,7 +761,7 @@ def matmul_multicta_kernel(
                     scope=cl.MbarrierScope.CLUSTER,
                     memory_order=cl.MemoryOrder.RELAXED,
                 )
-            wait_mbarrier_cluster(clc_bar, clc_phase)
+            cl.mbarrier_wait_parity(clc_bar, clc_phase, scope=cl.MbarrierScope.CLUSTER)
             token = clc_token.load()
             scheduler_has_work = cl.clusterlaunchcontrol_is_canceled(token)
             if cl.elect_sync():
@@ -818,7 +805,7 @@ def matmul_multicta_kernel(
                 stage = load_index % stages
                 stage_phase = (load_index // stages) & 1
                 if load_index >= stages:
-                    wait_mbarrier(
+                    cl.mbarrier_wait_parity(
                         load_empty.get_element_pointer(stage), stage_phase ^ 1
                     )
                 if cl.elect_sync():
@@ -892,12 +879,12 @@ def matmul_multicta_kernel(
             acc_phase = (acc_index // acc_stages) & 1
             acc_tmem = tensor_memory_pointer(tmem_storage[0], 0, acc_slot * tile_n)
             if acc_index >= acc_stages and rank == 0 and cl.elect_sync():
-                wait_mbarrier(acc_empty.get_element_pointer(acc_slot), acc_phase ^ 1)
+                cl.mbarrier_wait_parity(acc_empty.get_element_pointer(acc_slot), acc_phase ^ 1)
             for k_tile in range(k // tile_k):
                 stage = load_index % stages
                 stage_phase = (load_index // stages) & 1
                 if rank == 0 and cl.elect_sync():
-                    wait_mbarrier(load_ready.get_element_pointer(stage), stage_phase)
+                    cl.mbarrier_wait_parity(load_ready.get_element_pointer(stage), stage_phase)
                     cl.tcgen05_fence_after_thread_sync()
                     a_desc = cl.Tcgen05SharedMemoryDescriptor(
                         matrix_start_address=a_smem.get_element_pointer((stage, 0)),
@@ -964,7 +951,7 @@ def matmul_multicta_kernel(
                     if last_use % acc_stages != stage:
                         last_use -= 1
                     last_phase = (last_use // acc_stages) & 1
-                    wait_mbarrier(acc_empty.get_element_pointer(stage), last_phase)
+                    cl.mbarrier_wait_parity(acc_empty.get_element_pointer(stage), last_phase)
         cl.tcgen05_deallocate(
             tmem_storage[0],
             tile_n * acc_stages,

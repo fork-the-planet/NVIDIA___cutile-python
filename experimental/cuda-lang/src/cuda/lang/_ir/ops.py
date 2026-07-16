@@ -121,6 +121,7 @@ from .type import (
     ScalarTy,
     PointerTy,
     VectorTy,
+    DTypeSpec,
 )
 
 from .ir import (
@@ -654,6 +655,12 @@ def shfl_sync_down_impl(value: Var, delta: Var, width: Var, mask: Var) -> Var:
 @impl(core_api.shfl_xor_sync)
 def shfl_sync_xor_impl(value: Var, lane_mask: Var, width: Var, mask: Var) -> Var:
     return shfl_sync_impl("bfly", mask, value, lane_mask, width)
+
+
+@impl(getattr, overload=(DTypeSpec, "bitwidth"))
+def getattr_dtype_bitwidth(object: Var, name: Var):
+    dtype = require_dtype_spec(object)
+    return loosely_typed_const(dtype.bitwidth)
 
 
 @impl(getattr, overload=(TensorMapTy, "as_opaque_ptr"))

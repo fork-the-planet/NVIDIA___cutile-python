@@ -95,8 +95,7 @@ def worksteal(data, n: cl.Constant[int], stolen):
         if i < n:
             data[i] *= alpha
 
-        while not cl.mbarrier_try_wait_parity(mbar, phase, time_hint=10000):
-            pass
+        cl.mbarrier_wait_parity(mbar, phase)
         phase ^= 1
 
         tok = clc_resp.load()
@@ -146,10 +145,7 @@ def worksteal_cluster(data, n: cl.Constant[int], stolen):
         if i < n:
             data[i] *= alpha
 
-        while not cl.mbarrier_try_wait_parity(
-            mbar, phase, scope=cl.MbarrierScope.CLUSTER
-        ):
-            pass
+        cl.mbarrier_wait_parity(mbar, phase, scope=cl.MbarrierScope.CLUSTER)
         phase ^= 1
 
         token = clc_resp.load()
