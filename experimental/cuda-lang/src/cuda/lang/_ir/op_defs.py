@@ -4,10 +4,12 @@
 
 from dataclasses import dataclass
 from typing import Optional
+from enum import Enum, auto
 
 import cuda.lang._mlir as mlir
 from cuda.tile._memory_model import MemoryOrder
 from cuda.tile._ir.ir import MemoryEffect
+import cuda.lang._datatype as datatype
 from .ir import Operation, Var, attribute, operand
 from .type import VectorTy, ScalarTy
 
@@ -27,6 +29,19 @@ class RawMLIROperation(
     op_name: str = attribute()
     operands_: tuple[Var, ...] = operand()
     mlir_attributes: tuple[tuple[str, mlir.Attribute], ...] = attribute(default=())
+
+
+@dataclass(eq=False)
+class InlinePTX(Operation, opcode="inline_ptx", memory_effect=MemoryEffect.STORE):
+    ptx_code: str = attribute()
+    read_only_operands: tuple[Var, ...] = operand()
+    write_only_operands: tuple[datatype.DType, ...] = attribute()
+    read_write_operands: tuple[Var, ...] = operand()
+
+    class RMWMode(Enum):
+        READ_ONLY = auto()
+        WRITE_ONLY = auto()
+        READ_WRITE = auto()
 
 
 @dataclass(eq=False)

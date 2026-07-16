@@ -2,10 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import math
-import re
 import operator
 from dataclasses import dataclass
-from enum import Enum, auto
 from cuda.tile._memory_model import MemoryOrder, MemoryScope
 from cuda.tile._ir.op_impl import (
     require_tuple_type,
@@ -26,7 +24,6 @@ from cuda.tile._ir.core_ops import (
 from cuda.tile._ir.arithmetic_ops import (
     binary_arithmetic_tensorlike,
     binary_arithmetic_tensorlike_raw,
-    binary_bitwise_tensorlike,
     RawBinaryArithmeticOperation,
     RawComparisonOperation,
     RawBinaryBitwiseOperation,
@@ -70,10 +67,9 @@ from cuda.tile._ir.control_flow_ops import (
     MakeDummy,
 )
 from cuda.tile._ir.ir import MemoryEffect, make_aggregate, add_operation_variadic
-from cuda.lang._exception import InternalError, TypeCheckingError, InvalidValueError
+from cuda.lang._exception import TypeCheckingError
 import cuda.lang._datatype as datatype
 from cuda.tile._datatype import (
-    is_pointer_dtype,
     pointer_dtype,
     PointerInfo,
     opaque_pointer_dtype,
@@ -92,6 +88,7 @@ from .atomics_support import (
 from .op_defs import (  # noqa: F401
     RawNVVMIntrinsic,
     RawMLIROperation,
+    InlinePTX,
     ForeignFunction,
     TensorMapAsOpaquePtr,
     VectorGetItem,
@@ -100,14 +97,11 @@ from .op_defs import (  # noqa: F401
     ReinterpretPointerAsArray,
     BitCast,
 )
-from .op_impl.core_api_impl import core_api_impl_registry, bitcast
+from .op_impl.core_api_impl import core_api_impl_registry
 from .type_checking_helpers import (
     require_optional_alignment,
     require_scalar_type,
-    require_integral_scalar_type,
     require_pointer_type,
-    require_pointer_in_memory_space,
-    require_mbarrier_ptr,
     require_signed_int_scalar_or_tuple,
     require_clusterlaunchcontrol_token_type,
     is_none,
@@ -127,8 +121,6 @@ from .type import (
     ScalarTy,
     PointerTy,
     VectorTy,
-    TupleTy,
-    TupleValue,
 )
 
 from .ir import (
@@ -143,14 +135,11 @@ from .ir import (
 )
 from .._stub.cluster_launch_control import clusterlaunchcontrol_try_cancel, \
     clusterlaunchcontrol_is_canceled, clusterlaunchcontrol_get_first_block_index
-from .._enums import SwizzleMode, TMALoadMode, CachePolicy
-from .._stub.mbarrier import MbarrierScope
+from .._enums import SwizzleMode, TMALoadMode
 from .._stub import (
     foreign_function,
     core_api,
-    mbarrier as mbarrier_stub,
     tensor_map,
-    cache_policy,
 )
 from cuda.tile._ir import hir_stubs
 
@@ -165,6 +154,8 @@ from .op_impl.pointer_impl import (
 )
 from .op_impl.copy_async_impl import copy_async_impl_registry
 from .op_impl.barrier_impl import barrier_impl_registry
+from .op_impl.mbarrier_impl import mbarrier_impl_registry
+from .op_impl.inline_ptx_impl import inline_ptx_impl_registry
 
 cuda_lang_impl_registry = ImplRegistry()
 cuda_lang_impl_registry.update(core_impl_registry())
@@ -174,12 +165,14 @@ cuda_lang_impl_registry.update(control_flow_impl_registry())
 cuda_lang_impl_registry.update(array_impl_registry)
 
 cuda_lang_impl_registry.update(tcgen05_impl_registry())
+cuda_lang_impl_registry.update(inline_ptx_impl_registry())
 cuda_lang_impl_registry.update(core_api_impl_registry())
 cuda_lang_impl_registry.update(math_impl_registry())
 cuda_lang_impl_registry.update(vector_impl_registry())
 cuda_lang_impl_registry.update(pointer_impl_registry())
 cuda_lang_impl_registry.update(copy_async_impl_registry())
 cuda_lang_impl_registry.update(barrier_impl_registry())
+cuda_lang_impl_registry.update(mbarrier_impl_registry())
 
 impl = cuda_lang_impl_registry.impl
 
@@ -595,196 +588,6 @@ def elect_sync_impl(membermask) -> Var:
     return is_elected
 
 
-@dataclass(eq=False)
-class InlinePTX(Operation, opcode="inline_ptx", memory_effect=MemoryEffect.STORE):
-    ptx_code: str = attribute()
-    read_only_operands: tuple[Var, ...] = operand()
-    write_only_operands: tuple[datatype.DType, ...] = attribute()
-    read_write_operands: tuple[Var, ...] = operand()
-
-    class RMWMode(Enum):
-        READ_ONLY = auto()
-        WRITE_ONLY = auto()
-        READ_WRITE = auto()
-
-
-@dataclass(eq=False, frozen=True)
-class InlinePTXOperand:
-    mode: InlinePTX.RMWMode
-    type_code: str
-    value: Var | datatype.DType
-
-
-def require_inline_ptx_pair(var: Var) -> tuple[Var, Var]:
-    pair_ty = var.get_type()
-    if not isinstance(pair_ty, TupleTy) or len(pair_ty.value_types) != 2:
-        raise TypeCheckingError(
-            "Expected constraint arguments to be pairs of constraint strings and values"
-        )
-    pair_val = var.get_aggregate()
-    assert isinstance(pair_val, TupleValue)
-    return pair_val.as_tuple()
-
-
-_INLINE_PTX_MODE_FROM_PREFIX = {
-    "": InlinePTX.RMWMode.READ_ONLY,
-    "=": InlinePTX.RMWMode.WRITE_ONLY,
-    "+": InlinePTX.RMWMode.READ_WRITE,
-}
-
-_INLINE_PTX_TYPECODES = {
-    "h",
-    "r",
-    "l",
-    "f",
-    "d",
-    "C",
-}
-
-_INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE = {
-    "h": datatype.int16,
-    "r": datatype.int32,
-    "l": datatype.int64,
-    "f": datatype.float32,
-    "d": datatype.float64,
-}
-
-
-def parse_inline_ptx_constraint(var: Var) -> tuple[str, InlinePTX.RMWMode, str]:
-    constraint_str = require_constant_str(var)
-
-    if len(constraint_str) not in (1, 2):
-        raise TypeCheckingError(
-            f"Invalid inline_ptx constraint {constraint_str}, expected length 1 or 2"
-        )
-
-    prefix = constraint_str[0:-1]
-    type_char = constraint_str[-1]
-
-    mode = _INLINE_PTX_MODE_FROM_PREFIX.get(prefix)
-    if mode is None:
-        raise TypeCheckingError(
-            f"Unknown constraint rmw modifier {prefix!r}, expected "
-            "'' (meaning readonly), '+' (meaning readwrite), or '=' (meaning writeonly)"
-        )
-
-    if type_char not in _INLINE_PTX_TYPECODES:
-        expected = ", ".join(_INLINE_PTX_TYPECODES)
-        raise TypeCheckingError(
-            f"Unknown constraint dtype {type_char!r}, expected one of {expected}"
-        )
-
-    return constraint_str, mode, type_char
-
-
-def validate_inline_ptx_operand(
-    constraint_str: str, mode: InlinePTX.RMWMode, type_char: str, value: Var
-) -> InlinePTXOperand:
-    if mode is InlinePTX.RMWMode.WRITE_ONLY:
-        if type_char == "C":
-            # write-only arguments require specifying the output data type, but we don't
-            # expose a dtype for pointers. Disallow this for now.
-            raise TypeCheckingError("Write-only pointer outputs are not supported for inline_ptx")
-
-        actual_dtype = require_dtype_spec(value)
-        expected_dtype = _INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE[type_char]
-        if actual_dtype != expected_dtype:
-            raise TypeCheckingError(
-                f"Expected dtype {expected_dtype} for constraint "
-                f"{constraint_str}, got {actual_dtype}"
-            )
-        return InlinePTXOperand(mode=mode, type_code=type_char, value=actual_dtype)
-
-    if type_char == "C":
-        require_pointer_type(value)
-        return InlinePTXOperand(mode=mode, type_code=type_char, value=value)
-
-    actual_dtype = require_scalar_type(value).dtype
-    expected_dtype = _INLINE_PTX_SCALAR_DTYPE_FROM_TYPECODE[type_char]
-    if actual_dtype != expected_dtype:
-        raise TypeCheckingError(
-            f"Expected value of type {expected_dtype} for "
-            f"constraint {constraint_str}, got {actual_dtype}"
-        )
-
-    return InlinePTXOperand(mode=mode, type_code=type_char, value=value)
-
-
-def require_constant_constraint_tuple(
-    constraint_tuple: Var,
-) -> InlinePTXOperand:
-    constraint_var, value_var = require_inline_ptx_pair(constraint_tuple)
-    constraint_str, mode, type_char = parse_inline_ptx_constraint(constraint_var)
-    return validate_inline_ptx_operand(constraint_str, mode, type_char, value_var)
-
-
-_INLINE_PTX_PLACEHOLDER_RE = re.compile(r"%(?P<index>[0-9]+)")
-
-
-def require_inline_ptx_constraint_pairs(ptx_code: str, constraint_pairs: tuple) -> tuple:
-    if not isinstance(constraint_pairs, tuple):
-        raise TypeCheckingError(
-            f"Expected a tuple of constraint pairs, but got {type(constraint_pairs)}"
-        )
-
-    ro_args, rw_args, wo_args = [], [], []
-    # need to replace e.g. %0 with {$r0}, {$rw0}, or {$w0} for all ptx
-    # interpolation directives.
-    ptx_interpolation_replacements = []
-    arg_specs = [require_constant_constraint_tuple(pair) for pair in constraint_pairs]
-
-    for arg_spec in arg_specs:
-        match arg_spec.mode:
-            case InlinePTX.RMWMode.READ_ONLY:
-                ptx_interpolation_replacements.append('{$r' + str(len(ro_args)) + '}')
-                assert isinstance(arg_spec.value, Var)
-                ro_args.append(arg_spec.value)
-            case InlinePTX.RMWMode.READ_WRITE:
-                ptx_interpolation_replacements.append('{$rw' + str(len(rw_args)) + '}')
-                assert isinstance(arg_spec.value, Var)
-                rw_args.append(arg_spec.value)
-            case InlinePTX.RMWMode.WRITE_ONLY:
-                ptx_interpolation_replacements.append('{$w' + str(len(wo_args)) + '}')
-                assert isinstance(arg_spec.value, datatype.DType)
-                wo_args.append(arg_spec.value)
-
-    def rewrite(match: re.Match[str]) -> str:
-        index = int(match.group("index"))
-        if index >= len(ptx_interpolation_replacements):
-            raise TypeCheckingError(
-                f"inline_ptx placeholder %{index} is out of range "
-                f"for {len(ptx_interpolation_replacements)} operands"
-            )
-
-        return ptx_interpolation_replacements[index]
-
-    mlir_ptx_code = _INLINE_PTX_PLACEHOLDER_RE.sub(rewrite, ptx_code)
-    return (
-        mlir_ptx_code,
-        tuple(ro_args),
-        tuple(rw_args),
-        tuple(wo_args),
-    )
-
-
-@impl(core_api._inline_ptx)
-def inline_ptx_impl(ptx_code: Var, constraint_pairs: tuple) -> Var[TupleTy]:
-    ptx_code = require_constant_str(ptx_code)
-    mlir_ptx_code, ro_args, rw_args, wo_args = require_inline_ptx_constraint_pairs(
-        ptx_code, constraint_pairs)
-    result_types = tuple(PointerTy(dtype) if is_pointer_dtype(dtype) else ScalarTy(dtype)
-                         for dtype in wo_args)
-    results = add_operation_variadic(
-        InlinePTX,
-        result_types,
-        ptx_code=mlir_ptx_code,
-        read_only_operands=ro_args,
-        write_only_operands=wo_args,
-        read_write_operands=rw_args,
-    )
-    return build_tuple(results)
-
-
 def shfl_sync_impl(mode: str, mask: Var, value: Var, operand: Var, width: Var) -> Var:
     """
     Implements the instructions as the psuedocode in the NVVM IR spec.
@@ -1026,388 +829,6 @@ def _call_foreign_function_impl(func: Var, return_type: Var, parameters: Var):
             function_name=function_name,
             operands_=parameters,
         )
-
-
-@impl(mbarrier_stub.mbarrier_initialize)
-def mbarrier_initialize_impl(mbar: Var, participants: Var) -> Var:
-    require_mbarrier_ptr(mbar)
-    participants = astype(participants, datatype.int32)
-    add_operation_variadic(
-        RawNVVMIntrinsic,
-        tuple(),
-        intrinsic="llvm.nvvm.mbarrier.init.shared",
-        operands_=(mbar, participants),
-    )
-
-
-@impl(mbarrier_stub.mbarrier_invalidate)
-def mbarrier_invalidate_impl(mbar: Var) -> Var:
-    require_mbarrier_ptr(mbar)
-    add_operation_variadic(
-        RawNVVMIntrinsic,
-        tuple(),
-        intrinsic="llvm.nvvm.mbarrier.inval.shared",
-        operands_=(mbar,),
-    )
-
-
-def _mbar_space_scope_suffix(scope: MbarrierScope, space: MemorySpace) -> str:
-    match space:
-        case MemorySpace.SHARED:
-            space_str = 'cta'
-        case MemorySpace.SHARED_CLUSTER:
-            space_str = 'cluster'
-        case _:
-            raise InternalError(f"Unexpected {space=}")
-    return (
-        ".scope."
-        + scope.value
-        + ".space."
-        + space_str
-    )
-
-
-def require_mbarrier_ordering(
-    ordering_var: Var,
-    valid_orderings: tuple[MemoryOrder, ...],
-) -> MemoryOrder:
-    ordering = require_constant_enum(ordering_var, MemoryOrder)
-    if ordering not in valid_orderings:
-        formatted = ", ".join(str(o) for o in valid_orderings)
-        raise TypeCheckingError(
-            f"Invalid mbarrier memory order {ordering}, expected one of {formatted}"
-        )
-    return ordering
-
-
-ARRIVE_ORDERINGS = (MemoryOrder.RELEASE, MemoryOrder.RELAXED)
-WAIT_ORDERINGS = (MemoryOrder.ACQUIRE, MemoryOrder.RELAXED)
-
-
-@impl(mbarrier_stub.mbarrier_arrive)
-def mbarrier_arrive_impl(
-    mbar: Var,
-    count: Var,
-    drop: Var,
-    scope: Var,
-    memory_order: Var,
-) -> Var | None:
-    count = astype(count, datatype.int32)
-    drop = require_constant_bool(drop)
-    scope = require_constant_enum(scope, MbarrierScope)
-    memory_order = require_mbarrier_ordering(memory_order, ARRIVE_ORDERINGS)
-    space = require_mbarrier_ptr(mbar).memory_space
-    intrinsic = "llvm.nvvm.mbarrier.arrive"
-    if drop:
-        intrinsic += '.drop'
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += '.relaxed'
-    intrinsic += _mbar_space_scope_suffix(scope, space)
-
-    return_type = (ScalarTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
-    results = add_operation_variadic(
-        RawNVVMIntrinsic,
-        return_type,
-        intrinsic=intrinsic,
-        operands_=(mbar, count),
-    )
-    return results[0] if return_type else None
-
-
-@impl(mbarrier_stub.mbarrier_arrive_expect_transaction)
-def mbarrier_arrive_expect_transaction_impl(
-    mbar: Var,
-    bytes: Var,
-    drop: Var,
-    scope: Var,
-    memory_order: Var,
-) -> Var | None:
-    bytes = astype(bytes, datatype.int32)
-    drop = require_constant_bool(drop)
-    scope = require_constant_enum(scope, MbarrierScope)
-    memory_order = require_mbarrier_ordering(memory_order, ARRIVE_ORDERINGS)
-    space = require_mbarrier_ptr(mbar).memory_space
-    intrinsic = "llvm.nvvm.mbarrier.arrive"
-    if drop:
-        intrinsic += '.drop'
-    intrinsic += '.expect.tx'
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += '.relaxed'
-    intrinsic += _mbar_space_scope_suffix(scope, space)
-
-    return_type = (ScalarTy(datatype.uint64),) if space is MemorySpace.SHARED else ()
-    results = add_operation_variadic(
-        RawNVVMIntrinsic,
-        return_type,
-        intrinsic=intrinsic,
-        operands_=(mbar, bytes),
-    )
-    return results[0] if return_type else None
-
-
-@impl(mbarrier_stub.mbarrier_expect_transaction)
-def mbarrier_expect_transaction_impl(mbar: Var, bytes: Var, scope: Var):
-    space = require_mbarrier_ptr(mbar).memory_space
-    bytes = astype(bytes, datatype.int32)
-    scope = require_constant_enum(scope, MbarrierScope)
-    intrinsic = "llvm.nvvm.mbarrier.expect.tx"
-    intrinsic += _mbar_space_scope_suffix(scope, space)
-    add_operation_variadic(
-        RawNVVMIntrinsic,
-        (),
-        intrinsic=intrinsic,
-        operands_=(mbar, bytes),
-    )
-
-
-@impl(mbarrier_stub.mbarrier_complete_transaction)
-def mbarrier_complete_transaction_impl(mbar: Var, bytes: Var, scope: Var) -> Var:
-    space = require_mbarrier_ptr(mbar).memory_space
-    bytes = astype(bytes, datatype.int32)
-    scope = require_constant_enum(scope, MbarrierScope)
-    intrinsic = "llvm.nvvm.mbarrier.complete.tx"
-    intrinsic += _mbar_space_scope_suffix(scope, space)
-    add_operation_variadic(
-        RawNVVMIntrinsic,
-        (),
-        intrinsic=intrinsic,
-        operands_=(mbar, bytes),
-    )
-
-
-@impl(mbarrier_stub.mbarrier_test_wait)
-def mbarrier_test_wait_impl(
-    mbar: Var, state: Var, scope: Var, memory_order: Var
-) -> Var:
-    scope = require_constant_enum(scope, MbarrierScope)
-    state = astype(state, datatype.int64)
-    require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
-    memory_order = require_mbarrier_ordering(memory_order, WAIT_ORDERINGS)
-    intrinsic = "llvm.nvvm.mbarrier.test.wait"
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += ".relaxed"
-    intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
-    return add_operation(
-        RawNVVMIntrinsic,
-        ScalarTy(datatype.bool_),
-        intrinsic=intrinsic,
-        operands_=(mbar, state),
-    )
-
-
-@impl(mbarrier_stub.mbarrier_test_wait_parity)
-def mbarrier_test_wait_parity_impl(
-    mbar: Var, parity: Var, scope: Var, memory_order: Var
-) -> Var:
-    require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
-    parity = astype(parity, datatype.int32)
-    scope = require_constant_enum(scope, MbarrierScope)
-    memory_order = require_mbarrier_ordering(memory_order, WAIT_ORDERINGS)
-    intrinsic = "llvm.nvvm.mbarrier.test.wait.parity"
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += ".relaxed"
-    intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
-    return add_operation(
-        RawNVVMIntrinsic,
-        ScalarTy(datatype.bool_),
-        intrinsic=intrinsic,
-        operands_=(mbar, parity),
-    )
-
-
-@impl(mbarrier_stub.mbarrier_try_wait)
-def mbarrier_try_wait_impl(
-    mbar: Var,
-    state: Var,
-    time_hint: Var,
-    scope: Var,
-    memory_order: Var,
-) -> Var:
-    require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
-    state = astype(state, datatype.int64)
-    scope = require_constant_enum(scope, MbarrierScope)
-    memory_order = require_mbarrier_ordering(memory_order, WAIT_ORDERINGS)
-    intrinsic = "llvm.nvvm.mbarrier.try.wait"
-    args = (mbar, state)
-    if not is_none(time_hint):
-        intrinsic += ".tl"
-        time_hint = astype(time_hint, datatype.int32)
-        args = (*args, time_hint)
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += ".relaxed"
-    intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
-    return add_operation(
-        RawNVVMIntrinsic,
-        ScalarTy(datatype.bool_),
-        intrinsic=intrinsic,
-        operands_=args,
-    )
-
-
-@impl(mbarrier_stub.mbarrier_try_wait_parity)
-def mbarrier_try_wait_parity_impl(
-    mbar: Var,
-    parity: Var,
-    time_hint: Var,
-    scope: Var,
-    memory_order: Var,
-) -> Var:
-    require_mbarrier_ptr(mbar, (MemorySpace.SHARED,))
-    parity = astype(parity, datatype.int32)
-    scope = require_constant_enum(scope, MbarrierScope)
-    memory_order = require_mbarrier_ordering(memory_order, WAIT_ORDERINGS)
-    intrinsic = "llvm.nvvm.mbarrier.try.wait.parity"
-    args = (mbar, parity)
-    if not is_none(time_hint):
-        time_hint = astype(time_hint, datatype.int32)
-        args = (*args, time_hint)
-        intrinsic += ".tl"
-    if memory_order is MemoryOrder.RELAXED:
-        intrinsic += ".relaxed"
-    intrinsic += _mbar_space_scope_suffix(scope, MemorySpace.SHARED)
-    return add_operation(
-        RawNVVMIntrinsic,
-        ScalarTy(datatype.bool_),
-        intrinsic=intrinsic,
-        operands_=args,
-    )
-
-
-@impl(core_api.map_shared_to_cluster)
-def map_shared_to_cluster_impl(pointer: Var, rank: Var):
-    ptr_ty = require_pointer_type(pointer)
-    rank = astype(rank, datatype.int32)
-    require_pointer_in_memory_space(pointer, (MemorySpace.SHARED,))
-    if ptr_ty.opaque:
-        result_dtype = opaque_pointer_dtype(MemorySpace.SHARED_CLUSTER)
-    else:
-        result_dtype = pointer_dtype(ptr_ty.pointee_dtype, MemorySpace.SHARED_CLUSTER)
-    result_ty = PointerTy(result_dtype)
-    return add_operation(
-        RawNVVMIntrinsic,
-        result_ty,
-        intrinsic="llvm.nvvm.mapa.shared.cluster",
-        operands_=(pointer, rank),
-    )
-
-
-@impl(core_api.map_shared_to_leader_block)
-def map_shared_to_leader_block(pointer: Var):
-    spaces = (MemorySpace.SHARED, MemorySpace.SHARED_CLUSTER)
-    pointer_type = require_pointer_in_memory_space(pointer, spaces)
-    int_value = bitcast(pointer, datatype.uint32)
-    mask = core_api.shared_cluster_leader_bit_mask()
-    mask = strictly_typed_const(mask, ScalarTy(datatype.uint32))
-    mapped = binary_bitwise_tensorlike("and_", int_value, mask)
-    # TODO: should this be shared_cluster memory space?
-    return bitcast(mapped, pointer_type.pointer_dtype)
-
-
-@impl(core_api.setmaxregister_decrease)
-def impl_setmaxregister_decrease(number_of_registers: Var[ScalarTy]):
-    value = require_constant_int(number_of_registers)
-    add_operation_variadic(
-        InlinePTX,
-        (),
-        ptx_code=f"setmaxnreg.dec.sync.aligned.u32 {value};",
-        read_only_operands=(),
-        write_only_operands=(),
-        read_write_operands=(),
-    )
-
-
-@impl(core_api.setmaxregister_increase)
-def impl_setmaxregister_increase(number_of_registers: Var[ScalarTy]):
-    value = require_constant_int(number_of_registers)
-    add_operation_variadic(
-        InlinePTX,
-        (),
-        ptx_code=f"setmaxnreg.inc.sync.aligned.u32 {value};",
-        read_only_operands=(),
-        write_only_operands=(),
-        read_write_operands=(),
-    )
-
-
-@impl(cache_policy.create_range_cache_policy)
-def impl_create_range_cache_policy(
-    base_address,
-    primary_size,
-    total_size,
-    primary_policy,
-    secondary_policy,
-):
-    require_integral_scalar_type(primary_size)
-    primary_size = astype(primary_size, datatype.int32)
-    require_integral_scalar_type(total_size)
-    total_size = astype(total_size, datatype.int32)
-    require_pointer_type(base_address)
-    primary_policy = require_constant_enum(primary_policy, CachePolicy)
-    secondary_policy = require_constant_enum(secondary_policy, CachePolicy)
-    valid = (CachePolicy.L2_EVICT_FIRST, CachePolicy.L2_EVICT_UNCHANGED)
-    if secondary_policy not in valid:
-        raise InvalidValueError(
-            "Secondary cache policy may only be " + " or ".join(str(i) for i in valid)
-        )
-    code = (
-        "createpolicy.range."
-        + primary_policy.value
-        + "."
-        + secondary_policy.value
-        + ".b64"
-        + "  {$w0}"
-        + ", [{$r0}]"
-        + ", {$r1}"
-        + ", {$r2};"
-    )
-    results = add_operation_variadic(
-        InlinePTX,
-        (ScalarTy(datatype.int64),),
-        ptx_code=code,
-        read_only_operands=(
-            base_address,
-            primary_size,
-            total_size,
-        ),
-        write_only_operands=(datatype.int64,),
-        read_write_operands=(),
-    )
-    return results[0]
-
-
-@impl(cache_policy.create_fractional_cache_policy)
-def impl_create_fractional_cache_policy(
-    primary_policy,
-    fraction,
-    secondary_policy,
-):
-    primary_policy = require_constant_enum(primary_policy, CachePolicy)
-    require_scalar_type(fraction, datatype.is_unrestricted_float)
-    fraction = astype(fraction, datatype.float32)
-    secondary_policy = require_constant_enum(secondary_policy, CachePolicy)
-    valid = (CachePolicy.L2_EVICT_FIRST, CachePolicy.L2_EVICT_UNCHANGED)
-    if secondary_policy not in valid:
-        raise InvalidValueError(
-            "Secondary cache policy may only be " + " or ".join(str(i) for i in valid)
-        )
-    code = (
-        "createpolicy.fractional."
-        + primary_policy.value
-        + "."
-        + secondary_policy.value
-        + ".b64"
-        + "  {$w0}"
-        + ", {$r0};"
-    )
-    results = add_operation_variadic(
-        InlinePTX,
-        (ScalarTy(datatype.int64),),
-        ptx_code=code,
-        read_only_operands=(fraction,),
-        write_only_operands=(datatype.int64,),
-        read_write_operands=(),
-    )
-    return results[0]
 
 
 __all__ = (

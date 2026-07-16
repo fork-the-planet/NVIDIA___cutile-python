@@ -19,6 +19,7 @@ from cuda.tile._ir.op_impl import (  # noqa: F401
     require_optional_constant_enum,
     require_optional_constant_int,
     require_dtype_spec,
+    require_constant_enum,
 )
 from cuda.tile._ir.ops import broadcast_to, implicit_cast
 from cuda.tile._ir.ops_utils import promote_types
