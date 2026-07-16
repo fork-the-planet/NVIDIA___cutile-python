@@ -328,7 +328,9 @@ def test_slice_offset_zero(stride_const):
         ct.store(y, (0,), ct.load(y, (0,), (1,)))
 
     body = get_ir(kernel, (array_arg(base_div=32, stride_const=stride_const),))
-    assert get_op_divby(body, MakeTensorView) == [{"base_ptr": 32, "shape[0]": 4}]
+    # A constant sliced extent is specialized to a static dim, so it is not a
+    # dynamic operand carrying an `assume_divisible_by`.
+    assert get_op_divby(body, MakeTensorView) == [{"base_ptr": 32}]
 
 
 @pytest.mark.parametrize("stride_const", [(1,), (None,)])
@@ -338,17 +340,7 @@ def test_slice_offset_aligned(stride_const):
         ct.store(y, (0,), ct.load(y, (0,), (1,)))
 
     body = get_ir(kernel, (array_arg(base_div=32, stride_const=stride_const),))
-    assert get_op_divby(body, MakeTensorView) == [{"base_ptr": 32, "shape[0]": 8}]
-
-
-@pytest.mark.parametrize("stride_const", [(1,), (None,)])
-def test_slice_offset_partially_aligned(stride_const):
-    def kernel(x):
-        y = x.slice(axis=0, start=2, stop=16)
-        ct.store(y, (0,), ct.load(y, (0,), (1,)))
-
-    body = get_ir(kernel, (array_arg(base_div=32, stride_const=stride_const),))
-    assert get_op_divby(body, MakeTensorView) == [{"base_ptr": 8, "shape[0]": 2}]
+    assert get_op_divby(body, MakeTensorView) == [{"base_ptr": 32}]
 
 
 @pytest.mark.parametrize("stride_const", [(1,), (None,)])

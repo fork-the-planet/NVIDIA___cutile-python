@@ -732,7 +732,10 @@ def array_slice_impl(self: Var, axis: Var, start: Var, stop: Var) -> Var:
     if const_start is not None and const_stop is not None and const_stop < const_start:
         raise TileTypeError("Slice stop must be greater than or equal to start")
 
-    new_shape_ty = tuple(None if i == const_axis else dim for i, dim in enumerate(array_ty.shape))
+    const_axis_size = (const_stop - const_start
+                       if const_start is not None and const_stop is not None else None)
+    new_shape_ty = tuple(const_axis_size if i == const_axis else dim
+                         for i, dim in enumerate(array_ty.shape))
     new_array_ty = ArrayTy(
         array_ty.dtype,
         shape=new_shape_ty,

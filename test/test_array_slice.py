@@ -37,6 +37,53 @@ def test_slice_1d(shape, dtype, start, stop):
 
 
 @ct.kernel
+def slice_copy_static_extent(x, y):
+    sub_x = x.slice(axis=0, start=0, stop=16)
+    n = sub_x.shape[0]
+    tile = ct.load(sub_x, index=(0,), shape=(n,))
+    ct.store(y, index=(0,), tile=tile)
+
+
+@pytest.mark.parametrize("dtype", arithmetic_dtypes, ids=dtype_id)
+def test_slice_constant_bounds_static_extent(dtype):
+    x = make_tensor((32,), dtype=dtype, device='cuda')
+    y = torch.zeros_like(x)
+    ct.launch(torch.cuda.current_stream(), (1,), slice_copy_static_extent, (x, y))
+    expected = torch.zeros_like(x)
+    expected[0:16] = x[0:16]
+    assert_equal(y, expected)
+
+
+@ct.kernel
+def slice_constant_bounds_static_assert(x):
+    y = x.slice(axis=0, start=2, stop=16)
+    # If the sliced axis is static, `y.shape[0] == 14` folds to a compile-time
+    # constant and `static_assert` compiles. A dynamic extent would make the
+    # comparison a runtime tile op, which `static_assert` rejects.
+    ct.static_assert(y.shape[0] == 14)
+
+
+def test_slice_constant_bounds_are_static():
+    x = torch.empty(32, dtype=torch.int32, device='cuda')
+    ct.launch(torch.cuda.current_stream(), (1,), slice_constant_bounds_static_assert, (x,))
+
+
+@ct.kernel
+def slice_dynamic_bounds_static_assert(x, start: int, stop: int):
+    y = x.slice(axis=0, start=start, stop=stop)
+    ct.static_assert(y.shape[0] == 14)
+
+
+def test_slice_dynamic_bounds_are_not_static():
+    # Dynamic bounds keep the sliced axis dynamic, so its extent is not a
+    # compile-time constant and cannot be used in a `static_assert` condition.
+    x = torch.empty(32, dtype=torch.int32, device='cuda')
+    with pytest.raises((ct.TileStaticEvalError, ct.TileTypeError), match="static_assert"):
+        ct.launch(torch.cuda.current_stream(), (1,),
+                  slice_dynamic_bounds_static_assert, (x, 2, 16))
+
+
+@ct.kernel
 def slice_copy_2d(x, y, start: int, stop: int, TILE_M: ConstInt, TILE_N: ConstInt):
     sub_x = x.slice(axis=1, start=start, stop=stop)
     sub_y = y.slice(axis=1, start=start, stop=stop)
