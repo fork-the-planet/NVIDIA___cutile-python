@@ -223,6 +223,7 @@ class _OperandFormatter:
 
 class StaticEvalKind(enum.Enum):
     STATIC_EVAL = "static_eval()"
+    STATIC_DEF = "@static_def function"
     STATIC_ASSERT_CONDITION = "static_assert() condition"
     STATIC_ASSERT_MESSAGE = "static_assert() message"
     STATIC_ITER_ITERABLE = "static_iter() iterable"

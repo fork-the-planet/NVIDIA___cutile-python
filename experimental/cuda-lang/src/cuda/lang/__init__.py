@@ -10,7 +10,7 @@ from cuda.tile._memory_model import (
 
 from ._execution import (
     function,
-    metafunction,
+    static_def,
     kernel,
     launch,
 )
@@ -262,7 +262,7 @@ __all__ = (
     "is_pointer_dtype",
     "PointerInfo",
     "function",
-    "metafunction",
+    "static_def",
     "kernel",
     "launch",
     "full_mask",

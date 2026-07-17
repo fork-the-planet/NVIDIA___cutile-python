@@ -200,9 +200,8 @@ def test_tcgen05_shared_memory_descriptor_array_encoding():
 
 @pytest.mark.parametrize("dtype", (cl.int32, cl.uint32, cl.int64, cl.uint64))
 def test_tcgen05_shared_memory_descriptor_int_encoding(dtype):
-    @cl.metafunction
     def cast(pointer, dtype):
-        if dtype.bitwidth == 64:
+        if cl.static_eval(dtype.bitwidth == 64):
             pointer = cl.address_space_cast(pointer, cl.MemorySpace.GENERIC)
         return cl.bitcast(pointer, dtype)
 

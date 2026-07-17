@@ -7,8 +7,8 @@ import torch
 import cuda.lang as cl
 
 
-def test_metafunction():
-    @cl.metafunction
+def test_static_def():
+    @cl.static_def
     def make_contiguous_strides(shape):
         if len(shape) == 0:
             return ()
@@ -18,14 +18,13 @@ def test_metafunction():
         return tuple(ret)
 
     @cl.kernel
-    def kern(x, y):
-        s = make_contiguous_strides(x.shape)
+    def kern(y):
+        s = make_contiguous_strides((2, 5, 7))
         cl.static_assert(len(s) == 3)
         y[0] = s[0]
         y[1] = s[1]
         y[2] = s[2]
 
-    x = torch.ones((2, 5, 7), device="cuda")
     y = torch.zeros((3,), dtype=torch.int32, device="cuda")
-    cl.launch(torch.cuda.current_stream(), (1,), (1,), kern, (x, y))
+    cl.launch(torch.cuda.current_stream(), (1,), (1,), kern, (y,))
     assert y.tolist() == [1, 2, 10]

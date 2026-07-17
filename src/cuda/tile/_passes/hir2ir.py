@@ -13,11 +13,12 @@ from typing import Sequence, Mapping, Callable
 from .ast2hir import get_function_hir
 from .. import TileTypeError
 from .._coroutine_util import resume_after, run_coroutine
-from .._dispatch_mode import MetafunctionMode
+from .._dispatch_mode import StaticEvalMode
 from .._exception import Loc, FunctionDesc, TileInternalError, TileError, TileRecursionError, \
     TileValueError, UnsupportedCallError
-from .._execution import is_stub, is_metafunction
+from .._execution import is_stub, is_static_def
 from .._ir import hir, ir
+from .._ir.hir import StaticEvalKind
 from .._ir.ir import Var, IRContext
 from .._ir.op_impl import ImplRegistry
 from .._ir.control_flow_ops import end_branch, return_, continue_, break_
@@ -236,8 +237,8 @@ async def _call_function(callee: Callable,
         if impl is None:
             raise UnsupportedCallError(f"{callee.__name__}() is not supported in device code")
         return await _call_builtin(callee, impl, args, kwargs, builder)
-    elif is_metafunction(callee):
-        with MetafunctionMode().as_current():
+    elif is_static_def(callee):
+        with StaticEvalMode(StaticEvalKind.STATIC_DEF).as_current():
             args_sym = tuple(var2sym(x) for x in args)
             kwargs_sym = {k: var2sym(v) for k, v in kwargs.items()}
             res_sym = callee(*args_sym, **kwargs_sym)

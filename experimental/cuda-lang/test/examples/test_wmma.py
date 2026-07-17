@@ -123,7 +123,7 @@ WMMA_DESCRIPTORS = (
 )
 
 
-@cl.metafunction
+@cl.static_def
 def fragment(use, m: int, n: int, k: int, dtype, layout=Layout.NO_LAYOUT):
     return FragmentDescriptor(use, m, n, k, dtype, layout)
 
@@ -164,6 +164,7 @@ def _find_fragment_descriptor(spec):
     raise TypeError(f"unsupported WMMA fragment spec {spec}")
 
 
+@cl.static_def
 def _find_mma_op(a_spec, b_spec, c_spec):
     if a_spec.use != FragmentUse.MATRIX_A:
         raise TypeError("mma_sync expects a matrix_a fragment as its first input")
@@ -187,6 +188,7 @@ def _find_mma_op(a_spec, b_spec, c_spec):
     raise TypeError(f"unsupported WMMA mma_sync spec {a_spec}, {b_spec}, {c_spec}")
 
 
+@cl.static_def
 def _find_load_intrinsic(spec, memory_layout):
     op = _find_fragment_descriptor(spec)
     use = "c" if spec.use == FragmentUse.ACCUMULATOR else spec.use.value
@@ -199,6 +201,7 @@ def _find_load_intrinsic(spec, memory_layout):
     return getattr(cl._nvvm, name)
 
 
+@cl.static_def
 def _find_mma_intrinsic(a_spec, b_spec, c_spec, satf):
     op = _find_mma_op(a_spec, b_spec, c_spec)
     a_layout = a_spec.layout.value
@@ -209,6 +212,7 @@ def _find_mma_intrinsic(a_spec, b_spec, c_spec, satf):
     return getattr(cl._nvvm, name), op
 
 
+@cl.static_def
 def _find_store_intrinsic(spec, memory_layout):
     op = _find_fragment_descriptor(spec)
     name = (
@@ -218,6 +222,7 @@ def _find_store_intrinsic(spec, memory_layout):
     return getattr(cl._nvvm, name), op
 
 
+@cl.static_def
 def _to_tuple(v):
     # intrinsics that return multiple results are unpacked to tuples, but
     # single returns are just scalars. we want to pass all registers to the
@@ -226,6 +231,7 @@ def _to_tuple(v):
     return v if isinstance(v, tuple) else (v,)
 
 
+@cl.static_def
 def _check_register_count(name, fragment, expected):
     actual = len(fragment.regs)
     if actual != expected:
@@ -234,27 +240,25 @@ def _check_register_count(name, fragment, expected):
         )
 
 
-@cl.metafunction
 def load_matrix_sync(spec, ptr, ldm, layout=Layout.NO_LAYOUT):
     fn = _find_load_intrinsic(spec, layout)
-    return Fragment(spec, _to_tuple(fn(ptr, ldm)))
+    res = fn(ptr, ldm)
+    res = _to_tuple(res)
+    return Fragment(spec, res)
 
 
-@cl.metafunction
 def mma_sync(a, b, c, satf=False):
     fn, op = _find_mma_intrinsic(a.spec, b.spec, c.spec, satf)
     _check_register_count("matrix_a", a, op.a_regs)
     _check_register_count("matrix_b", b, op.b_regs)
     _check_register_count("accumulator", c, op.c_regs)
-
     results = fn(*a.regs, *b.regs, *c.regs)
     return dataclasses.replace(c, regs=_to_tuple(results))
 
 
-@cl.metafunction
 def store_matrix_sync(ptr, frag, ldm, layout):
-    if frag.spec.use != FragmentUse.ACCUMULATOR:
-        raise TypeError("store_matrix_sync expects an accumulator fragment")
+    cl.static_assert(frag.spec.use == FragmentUse.ACCUMULATOR,
+                     "store_matrix_sync expects an accumulator fragment")
 
     fn, op = _find_store_intrinsic(frag.spec, layout)
     _check_register_count("accumulator", frag, op.c_regs)
